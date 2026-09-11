@@ -87,10 +87,11 @@ When an MCP tool exists but misbehaves:
 ## Agents & Skills
 
 - **architect** — reviews/designs Rust architecture; loads
-  `.claude/skills/architect/SKILL.md` (project-provided — not yet written; see
-  `.claude/skills/rust-architect/references/` for the underlying reference docs on
-  async/tokio, error handling, lifetimes, patterns, testing, tooling, type-driven
-  design, polylith, ECS, and embedded — load on-demand, do not read wholesale)
+  `.claude/skills/architect/SKILL.md` (project context: the Verb model, crate layout,
+  design contracts, delegation workflow). The underlying Rust reference docs live in
+  `.claude/skills/rust-architect/references/` (async/tokio, error handling, lifetimes,
+  patterns, testing, tooling, type-driven design, polylith, ECS, embedded) — load
+  on-demand, do not read wholesale
 - **code-minion** — implements what the architect specifies
 - **commit** — writes commits per `.claude/skills/conventional-commits/SKILL.md`
 - **helix** skill — keymap design expert (not directly relevant to a CLI-parsing

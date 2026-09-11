@@ -36,8 +36,15 @@ from clean (`cargo-polylith`) to monolithic (`mdma-cli`, 7292 lines in one file;
 2. **Secrets-off-argv is a consumer concern.** bpaf's `env()` shows in `--help` and is settable on
    argv. `verbandi` keeps context-building in a consumer-supplied `mk_ctx` closure so things like
    `MONIKER_PASSPHRASE` stay hand-read env vars, never fields.
-3. **Globals don't float like clap `global = true`.** `app --home x sub …` is natural; trailing
-   `… --home x` is stricter in bpaf. Documented as the one expected behavior delta.
+3. **Globals live at the top level, not per subcommand.** `verbandi` composes
+   `construct!(globals, verbs)`, so a global is accepted both before and after the subcommand
+   (`app --home x status`, `app status --home x`, even `app event create dir NAME --home x` —
+   bpaf's positional parsers stop at a dashed token, so a free-form positional does not swallow
+   it). The real delta from clap's `global = true` is structural: no per-subcommand redefinition
+   or propagation — globals are parsed once and handed to `mk_ctx`; a subcommand cannot declare,
+   shadow or override them. **Externals are the exception:** everything after an external
+   subcommand's name is forwarded to the child verbatim, so a global must *precede* the
+   external's name (`app --home x foo`, never `app foo --home x`).
 
 ## The framework API
 
@@ -56,17 +63,26 @@ pub enum Exit { Usage(String), Runtime(String) }        // code(): 2 / 1
 impl Exit { pub fn runtime<E: Display>(e: E) -> Self; }
 
 /// Composition builder.
-pub struct App<G, Ctx> { /* global parser + Vec<Parser<BoxedVerb<Ctx>>> + registry */ }
+pub struct App<G, Ctx> {
+    /* global parser + the verbs folded into one alternative
+       (`Option<Box<dyn Parser<BoxedVerb<Ctx>>>>`) + top-level name registry */
+}
 impl<G: 'static, Ctx> App<G, Ctx> {
-    pub fn new(globals: bpaf::OptionParser<G>) -> Self;
-    pub fn leaf(self, name: &'static str, p: impl Parser<BoxedVerb<Ctx>> + 'static) -> Self;
-    pub fn group(self, name: &'static str, sub: Group<Ctx>) -> Self;
+    pub fn new(globals: impl Parser<G> + 'static) -> Self;   // a parser, not an OptionParser:
+                                                             // globals must compose *as a parser*
+                                                             // with the command at the top level
+    // `help` is mandatory: it is both the parent's one-line command entry and the
+    // heading of `<cmd> --help`.
+    pub fn leaf(self, name: &'static str, help: impl Into<String>,
+                p: impl Parser<BoxedVerb<Ctx>> + 'static) -> Self;
+    pub fn group(self, name: &'static str, help: impl Into<String>, sub: Group<Ctx>) -> Self;
     pub fn external(self, ext: ExternalVerb) -> Self;   // git-style plugin
     pub fn run(self, mk_ctx: impl FnOnce(G) -> Result<Ctx, Exit>) -> i32;
 
     // --- test seams (in-process, no subprocess) ---
     pub fn into_parser(self) -> bpaf::OptionParser<(G, BoxedVerb<Ctx>)>;
-    pub fn parse(self, args: &[&str]) -> Result<(G, BoxedVerb<Ctx>), bpaf::ParseFailure>;
+    pub fn parse<I, S>(self, args: I) -> Result<(G, BoxedVerb<Ctx>), bpaf::ParseFailure>
+    where I: IntoIterator<Item = S>, S: Into<String>;   // takes `cli! { … }` by value
 }
 pub fn exit_code_for(f: &bpaf::ParseFailure) -> i32;    // Stderr => 2 (usage), else 0
 ```
@@ -110,7 +126,7 @@ mapped to a test function. `verbandi` ships two macros:
 - **`cli! { … }`** — takes the command line as **raw tokens** (no wrapping string), so it reads
   exactly like typing in a terminal, and expands to the arg vector for `App::parse`:
   ```rust
-  let (_g, verb) = app().parse(&cli! { event create x "My Event" }).unwrap();
+  let (_g, verb) = app().parse(cli! { event create x "My Event" }).unwrap();
   assert_eq!(verb.name(), "create");
   ```
   Each bare token is `stringify!`- d; a **string-literal token** is taken by value — that's how an
@@ -143,7 +159,9 @@ shown in the example CLI.
 
 ## Multi-binary subcommands with shared help + completion (the git model)
 
-`app foo ARGS…` exec's external `app-foo`, yet `app --help` and completion still enumerate `foo`.
+`app foo ARGS…` exec's the binary registered for `foo` (by absolute path — the git-style
+`app-foo` naming is a convention, not the contract), yet `app --help` and completion still
+enumerate `foo`.
 clap's `allow_external_subcommands` dispatches but the subtree is opaque. `verbandi` carries **one
 manifest both the parser and help/completion read**:
 ```rust
@@ -171,8 +189,12 @@ bpaf has built-in suggestions for both misspelled commands (since 0.5.1) and fla
 1. **Golden matrix** in tests (via `cli!`/`verb_test!` + `unwrap_stderr()`): misspelled
    top-level/nested commands, long flags, short/long confusion — assert stderr names the target.
 2. **Gap-closer using the same registry:** on `Err(ParseFailure::Stderr)` with no suggestion, run
-   a Levenshtein pass (≤ 2; `strsim`) over registered names/flags and append
-   `` did you mean `<name>`? ``. One registry feeds help, completion, and suggestions.
+   a Levenshtein pass (≤ 2; `strsim`) over the registered **top-level command names**, applied to
+   the command position only, and append `` did you mean `<name>`? ``. Nested commands and flags
+   are covered by bpaf's own suggestions (see the ADR `suggestion-registry-is-top-level-only`).
+   The `(name, help)` pair supplied at registration feeds help and completion, rendered by
+   bpaf from the `command(name).help(help)` registrations; the top-level name list feeds the
+   suggestion gap-closer, and nothing else reads it.
 
 ## v1 scope (subtractive)
 
@@ -184,6 +206,18 @@ consumer's pain justifies it.
 
 - `devenv shell`: build, test (parser/dispatch/suggestion golden matrix + macro tests, all
   in-process), `clippy -D warnings`, `fmt --check`.
+- **External verbs, in-process:** an `ExternalVerb` registered at a path that *cannot exist* is
+  listed in `--help`, selected by name and dispatched to a `Verb` — proving nothing is ever
+  spawned outside `Verb::run`. Unit tests assert the captured `rest` verbatim (flag-like args
+  included; a leading `--` is consumed by bpaf and not forwarded).
+- **Help text:** every `leaf`/`group` carries a mandatory one-line `help`, asserted as substrings
+  of top-level, group and leaf `--help` output (never whole-output snapshots).
+- **Completion:** driven in-process through bpaf's own wire protocol
+  (`--bpaf-complete-rev=1`, the revision bpaf 0.9.27 emits in its generated shell scripts). The
+  result short-circuits as `ParseFailure::Completion`, whose payload `unwrap_stdout()` returns;
+  the test asserts the registry's commands and externals appear in it.
+- **Globals placement:** asserted before and after the subcommand, including after a leaf's
+  free-form positionals.
 - `cargo publish --dry-run` succeeds (metadata + license complete).
 - `examples/` CLI runs: good parse, usage error (exit 2 after remap), a typo (suggestion),
   `--help` at top + group level.
@@ -198,5 +232,7 @@ consumer's pain justifies it.
   still write struct + `Verb` impl + registration per command. **Win = locality + testability,
   not less total code.**
 - **bpaf vs clap UX — two known deltas:** help text not byte-identical (target semantic
-  equivalence); trailing global options stricter than `global = true`. Document in README.
+  equivalence); globals live at the top level — accepted before *and* after the subcommand, but
+  with no per-subcommand redefinition or propagation the way clap's `global = true` allows.
+  Documented in README.
 - **crates.io name:** verify `verbandi` is free at publish time before first `cargo publish`.

@@ -75,9 +75,11 @@ impl ExternalVerb {
         self.name
     }
 
-    /// Build the `bpaf` parser for this external: a `command` that captures the
-    /// remainder verbatim and maps it to a runnable [`Verb`].
-    pub(crate) fn into_parser<Ctx: 'static>(self) -> impl Parser<BoxedVerb<Ctx>> {
+    /// The external's command parser, yielding the concrete [`ExternalRun`].
+    ///
+    /// Split out of [`ExternalVerb::into_parser`] so unit tests can inspect the
+    /// captured `rest` without downcasting a `Box<dyn Verb<_>>`.
+    fn into_run_parser(self) -> impl Parser<ExternalRun> {
         let name = self.name;
         let bin = self.bin;
         let help = self.help;
@@ -86,17 +88,23 @@ impl ExternalVerb {
             .descr(help.as_str())
             .command(name)
             .help(help.as_str())
-            .map(move |rest| {
-                Box::new(ExternalRun {
-                    name,
-                    bin: bin.clone(),
-                    rest,
-                }) as BoxedVerb<Ctx>
+            .map(move |rest| ExternalRun {
+                name,
+                bin: bin.clone(),
+                rest,
             })
+    }
+
+    /// Build the `bpaf` parser for this external: a `command` that captures the
+    /// remainder verbatim and maps it to a runnable [`Verb`].
+    pub(crate) fn into_parser<Ctx: 'static>(self) -> impl Parser<BoxedVerb<Ctx>> {
+        self.into_run_parser()
+            .map(|r| Box::new(r) as BoxedVerb<Ctx>)
     }
 }
 
 /// The verb that execs an external binary and propagates its exit code.
+#[derive(Debug)]
 struct ExternalRun {
     name: &'static str,
     bin: PathBuf,
@@ -119,12 +127,59 @@ impl<Ctx> Verb<Ctx> for ExternalRun {
             // so anything else is forwarded directly; externals are a genuine
             // process boundary. A richer `Exit::Code` is deferred.
             Some(code) => std::process::exit(code),
-            // Terminated by a signal (Unix): mirror the shell's 128 + signal
-            // convention as best we can without unix-only APIs.
+            // Terminated by a signal (Unix): reported as a runtime error
+            // (exit 1). The shell's 128 + signal convention would need a
+            // richer exit type, so it is deferred alongside `Exit::Code`.
             None => Err(Exit::Runtime(format!(
                 "external `{}` terminated by signal",
                 self.name
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Deliberately a path that cannot exist: nothing here may spawn anything.
+    const BIN: &str = "/nonexistent/verbandi-external-foo";
+
+    /// Parse `args` through the external's command parser, in-process.
+    fn run(args: &[&str]) -> Result<ExternalRun, bpaf::ParseFailure> {
+        ExternalVerb::new("foo", "the foo plugin", BIN)
+            .into_run_parser()
+            .to_options()
+            .run_inner(args)
+    }
+
+    #[test]
+    fn external_captures_rest_verbatim() {
+        let r = run(&["foo", "a", "b"]).expect("parses");
+        assert_eq!(r.name, "foo");
+        assert_eq!(r.bin, PathBuf::from(BIN));
+        assert_eq!(r.rest, ["a", "b"]);
+    }
+
+    #[test]
+    fn external_captures_no_args() {
+        let r = run(&["foo"]).expect("parses");
+        assert!(r.rest.is_empty());
+    }
+
+    #[test]
+    fn external_captures_flag_like_args() {
+        // The git model: everything after the external's name is the child's,
+        // including things that look like our own flags.
+        let r = run(&["foo", "--verbose", "-n", "2"]).expect("parses");
+        assert_eq!(r.rest, ["--verbose", "-n", "2"]);
+    }
+
+    #[test]
+    fn external_captures_after_double_dash() {
+        let r = run(&["foo", "--", "--verbose"]).expect("parses");
+        // `--` is consumed by bpaf as the positional-only marker: it is NOT
+        // retained in `rest`; only the words after it reach the child.
+        assert_eq!(r.rest, ["--verbose"]);
     }
 }

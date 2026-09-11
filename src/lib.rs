@@ -11,8 +11,10 @@
 //!   drive the whole app with no process side effects, and the [`cli!`] /
 //!   [`verb_test!`] macros let tests read like the terminal.
 //! - **Typo suggestions.** On a usage error with no built-in `bpaf`
-//!   suggestion, a Levenshtein pass over the registered command names appends
-//!   a `did you mean` hint.
+//!   suggestion, a Levenshtein pass over the registered **top-level** command
+//!   names — applied to the command position only — appends a `did you mean`
+//!   hint. This gap-closer runs only in [`App::run`]; a usage error returned by
+//!   [`App::parse`] carries `bpaf`'s own suggestions, never verbandi's hint.
 //!
 //! `verbandi` re-exports [`bpaf`] so consumers pin a single version through it.
 //!
@@ -36,7 +38,11 @@
 //!         .map(|c| Box::new(c) as BoxedVerb<Ctx>)
 //! }
 //! fn app() -> App<(), Ctx> {
-//!     App::new(pure(())).group("event", Group::new().leaf("create", create()))
+//!     App::new(pure(())).group(
+//!         "event",
+//!         "manage events",
+//!         Group::new().leaf("create", "create an event", create()),
+//!     )
 //! }
 //!
 //! let (_globals, verb) = app().parse(verbandi::cli! { event create "My Event" }).unwrap();

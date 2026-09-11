@@ -93,11 +93,11 @@ fn status_cmd() -> impl Parser<BoxedVerb<Ctx>> {
 /// Build the demo application.
 fn app() -> App<Globals, Ctx> {
     let event = Group::new()
-        .leaf("create", create_cmd())
-        .leaf("list", list_cmd());
+        .leaf("create", "create an event", create_cmd())
+        .leaf("list", "list events", list_cmd());
     App::new(globals())
-        .group("event", event)
-        .leaf("status", status_cmd())
+        .group("event", "manage events", event)
+        .leaf("status", "show demo status", status_cmd())
 }
 
 fn main() -> ExitCode {

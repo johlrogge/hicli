@@ -95,8 +95,8 @@ macro_rules! __cli_munch {
 /// #         .map(|(_dir, name)| Box::new(Create { name }) as BoxedVerb<Ctx>)
 /// # }
 /// # fn app() -> App<(), Ctx> {
-/// #     let group = Group::new().leaf("create", create());
-/// #     App::new(pure(())).group("event", group)
+/// #     let group = Group::new().leaf("create", "create an event", create());
+/// #     App::new(pure(())).group("event", "manage events", group)
 /// # }
 /// verb_test! {
 ///     app: app();
