@@ -12,9 +12,10 @@ design is in `docs/PLAN.md`.
 
 <!-- Upcoming work, roughly prioritised. Refine against docs/PLAN.md as it lands. -->
 
-- `Exit::Code(i32)` so `ExternalRun::run` can propagate a child's exit code
-  without calling `std::process::exit` inside the library (skips destructors,
-  makes that verb un-testable in-process). Close before moniker adopts externals.
+- `App::run_with_args(args, mk_ctx)` test seam, so the one public method with no
+  coverage (exit-code remap end-to-end, the suggestion gap-closer actually
+  firing, `Exit::Code` propagation) becomes in-process testable. Needed before
+  moniker asserts exit-code parity.
 - First adopter: migrate moniker's CLI onto verbandi
 - crates.io publish: verify the `verbandi` name is free, tag `0.1.0` per
   `RELEASING.md`
@@ -42,3 +43,7 @@ design is in `docs/PLAN.md`.
   in-process external-verb tests (nothing spawned), suggestion scoped to the
   command position over the top-level registry, an in-process completion test,
   and accurate "deltas from clap" docs
+- `Exit::Code` (2026-09-11): a verb — notably an external subcommand — carries a
+  specific exit code back as a value; `std::process::exit` is gone from the
+  library, `Exit::message()` is `Option<&str>`, and signal deaths report
+  `128 + N` on Unix (ADR-003)

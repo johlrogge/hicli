@@ -7,6 +7,11 @@
 //!
 //! - **Exit-code remap.** `bpaf` uses `1` for usage errors and `0` for
 //!   help/version; [`App::run`] remaps usage to `2` (see [`exit_code_for`]).
+//!   A verb reports its own outcome as an [`Exit`] value — usage `2`, runtime
+//!   `1`, or [`Exit::Code`] to carry a specific code silently (how an external
+//!   subcommand forwards its child's code). `verbandi` never calls
+//!   `std::process::exit`: [`App::run`] *returns* the code, so destructors run
+//!   and the consumer's `main` stays in control.
 //! - **First-class in-process testing.** [`App::parse`] / [`App::into_parser`]
 //!   drive the whole app with no process side effects, and the [`cli!`] /
 //!   [`verb_test!`] macros let tests read like the terminal.

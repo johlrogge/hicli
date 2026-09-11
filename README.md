@@ -48,7 +48,9 @@ first-class in-process testing possible (see below).
   find out. Because
   the manifest is the single source for both the parser and the help text, the test
   suite proves "nothing is spawned" by registering an external at a path that cannot
-  exist: help, completion and dispatch all still work.
+  exist: help, completion and dispatch all still work. The child's exit code comes
+  back as a value (`Exit::Code`), so `verbandi` never exits the process behind your
+  `main`'s back; on Unix a signal death is reported as `128 + N`, like a shell.
 - **Typo / "did you mean?" suggestions.** `bpaf` supplies suggestions for misspelled
   commands and flags; `verbandi` adds a Levenshtein gap-closer over its top-level
   command registry for the case where `bpaf` stays silent.

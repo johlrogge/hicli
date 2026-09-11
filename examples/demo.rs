@@ -102,5 +102,6 @@ fn app() -> App<Globals, Ctx> {
 
 fn main() -> ExitCode {
     let code = app().run(|g: Globals| Ok(Ctx { home: g.home }));
-    ExitCode::from(code as u8)
+    // A code outside `0..=255` is reported as a generic failure rather than truncated.
+    ExitCode::from(u8::try_from(code).unwrap_or(1))
 }

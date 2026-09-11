@@ -210,8 +210,11 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     ///
     /// Steps: parse (remapping `bpaf`'s exit codes — usage `2`, help/version
     /// `0`, appending a `did you mean` suggestion when `bpaf` produced none),
-    /// build the context via `mk_ctx`, then run the selected verb (mapping its
-    /// [`Exit`] to `2`/`1`). Returns the process exit code.
+    /// build the context via `mk_ctx`, then run the selected verb, printing its
+    /// [`Exit`]'s message (if any) to stderr and returning its code — `2` for
+    /// usage, `1` for runtime, the carried code for [`Exit::Code`], which
+    /// prints nothing. Returns the process exit code; `verbandi` never calls
+    /// `std::process::exit` itself.
     ///
     /// # Panics
     ///
@@ -226,15 +229,9 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
             Ok((globals, verb)) => match mk_ctx(globals) {
                 Ok(ctx) => match verb.run(&ctx) {
                     Ok(()) => 0,
-                    Err(e) => {
-                        eprintln!("{}", e.message());
-                        e.code()
-                    }
+                    Err(e) => report_exit(e),
                 },
-                Err(e) => {
-                    eprintln!("{}", e.message());
-                    e.code()
-                }
+                Err(e) => report_exit(e),
             },
             Err(failure) => report_failure(failure, &names, &args),
         }
@@ -266,6 +263,20 @@ fn report_failure(failure: ParseFailure, names: &[&str], args: &[String]) -> i32
         print!("{}", failure.unwrap_stdout());
     }
     code
+}
+
+/// Print a failed [`Exit`] to stderr — when it carries a message — and return
+/// its process exit code.
+///
+/// [`Exit::Code`] carries no message and is printed as nothing at all: not a
+/// blank line. It is produced by a verb that has already reported its own
+/// failure (an external subcommand's child writes its own stderr), so anything
+/// verbandi added would be noise.
+fn report_exit(e: Exit) -> i32 {
+    if let Some(msg) = e.message() {
+        eprintln!("{msg}");
+    }
+    e.code()
 }
 
 /// The stderr text to print for a usage error: `msg`, plus a `did you mean`
@@ -414,6 +425,15 @@ mod tests {
             out.ends_with("did you mean `status`?"),
             "expected an appended hint, got:\n{out}"
         );
+    }
+
+    #[test]
+    fn report_exit_returns_the_exit_code() {
+        // That `Code` is *silent* is proven by `Exit::message().is_none()` in
+        // src/verb.rs; here only the returned code is asserted.
+        assert_eq!(report_exit(Exit::Code(7)), 7);
+        assert_eq!(report_exit(Exit::Usage("u".into())), 2);
+        assert_eq!(report_exit(Exit::runtime("boom")), 1);
     }
 
     #[test]

@@ -59,8 +59,13 @@ pub trait Verb<Ctx> {
 pub type BoxedVerb<Ctx> = Box<dyn Verb<Ctx>>;
 
 /// Consumer exit-code convention, decoupled from bpaf's.
-pub enum Exit { Usage(String), Runtime(String) }        // code(): 2 / 1
-impl Exit { pub fn runtime<E: Display>(e: E) -> Self; }
+#[non_exhaustive]
+pub enum Exit { Usage(String), Runtime(String), Code(i32) } // code(): 2 / 1 / n (0 -> 1)
+impl Exit {
+    pub fn code(&self) -> i32;
+    pub fn message(&self) -> Option<&str>;   // None for Code: it prints nothing
+    pub fn runtime<E: Display>(e: E) -> Self;
+}
 
 /// Composition builder.
 pub struct App<G, Ctx> {
@@ -90,7 +95,9 @@ pub fn exit_code_for(f: &bpaf::ParseFailure) -> i32;    // Stderr => 2 (usage), 
 - **Tree by composition:** leaves combine via `construct!([...])`; a group is
   `construct!([inner…]).to_options().command(name)` boxed back to `BoxedVerb<Ctx>`.
 - **Globals + context:** top-level parser yields `(G, BoxedVerb<Ctx>)`; `App::run` hands `G` to
-  `mk_ctx`, then `verb.run(&ctx)`. Maps `ParseFailure` → 2/0 and `Exit` → 2/1.
+  `mk_ctx`, then `verb.run(&ctx)`. Maps `ParseFailure` → 2/0 and `Exit` → 2 / 1 / the carried
+  code. `verbandi` never calls `std::process::exit`: every path returns a code to the
+  consumer's `main`.
 
 **Consumer-side subcommand (the pattern this enables):**
 ```rust
@@ -169,7 +176,9 @@ pub struct ExternalVerb { name: &'static str, help: String, bin: PathBuf, schema
 ```
 An external becomes a bpaf `command(name)` whose parser collects the remainder verbatim
 (`any::<String>(...).many()`) and `.map`s into a `Verb` that runs
-`Command::new(ext.bin).args(rest).status()`, propagating the child's exit code.
+`Command::new(ext.bin).args(rest).status()`, propagating the child's exit code as a value
+(`Err(Exit::Code(n))`), never by exiting the process; on Unix a signal death becomes
+`128 + N`, matching the shell.
 
 - **Advertising the subtree — static allowlist manifest is the authority**, with an optional,
   opt-in runtime handshake (`app-foo --dump-verb-manifest`) only to enrich completion for
@@ -210,6 +219,10 @@ consumer's pain justifies it.
   listed in `--help`, selected by name and dispatched to a `Verb` — proving nothing is ever
   spawned outside `Verb::run`. Unit tests assert the captured `rest` verbatim (flag-like args
   included; a leading `--` is consumed by bpaf and not forwarded).
+- **Exit-code propagation, in-process:** the child-status → `Exit` mapping is a pure function
+  unit-tested with `ExitStatus`es built via `ExitStatusExt::from_raw` (Unix), so no subprocess
+  is spawned; the spawn-failure path is exercised against the same cannot-exist path used
+  everywhere else.
 - **Help text:** every `leaf`/`group` carries a mandatory one-line `help`, asserted as substrings
   of top-level, group and leaf `--help` output (never whole-output snapshots).
 - **Completion:** driven in-process through bpaf's own wire protocol

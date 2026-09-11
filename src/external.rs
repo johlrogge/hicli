@@ -5,11 +5,17 @@
 //! the single source both the parser and help read. Discovery is never
 //! implicit: there is no `$PATH` scan; a binary is advertised only if it was
 //! registered by absolute path.
+//!
+//! An external's exit code is propagated as a *value*: the child's code comes
+//! back as [`Exit::Code`], never `std::process::exit`. The library never
+//! terminates the process on the consumer's behalf — destructors run, the
+//! consumer's `main` gets its code, and the dispatch path is the same
+//! in-process one every other verb uses.
 
 use crate::verb::{BoxedVerb, Exit, Verb};
 use bpaf::{any, Parser};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 /// A minimal argument schema for an external subcommand.
 ///
@@ -111,6 +117,46 @@ struct ExternalRun {
     rest: Vec<String>,
 }
 
+/// The child's exit code, with Unix signal deaths mapped to the shell's
+/// `128 + signal` convention.
+///
+/// `ExitStatus::code()` is `None` when the child was killed by a signal; git
+/// and every POSIX shell report `128 + N` there, and an external subcommand
+/// must fail the same way it would have if the user had run the binary
+/// directly. (`verbandi` reports the code; it deliberately does **not**
+/// re-raise the signal on itself — that is the consumer's `main`'s business.)
+#[cfg(unix)]
+fn code_of(status: ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.code().or_else(|| status.signal().map(|s| 128 + s))
+}
+
+/// The child's exit code. Non-Unix targets have no signal concept here.
+#[cfg(not(unix))]
+fn code_of(status: ExitStatus) -> Option<i32> {
+    status.code()
+}
+
+/// Map a finished child's status onto verbandi's exit convention.
+///
+/// Split out of [`ExternalRun::run`] so the mapping is unit-testable without
+/// spawning anything: an `ExitStatus` can be constructed directly on Unix via
+/// `ExitStatusExt::from_raw`.
+fn exit_from_status(name: &str, status: ExitStatus) -> Result<(), Exit> {
+    match code_of(status) {
+        Some(0) => Ok(()),
+        // The child's exact code, carried back as a value. `Exit::Code` is
+        // silent: the child already wrote its own diagnostics.
+        Some(n) => Err(Exit::Code(n)),
+        // Unreachable on Unix (`status()` waits for termination, and a signal
+        // death is handled above) — kept as a defensive runtime error rather
+        // than a panic or a silent zero.
+        None => Err(Exit::Runtime(format!(
+            "external `{name}` terminated without an exit status"
+        ))),
+    }
+}
+
 impl<Ctx> Verb<Ctx> for ExternalRun {
     fn name(&self) -> &'static str {
         self.name
@@ -120,21 +166,14 @@ impl<Ctx> Verb<Ctx> for ExternalRun {
         let status = Command::new(&self.bin)
             .args(&self.rest)
             .status()
-            .map_err(Exit::runtime)?;
-        match status.code() {
-            Some(0) => Ok(()),
-            // Propagate the child's exact exit code. `Exit` only encodes 1/2,
-            // so anything else is forwarded directly; externals are a genuine
-            // process boundary. A richer `Exit::Code` is deferred.
-            Some(code) => std::process::exit(code),
-            // Terminated by a signal (Unix): reported as a runtime error
-            // (exit 1). The shell's 128 + signal convention would need a
-            // richer exit type, so it is deferred alongside `Exit::Code`.
-            None => Err(Exit::Runtime(format!(
-                "external `{}` terminated by signal",
-                self.name
-            ))),
-        }
+            .map_err(|e| {
+                Exit::Runtime(format!(
+                    "external `{}`: cannot run {}: {e}",
+                    self.name,
+                    self.bin.display()
+                ))
+            })?;
+        exit_from_status(self.name, status)
     }
 }
 
@@ -181,5 +220,60 @@ mod tests {
         // `--` is consumed by bpaf as the positional-only marker: it is NOT
         // retained in `rest`; only the words after it reach the child.
         assert_eq!(r.rest, ["--verbose"]);
+    }
+
+    /// `ExitStatus` has no portable constructor; on Unix it is the raw
+    /// `wait(2)` status, so these build one directly — no process involved.
+    #[cfg(unix)]
+    fn exited(code: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(unix)]
+    fn signalled(sig: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(sig)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn external_zero_status_is_success() {
+        assert_eq!(exit_from_status("foo", exited(0)), Ok(()));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn external_nonzero_status_becomes_a_silent_exit_code() {
+        let e = exit_from_status("foo", exited(7)).expect_err("nonzero is a failure");
+        assert_eq!(e, Exit::Code(7));
+        assert_eq!(e.code(), 7);
+        assert!(e.message().is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn external_killed_by_signal_is_128_plus_signal() {
+        // SIGKILL: 128 + 9, matching what a shell reports for a signalled child.
+        let e = exit_from_status("foo", signalled(9)).expect_err("a signal death is a failure");
+        assert_eq!(e, Exit::Code(137));
+        assert_eq!(e.code(), 137);
+    }
+
+    #[test]
+    fn external_spawn_failure_is_a_runtime_error() {
+        // BIN cannot exist, so the exec fails and nothing is ever executed.
+        // This is the only test that touches `Command`, and it proves the
+        // library returns an error instead of exiting the process.
+        let r = ExternalRun {
+            name: "foo",
+            bin: PathBuf::from(BIN),
+            rest: Vec::new(),
+        };
+        let e = Verb::<()>::run(Box::new(r), &()).expect_err("the binary cannot exist");
+        assert_eq!(e.code(), 1);
+        let m = e.message().expect("a spawn failure is reported");
+        assert!(m.contains("foo"), "message missing the name:\n{m}");
+        assert!(m.contains(BIN), "message missing the path:\n{m}");
     }
 }
