@@ -82,12 +82,14 @@ impl<G: 'static, Ctx> App<G, Ctx> {
                 p: impl Parser<BoxedVerb<Ctx>> + 'static) -> Self;
     pub fn group(self, name: &'static str, help: impl Into<String>, sub: Group<Ctx>) -> Self;
     pub fn external(self, ext: ExternalVerb) -> Self;   // git-style plugin
-    pub fn run(self, mk_ctx: impl FnOnce(G) -> Result<Ctx, Exit>) -> i32;
+    pub fn run(self, mk_ctx: impl FnOnce(G) -> Result<Ctx, Exit>) -> i32;   // = run_with_args(env::args().skip(1), …)
 
     // --- test seams (in-process, no subprocess) ---
     pub fn into_parser(self) -> bpaf::OptionParser<(G, BoxedVerb<Ctx>)>;
     pub fn parse<I, S>(self, args: I) -> Result<(G, BoxedVerb<Ctx>), bpaf::ParseFailure>
     where I: IntoIterator<Item = S>, S: Into<String>;   // takes `cli! { … }` by value
+    pub fn run_with_args<I, S>(self, args: I, mk_ctx: impl FnOnce(G) -> Result<Ctx, Exit>) -> i32
+    where I: IntoIterator<Item = S>, S: Into<String>;   // the whole run path, argv supplied
 }
 pub fn exit_code_for(f: &bpaf::ParseFailure) -> i32;    // Stderr => 2 (usage), else 0
 ```
@@ -122,8 +124,12 @@ bpaf's edge over clap: parsers are plain values; `run_inner(Args::from(&[...]))`
 (`unwrap_stderr()`/`unwrap_stdout()`) and `exit_code()`. `verbandi` surfaces this via
 `App::parse` / `into_parser` / `exit_code_for`.
 
-**Three layers:** L1 per-command parser (assert fields); L2 App dispatch + exit intent (selected
-`verb.name()`, remapped exit code, rendered stderr); L3 consumer domain handlers (unchanged).
+**Three layers:** L1 per-command parser (assert fields); L2 `App` dispatch + exit intent — via
+`parse`/`into_parser` (selected `verb.name()`, remapped exit code, rendered stderr) *and*, at run
+level, via `run_with_args` (the full pipeline: parse → remap → `mk_ctx` → `verb.run` → exit code,
+including `Exit::Code` propagation). `run_with_args` does not capture stdout/stderr, so only the
+returned `i32` is assertable there; rendered text stays an L2-`parse` or unit-level assertion;
+L3 consumer domain handlers (unchanged).
 
 ### Terminal-shaped test macros (the tests read like what the user types)
 
@@ -159,7 +165,9 @@ mapped to a test function. `verbandi` ships two macros:
   }
   ```
   (Exact `app()`-supply convention — a leading `app: <expr>;` header vs per-case — finalized during
-  implementation; keep it minimal.)
+  implementation; keep it minimal.) `verb_test!` deliberately covers the parse layer only — a
+  run-level arm would need a second header (`mk_ctx`) and a different case grammar, i.e. a second
+  macro wearing the same name; deferred until a consumer's run-level suite justifies it.
 
 These macros are the crate's headline testing UX and must be covered by the crate's own tests +
 shown in the example CLI.
@@ -223,6 +231,13 @@ consumer's pain justifies it.
   unit-tested with `ExitStatus`es built via `ExitStatusExt::from_raw` (Unix), so no subprocess
   is spawned; the spawn-failure path is exercised against the same cannot-exist path used
   everywhere else.
+- **Run level, in-process:** `App::run_with_args(cli! { … }, mk_ctx)` exercises every branch of
+  `App::run` — good parse, usage error (2), `--help` (0), a typo'd and an unknown command (2, the
+  gap-closer path), `mk_ctx` failure, each `Exit` variant's code (`Code(7)`→7, `Code(0)`→1,
+  `Runtime`→1, `Usage`→2) and an external's spawn failure (1). Verbs record into the shared `Ctx`,
+  so each test asserts both the exit code and whether the verb ran with the globals-derived
+  context. Only the returned code is assertable — the streams are the process's real ones — so
+  `did you mean` text remains covered by the `augment_stderr`/`suggest` unit tests.
 - **Help text:** every `leaf`/`group` carries a mandatory one-line `help`, asserted as substrings
   of top-level, group and leaf `--help` output (never whole-output snapshots).
 - **Completion:** driven in-process through bpaf's own wire protocol

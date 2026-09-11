@@ -41,6 +41,9 @@ first-class in-process testing possible (see below).
   let (_g, verb) = app().parse(cli! { event create x "My Event" }).unwrap();
   assert_eq!(verb.name(), "create");
   ```
+  The run path is testable too: `app().run_with_args(cli! { status }, mk_ctx)`
+  returns the exit code the process would have used, without touching the
+  process.
 - **Git-style multi-binary subcommands** with shared help and completion — an
   external binary can be a subcommand (`app foo` execs the binary registered for `foo`,
   by absolute path; the git-style `app-foo` naming is a convention, not the contract)

@@ -13,13 +13,17 @@
 //!   `std::process::exit`: [`App::run`] *returns* the code, so destructors run
 //!   and the consumer's `main` stays in control.
 //! - **First-class in-process testing.** [`App::parse`] / [`App::into_parser`]
-//!   drive the whole app with no process side effects, and the [`cli!`] /
+//!   drive the whole app with no process side effects, and
+//!   [`App::run_with_args`] drives the whole run path — parse, remap, `mk_ctx`,
+//!   verb, exit code — returning the code instead of touching the process, so
+//!   `App::run` itself is covered by ordinary tests. The [`cli!`] /
 //!   [`verb_test!`] macros let tests read like the terminal.
 //! - **Typo suggestions.** On a usage error with no built-in `bpaf`
 //!   suggestion, a Levenshtein pass over the registered **top-level** command
 //!   names — applied to the command position only — appends a `did you mean`
-//!   hint. This gap-closer runs only in [`App::run`]; a usage error returned by
-//!   [`App::parse`] carries `bpaf`'s own suggestions, never verbandi's hint.
+//!   hint. This gap-closer runs only on the run path ([`App::run`] /
+//!   [`App::run_with_args`]); a usage error returned by [`App::parse`] carries
+//!   `bpaf`'s own suggestions, never verbandi's hint.
 //!
 //! `verbandi` re-exports [`bpaf`] so consumers pin a single version through it.
 //!

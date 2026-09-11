@@ -98,7 +98,7 @@ impl<Ctx: 'static> Group<Ctx> {
 /// `G` is the global-options type; `Ctx` is the shared context handed to every
 /// verb. Build the tree with [`App::leaf`], [`App::group`] and
 /// [`App::external`], then either [`App::run`] it or, in tests, drive it
-/// through [`App::parse`] / [`App::into_parser`].
+/// through [`App::parse`] / [`App::into_parser`] / [`App::run_with_args`].
 ///
 /// Note: `new` takes any `impl Parser<G>` (not `OptionParser<G>`); a plain
 /// `#[derive(Bpaf)]` on the globals struct yields exactly such a parser, and
@@ -216,16 +216,76 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     /// prints nothing. Returns the process exit code; `verbandi` never calls
     /// `std::process::exit` itself.
     ///
+    /// Equivalent to `run_with_args(std::env::args().skip(1), mk_ctx)`; use
+    /// [`App::run_with_args`] in tests.
+    ///
     /// # Panics
     ///
     /// Routes through [`App::into_parser`], so it panics if no command was
     /// registered.
     pub fn run(self, mk_ctx: impl FnOnce(G) -> Result<Ctx, Exit>) -> i32 {
-        let names = self.names.clone();
-        let args: Vec<String> = std::env::args().skip(1).collect();
+        self.run_with_args(std::env::args().skip(1), mk_ctx)
+    }
+
+    /// Run the app against an explicit argument vector, returning the process
+    /// exit code.
+    ///
+    /// This is the run-level test seam: it is exactly [`App::run`] minus the
+    /// `std::env::args()` read, so a test can drive the whole pipeline —
+    /// parse, exit-code remap, the `did you mean` gap-closer, `mk_ctx`, verb
+    /// dispatch and [`Exit`] propagation — in-process. `args` is anything
+    /// iterable of string-likes, so it plugs straight into
+    /// [`cli!`](crate::cli): `app().run_with_args(cli! { status }, mk_ctx)`.
+    ///
+    /// `args` is the argument vector **without** the program name, matching
+    /// `std::env::args().skip(1)`.
+    ///
+    /// Only the returned code is assertable: help, usage errors and an
+    /// [`Exit`]'s message still go to the process's real stdout/stderr, which
+    /// this method does not capture or redirect. Assert rendered text through
+    /// [`App::parse`] (which returns the `ParseFailure` instead of printing it).
+    ///
+    /// ```
+    /// # use verbandi::{App, BoxedVerb, Exit, Verb, cli};
+    /// # use verbandi::bpaf::{positional, pure, Parser};
+    /// # struct Ctx { home: String }
+    /// # struct Greet { who: String }
+    /// # impl Verb<Ctx> for Greet {
+    /// #     fn name(&self) -> &'static str { "greet" }
+    /// #     fn run(self: Box<Self>, ctx: &Ctx) -> Result<(), Exit> {
+    /// #         println!("[{}] hello {}", ctx.home, self.who);
+    /// #         Ok(())
+    /// #     }
+    /// # }
+    /// # fn greet() -> impl Parser<BoxedVerb<Ctx>> {
+    /// #     positional::<String>("WHO").map(|who| Box::new(Greet { who }) as BoxedVerb<Ctx>)
+    /// # }
+    /// # fn app() -> App<(), Ctx> {
+    /// #     App::new(pure(())).leaf("greet", "greet someone", greet())
+    /// # }
+    /// // the whole run path, in-process: parse -> mk_ctx -> verb -> exit code
+    /// assert_eq!(app().run_with_args(cli! { greet world }, |_| Ok(Ctx { home: ".".into() })), 0);
+    /// // a missing positional is a usage error, remapped from bpaf's 1 to 2
+    /// assert_eq!(app().run_with_args(cli! { greet }, |_| Ok(Ctx { home: ".".into() })), 2);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Routes through [`App::into_parser`], so it panics if no command was
+    /// registered.
+    pub fn run_with_args<I, S>(
+        mut self,
+        args: I,
+        mk_ctx: impl FnOnce(G) -> Result<Ctx, Exit>,
+    ) -> i32
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let names = std::mem::take(&mut self.names);
+        let args: Vec<String> = args.into_iter().map(Into::into).collect();
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let parser = self.into_parser();
-        match parser.run_inner(refs.as_slice()) {
+        match self.into_parser().run_inner(refs.as_slice()) {
             Ok((globals, verb)) => match mk_ctx(globals) {
                 Ok(ctx) => match verb.run(&ctx) {
                     Ok(()) => 0,

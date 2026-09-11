@@ -3,15 +3,47 @@
 //! The consumer app mirrors `examples/demo.rs`: globals with `--home`, an
 //! `event` group with `create`/`list` leaves, and a top-level `status` leaf.
 
-use verbandi::bpaf::{Bpaf, Parser};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use verbandi::bpaf::{pure, Bpaf, Parser};
 use verbandi::{cli, exit_code_for, verb_test, App, BoxedVerb, Exit, ExternalVerb, Group, Verb};
 
-struct Ctx;
+/// The shared context. It carries the globals-derived `home` plus a log, so a
+/// run-level test can assert *that* a verb ran and *which* context it got —
+/// `App::run_with_args` returns only an exit code, and stdout/stderr go to the
+/// real streams.
+struct Ctx {
+    home: String,
+    log: Rc<RefCell<Vec<String>>>,
+}
+
+impl Ctx {
+    /// Record that `verb` ran, together with the globals-derived `home`.
+    fn ran(&self, verb: &'static str) {
+        self.log.borrow_mut().push(format!("{verb}:{}", self.home));
+    }
+}
+
+/// A fresh recording log.
+fn log() -> Rc<RefCell<Vec<String>>> {
+    Rc::new(RefCell::new(Vec::new()))
+}
+
+/// An `mk_ctx` that derives the context from the globals and records into `log`.
+fn ctx_from(log: &Rc<RefCell<Vec<String>>>) -> impl FnOnce(Globals) -> Result<Ctx, Exit> {
+    let log = Rc::clone(log);
+    move |g: Globals| Ok(Ctx { home: g.home, log })
+}
+
+/// What ran, in order — `["status:somewhere"]`, or empty if no verb ran.
+fn ran(log: &Rc<RefCell<Vec<String>>>) -> Vec<String> {
+    log.borrow().clone()
+}
 
 #[derive(Debug, Clone, Bpaf)]
 struct Globals {
     #[bpaf(long, argument("PATH"), fallback(".".into()))]
-    #[allow(dead_code)]
     home: String,
 }
 
@@ -26,7 +58,8 @@ impl Verb<Ctx> for Create {
     fn name(&self) -> &'static str {
         "create"
     }
-    fn run(self: Box<Self>, _ctx: &Ctx) -> Result<(), Exit> {
+    fn run(self: Box<Self>, ctx: &Ctx) -> Result<(), Exit> {
+        ctx.ran(self.name());
         Ok(())
     }
 }
@@ -40,7 +73,8 @@ impl Verb<Ctx> for List {
     fn name(&self) -> &'static str {
         "list"
     }
-    fn run(self: Box<Self>, _ctx: &Ctx) -> Result<(), Exit> {
+    fn run(self: Box<Self>, ctx: &Ctx) -> Result<(), Exit> {
+        ctx.ran(self.name());
         Ok(())
     }
 }
@@ -54,7 +88,8 @@ impl Verb<Ctx> for Status {
     fn name(&self) -> &'static str {
         "status"
     }
-    fn run(self: Box<Self>, _ctx: &Ctx) -> Result<(), Exit> {
+    fn run(self: Box<Self>, ctx: &Ctx) -> Result<(), Exit> {
+        ctx.ran(self.name());
         Ok(())
     }
 }
@@ -69,6 +104,56 @@ fn app() -> App<Globals, Ctx> {
     App::new(globals())
         .group("event", "manage events", event)
         .leaf("status", "show demo status", status_cmd())
+}
+
+/// A verb that records that it ran and then fails with a fixed `Exit`.
+struct Failing {
+    name: &'static str,
+    exit: Exit,
+}
+impl Verb<Ctx> for Failing {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+    fn run(self: Box<Self>, ctx: &Ctx) -> Result<(), Exit> {
+        ctx.ran(self.name);
+        Err(self.exit)
+    }
+}
+fn failing_cmd(name: &'static str, exit: Exit) -> impl Parser<BoxedVerb<Ctx>> {
+    pure(()).map(move |()| {
+        Box::new(Failing {
+            name,
+            exit: exit.clone(),
+        }) as BoxedVerb<Ctx>
+    })
+}
+
+/// `app()` plus one leaf per failure mode, for the run-level tests. Names are
+/// deliberately far (> 2 edits) from `event`/`status`, so the suggestion
+/// registry behaves the same as it does for `app()`.
+fn app_with_exits() -> App<Globals, Ctx> {
+    app()
+        .leaf(
+            "code7",
+            "fail with code 7",
+            failing_cmd("code7", Exit::Code(7)),
+        )
+        .leaf(
+            "code0",
+            "fail with code 0",
+            failing_cmd("code0", Exit::Code(0)),
+        )
+        .leaf(
+            "boom",
+            "fail at runtime",
+            failing_cmd("boom", Exit::runtime("boom")),
+        )
+        .leaf(
+            "misuse",
+            "fail with a usage error",
+            failing_cmd("misuse", Exit::Usage("misused".into())),
+        )
 }
 
 // --- L1: a leaf parser parses positionals/options correctly ------------------
@@ -297,7 +382,7 @@ verb_test! {
     // suggestion golden matrix: stderr names the intended target.
     // These cases route through `App::parse`, so they observe bpaf's own
     // suggestions; verbandi's gap-closer is unit-tested in `src/app.rs` and
-    // only runs in `App::run`.
+    // only on the run path (`App::run` / `App::run_with_args`).
     typo_top_level_command: { stauts } => |r| {
         let e = r.err().expect("expected a parse failure");
         assert_eq!(exit_code_for(&e), 2);
@@ -318,4 +403,124 @@ verb_test! {
         assert_eq!(exit_code_for(&e), 2);
         assert!(e.unwrap_stderr().contains("home"));
     },
+}
+
+// --- run level: the whole pipeline through `run_with_args` -------------------
+//
+// These drive `App::run`'s pipeline with an explicit argv. Only the returned
+// exit code is assertable: help, usage errors and an `Exit`'s message go to the
+// process's real stdout/stderr, which `run_with_args` does not capture. That
+// noise is harmless — cargo captures per-test output unless a test fails. What
+// the verb *did* is observed through the recording `Ctx` instead.
+
+#[test]
+fn run_parses_builds_context_and_runs_the_verb() {
+    let log = log();
+    let code = app_with_exits().run_with_args(cli! { --home somewhere status }, ctx_from(&log));
+    assert_eq!(code, 0);
+    assert_eq!(ran(&log), ["status:somewhere"]);
+}
+
+#[test]
+fn run_usage_error_is_two() {
+    let log = log();
+    let code = app_with_exits().run_with_args(cli! { event create x }, ctx_from(&log));
+    assert_eq!(code, 2);
+    assert!(ran(&log).is_empty());
+}
+
+#[test]
+fn run_help_is_zero() {
+    let log = log();
+    let code = app_with_exits().run_with_args(cli! { --help }, ctx_from(&log));
+    assert_eq!(code, 0);
+    assert!(ran(&log).is_empty());
+}
+
+#[test]
+fn run_typo_command_is_two() {
+    // This is the gap-closer path; the appended `did you mean` line goes to the
+    // real stderr and is not assertable here — `augment_stderr`/`suggest` are
+    // unit-tested in src/app.rs.
+    let log = log();
+    let code = app_with_exits().run_with_args(cli! { stauts }, ctx_from(&log));
+    assert_eq!(code, 2);
+    assert!(ran(&log).is_empty());
+}
+
+#[test]
+fn run_unknown_command_is_two() {
+    // Same path with no suggestion within 2 edits — proves the silent branch of
+    // `augment_stderr` doesn't panic or change the code.
+    let log = log();
+    let code = app_with_exits().run_with_args(cli! { wildlydifferent }, ctx_from(&log));
+    assert_eq!(code, 2);
+    assert!(ran(&log).is_empty());
+}
+
+#[test]
+fn run_mk_ctx_failure_skips_the_verb() {
+    let log = log();
+    let rec = Rc::clone(&log);
+    let mk_ctx = move |g: Globals| {
+        rec.borrow_mut().push(format!("mk_ctx:{}", g.home));
+        Err(Exit::Code(9))
+    };
+    let code = app_with_exits().run_with_args(cli! { --home somewhere status }, mk_ctx);
+    // Code 9 is unreachable from a parse failure (2) or a verb (none ran), so
+    // this proves mk_ctx ran with the parsed globals, that its `Exit` travelled
+    // the same report path as a verb's, and that no verb ran after it — a verb
+    // would have appended `status:somewhere`.
+    assert_eq!(code, 9);
+    assert_eq!(ran(&log), ["mk_ctx:somewhere"]);
+}
+
+#[test]
+fn run_propagates_a_verbs_exit_code() {
+    let log = log();
+    let code = app_with_exits().run_with_args(cli! { code7 }, ctx_from(&log));
+    assert_eq!(code, 7);
+    // `--home` falls back to `.`.
+    assert_eq!(ran(&log), ["code7:."]);
+}
+
+#[test]
+fn run_verb_exit_code_zero_is_not_success() {
+    let log = log();
+    let code = app_with_exits().run_with_args(cli! { code0 }, ctx_from(&log));
+    assert_eq!(code, 1);
+    assert_eq!(ran(&log), ["code0:."]);
+}
+
+#[test]
+fn run_verb_runtime_error_is_one() {
+    let log = log();
+    let code = app_with_exits().run_with_args(cli! { boom }, ctx_from(&log));
+    assert_eq!(code, 1);
+    assert_eq!(ran(&log), ["boom:."]);
+}
+
+#[test]
+fn run_verb_usage_error_is_two() {
+    let log = log();
+    let code = app_with_exits().run_with_args(cli! { misuse }, ctx_from(&log));
+    assert_eq!(code, 2);
+    assert_eq!(ran(&log), ["misuse:."]);
+}
+
+#[test]
+fn run_external_spawn_failure_is_one() {
+    // `EXT_BIN` cannot exist, so `Command::status()` fails at exec: no child
+    // process is ever created, so this stays inside the "no subprocess in
+    // tests" rule (ADR-003 accepted the same argument for the unit test in
+    // src/external.rs). What is new here is the wiring: the spawn failure
+    // becomes `Exit::Runtime` and travels the full `run_with_args` pipeline
+    // out as exit code 1.
+    let log = log();
+    let code = app_with_external().run_with_args(cli! { foo a b }, ctx_from(&log));
+    // `code == 1` carries the proof: a successful parse with no run returns 0.
+    assert_eq!(code, 1);
+    // `ExternalRun` never records into `Ctx`, so this line is a placeholder for
+    // symmetry with the other run-level tests, not evidence.
+    assert!(ran(&log).is_empty());
 }

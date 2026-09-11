@@ -131,7 +131,14 @@ guarantee rather than adding mechanism.
   status to `exit_from_status` — three lines of wiring between a `Command` we
   will not spawn and a function we do test. Closing it needs either a real
   subprocess (rejected above) or a spawn seam on `ExternalRun`; neither is worth
-  it until a consumer reports a mis-propagated code.
-- `App::run` is still the one public method with no test coverage, because it
-  reads `std::env::args()`. A `run_with_args(args, mk_ctx)` seam would close
-  that — it is on the roadmap as the next change, not bundled here.
+  it until a consumer reports a mis-propagated code. (The spawn-failure half of
+  that wiring is now exercised end-to-end through `run_with_args`; the
+  success-status half remains untested.)
+- **Resolved (2026-09-11):** `App::run_with_args(args, mk_ctx)` was added as the
+  run-level test seam and `App::run` is now
+  `run_with_args(std::env::args().skip(1), mk_ctx)`. Every branch of the run
+  path, including `Exit::Code` propagation and `Code(0)` → 1, is covered
+  in-process in `tests/cli.rs`. The seam returns the exit code but does not
+  capture stdout/stderr, so the appended `did you mean` text stays covered by
+  the `augment_stderr` unit tests; a writer-injecting variant was considered and
+  rejected as API surface bought for one string assertion.
