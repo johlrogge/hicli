@@ -1,0 +1,29 @@
+allowUnfree: true
+
+inputs:
+  nixpkgs:
+    url: github:cachix/devenv-nixpkgs/rolling
+  rust-overlay:
+    url: github:oxalica/rust-overlay
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  claude-code-nix:
+    url: github:sadjow/claude-code-nix
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  # Required because the metadev module references inputs.ctx (bundles the ctx
+  # binary). Without it, `devenv shell` fails with "attribute 'ctx' missing".
+  # Tracked upstream as metadev#21.
+  ctx:
+    url: gitlab:johlrogge.rs/ctx
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  metadev:
+    url: github:johlrogge/metadev
+    flake: false
+
+imports:
+  - metadev

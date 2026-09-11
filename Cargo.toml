@@ -1,0 +1,22 @@
+[package]
+name = "verbandi"
+version = "0.1.0"
+edition = "2021"
+description = "A modular, publishable subcommand framework built on bpaf: one subcommand = one Verb, composed (not hand-matched), with first-class in-process testing, git-style external subcommands, and typo suggestions."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/johlrogge/verbandi"
+readme = "README.md"
+keywords = ["cli", "subcommand", "bpaf", "argument", "parser"]
+categories = ["command-line-interface"]
+
+[dependencies]
+bpaf = { version = "0.9", features = ["derive", "autocomplete"] }
+strsim = "0.11"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
