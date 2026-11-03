@@ -1,6 +1,0 @@
-error: cannot find the file for module `event`: tried `$DIR/tests/ui/event.rs`, `$DIR/tests/ui/event/mod.rs`
-       note: a group_mod! declaration must be at the top level of its file; inside an inline `mod`, use #[group] on an inline module instead
-  --> tests/ui/group_mod_file_missing.rs:10:13
-   |
-10 |     pub mod event;
-   |             ^^^^^

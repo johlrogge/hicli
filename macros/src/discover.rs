@@ -2,15 +2,14 @@
 //!
 //! **A child is a child because it is in the module** (ADR-005 §3): there is no
 //! list to keep in step with the code, so a command that was written cannot be
-//! a command that was never registered. Three shapes qualify, in source order:
+//! a command that was never registered. Two shapes qualify, in source order:
 //!
 //! - a `fn` marked `#[command]`,
-//! - a `mod` marked `#[group]`,
-//! - a `mod x;` declared inside a `group_mod! { … }` invocation.
+//! - a `mod` marked `#[group]` — inline (`mod x { … }`) or a file (`mod x;`).
 //!
 //! Everything else in the body — argument structs, `impl` blocks, an ordinary
-//! `mod`, `#[cfg(test)] mod tests` — is skipped, because none of them carries
-//! the mark.
+//! `mod`, `#[cfg(test)] mod tests`, a macro invocation — is skipped, because
+//! none of them carries the mark.
 //!
 //! The mark is matched on an attribute path's **last segment**, so
 //! `#[command]`, `#[hicli::command]` and `#[crate::command]` all count. That is
@@ -18,9 +17,7 @@
 //! paths, and the failure mode of guessing wrong is a missing-function error
 //! naming `__hicli_x`, not silence.
 
-use proc_macro2::TokenStream;
-use syn::parse::{ParseStream, Parser};
-use syn::{Attribute, FnArg, Ident, Item, Result, Signature, Type};
+use syn::{Attribute, FnArg, Ident, Item, Signature, Type};
 
 use crate::shared::{cfg_attrs, marks, path_attr};
 
@@ -37,7 +34,8 @@ pub(crate) struct Child {
     pub(crate) kind: ChildKind,
 }
 
-/// The three shapes a child comes in.
+/// The shapes a child comes in: a command, or a group whose body is inline or
+/// in a file.
 pub(crate) enum ChildKind {
     /// A `#[command]` function, with the type of its `&T` parameter if it has
     /// one.
@@ -51,10 +49,10 @@ pub(crate) enum ChildKind {
         /// The nested module's items.
         items: Vec<Item>,
     },
-    /// A `mod x;` inside `group_mod! { … }`: the body is in another file.
+    /// A `#[group] mod x;`: the body is in another file.
     ///
     /// Discovery does not read it — the group's handle reaches exactly one
-    /// level down, and this child's own `group_mod!` writes its handle. Only
+    /// level down, and this child's own `#[group]` writes its handle. Only
     /// the *context* walk goes further (`crate::ctx::Outline`), and it needs
     /// the one thing the declaration says about where the file is.
     Outlined {
@@ -87,65 +85,15 @@ pub(crate) fn children_of(items: &[Item]) -> Vec<Child> {
                     },
                 },
             }),
-            Item::Macro(m) if last_segment_is(m.mac.path.segments.last(), "group_mod") => {
-                children.extend(outlined_in(&m.mac.tokens, &cfg_attrs(&m.attrs)));
-            }
             _ => {}
         }
     }
     children
 }
 
-/// The `mod x;` declarations inside a `group_mod! { … }` body.
-///
-/// The invocation's own `#[cfg]` rides on every declaration it contains: if the
-/// invocation disappears, so do all of its modules, and so must their
-/// registrations. A body that does not parse as items yields nothing — the file
-/// form raises that diagnostic itself, with the span to say it at.
-fn outlined_in(tokens: &TokenStream, outer: &[Attribute]) -> Vec<Child> {
-    let Ok(items) = parse_items.parse2(tokens.clone()) else {
-        return Vec::new();
-    };
-    items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Mod(m) => {
-                let mut cfgs = outer.to_vec();
-                cfgs.extend(cfg_attrs(&m.attrs));
-                Some(Child {
-                    ident: m.ident.clone(),
-                    cfgs,
-                    kind: ChildKind::Outlined {
-                        path: path_attr(&m.attrs),
-                    },
-                })
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// A token stream as a sequence of items.
-///
-/// Shared with `group_mod!`, whose whole body is this: the declarations a
-/// group's parent discovers here are the declarations the macro expands there,
-/// read by one parser so the two cannot disagree about what a declaration is.
-pub(crate) fn parse_items(input: ParseStream) -> Result<Vec<Item>> {
-    let mut items = Vec::new();
-    while !input.is_empty() {
-        items.push(input.parse()?);
-    }
-    Ok(items)
-}
-
 /// Does any of `attrs` end in `name`?
 fn marked(attrs: &[Attribute], name: &str) -> bool {
     attrs.iter().any(|a| marks(a, name))
-}
-
-/// Is this path segment `name`?
-fn last_segment_is(segment: Option<&syn::PathSegment>, name: &str) -> bool {
-    segment.is_some_and(|s| s.ident == name)
 }
 
 /// The type of a signature's first `&T` parameter, if it has one.
@@ -272,7 +220,7 @@ mod tests {
         // the declaration says about where it is has to survive discovery.
         let cs = children(
             "mod event {
-                 group_mod! { /// audience\n#[path = \"other/a.rs\"] pub mod audience; }
+                 /// audience\n#[group] #[path = \"other/a.rs\"] pub mod audience;
              }",
         );
         let ChildKind::Outlined { path } = &cs[0].kind else {
@@ -282,22 +230,18 @@ mod tests {
     }
 
     #[test]
-    fn a_group_mod_declaration_is_a_child() {
-        // Wired now, read in step 3: the discovery rule is the same one either
-        // way, so the group's handle does not care which form declared a child.
-        let cs = children(
-            "mod event {
-                 #[cfg(unix)]
-                 group_mod! { /// audience\n pub mod audience; /// roster\n pub mod roster; }
-             }",
+    fn a_macro_invocation_is_not_a_child() {
+        // Whatever a macro would expand to, discovery sees tokens it does not
+        // read: a child is a marked `fn` or `mod`, nothing else.
+        assert_eq!(
+            names(
+                "mod event {
+                     some_macro! { /// audience\n pub mod audience; }
+                     /// create\n#[command] pub fn create(ctx: &Ctx) {}
+                 }"
+            ),
+            ["create"]
         );
-        let named: Vec<String> = cs.iter().map(|c| c.ident.to_string()).collect();
-        assert_eq!(named, ["audience", "roster"]);
-        assert!(cs
-            .iter()
-            .all(|c| matches!(c.kind, ChildKind::Outlined { .. })));
-        // The invocation's `#[cfg]` rides on every declaration inside it.
-        assert_eq!(cs[0].cfgs.len(), 1);
     }
 
     #[test]

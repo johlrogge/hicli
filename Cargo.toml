@@ -11,10 +11,9 @@ missing_docs = "warn"
 name = "hicli"
 version = "0.1.0"
 edition = "2021"
-# `group_mod!` locates its declaring file with `proc_macro::Span::local_file`,
-# stable since 1.88 (ADR-005 §5). An adopter on an older toolchain can write
-# every group inline, but the crate as a whole will not build.
-rust-version = "1.88"
+# `#[group]` on a file-module declaration needs attribute macros on non-inline
+# modules, stable since 1.99 (ADR-010).
+rust-version = "1.99"
 description = "CLI-enable your code: a subcommand is a documented function, a group of subcommands is a documented module whose children are discovered, an argument is a type — and there is no hand-written dispatch match. Built on bpaf, with first-class in-process testing, git-style external subcommands, and typo suggestions."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/johlrogge/hicli"

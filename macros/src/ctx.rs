@@ -17,10 +17,10 @@
 //! mismatch, spanned at its own `push`.
 //!
 //! The walk crosses **file** boundaries too, through an [`Outline`]: a
-//! `group_mod! { pub mod audience; }` inside a file module resolves its own
-//! file, relative to the file it was declared in, and the search continues
-//! there. Nothing is diagnosed on that path — a child file that is missing or
-//! broken raises its own error when *its* `group_mod!` expands, and saying it
+//! `#[group] pub mod audience;` inside a file module resolves its own file,
+//! relative to the file it was declared in, and the search continues there.
+//! Nothing is diagnosed on that path — a child file that is missing or broken
+//! raises its own error when *its* `#[group]` expands, and saying it
 //! twice, once from a parent that only wanted to know a type name, helps
 //! nobody. The walk simply stops and the handle comes out generic.
 
@@ -49,7 +49,7 @@ pub(crate) enum Ctx {
 /// Where an outlined child's file is, so the walk can follow it.
 ///
 /// It is the declaring file plus the file system to read it with — the same
-/// pair `group_mod!` itself resolves a declaration from — and it deepens as the
+/// pair `#[group]` on a file module resolves its file from — and it deepens as the
 /// walk descends: a child of `src/event.rs` resolves against `src/event.rs`,
 /// and *its* children against whatever that resolved to.
 pub(crate) struct Outline<'a> {
@@ -99,8 +99,8 @@ impl<'a> Outline<'a> {
 /// Decide a group's context from its attribute argument and its children.
 ///
 /// `outline` is `Some` for a group whose children were read out of a file, and
-/// `None` for an inline one — an inline module's outlined declarations are the
-/// case `group_mod!` cannot serve anyway (it must be at a file's top level), so
+/// `None` for an inline one — an inline group refuses an outlined child without
+/// an explicit `#[path]` (it would resolve against the wrong directory), so
 /// there is nothing there to follow.
 pub(crate) fn resolve(
     explicit: Option<Type>,
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(
             context_across(
                 &[
-                    ("src/event.rs", "group_mod! { /// a\n pub mod audience; }"),
+                    ("src/event.rs", "/// a\n#[group] pub mod audience;"),
                     (
                         "src/event/audience.rs",
                         "/// d\n#[command] pub fn define(c: &crate::Ctx) {}",
@@ -364,13 +364,13 @@ mod tests {
     #[test]
     fn a_child_file_that_is_not_there_leaves_the_group_generic() {
         // Nothing is diagnosed: the missing file is `audience`'s own
-        // `group_mod!` to complain about, not this walk's.
+        // `#[group]` to complain about, not this walk's.
         assert_eq!(
             context_across(
                 &[(
                     "src/event.rs",
                     "/// c\n#[command] pub fn create() {}\n\
-                     group_mod! { /// a\n pub mod audience; }",
+                     /// a\n#[group] pub mod audience;",
                 )],
                 "src/event.rs",
             ),
@@ -385,8 +385,8 @@ mod tests {
         assert_eq!(
             context_across(
                 &[
-                    ("src/a.rs", "group_mod! { /// b\n pub mod b; }"),
-                    ("src/b.rs", "group_mod! { /// a\n pub mod a; }"),
+                    ("src/a.rs", "/// b\n#[group] pub mod b;"),
+                    ("src/b.rs", "/// a\n#[group] pub mod a;"),
                 ],
                 "src/a.rs",
             ),

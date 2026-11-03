@@ -1,4 +1,4 @@
-//! `group_mod!` as a consumer writes it: one group, one file.
+//! `#[group]` on a file module, as a consumer writes it: one group, one file.
 //!
 //! This is `tests/groups.rs`'s tree with its bodies moved out of the file. The
 //! declarations below are the whole registration — no list, no `mod.rs`
@@ -14,9 +14,10 @@
 //!   roster                    #[cfg(any())] — compiled out, and unregistered with it
 //!   instance                  an *inline* #[group] inside a file module
 //!     branch
-//!   audience                  a `group_mod!` nested one level down
+//!   audience                  a file #[group] nested one level down
 //!     define
-//! id                          #[group(ctx = Ctx)] on the declaration
+//!   gone                      a #[cfg(any())] file #[group] with no file at all
+//! id                          #[group(ctx = Ctx, alias = …)] on the declaration
 //!   create
 //! tools                       an author-written #[path] on the declaration
 //!   version                   no context anywhere: a generic handle
@@ -29,7 +30,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use hicli::bpaf::{pure, Bpaf};
-use hicli::{app, cli, group_mod, App, Arg, Command, Failure};
+use hicli::{app, cli, group, App, Arg, Command, Failure};
 
 // --- the consumer's context and argument structs ------------------------------
 
@@ -70,34 +71,31 @@ pub struct Title(#[bpaf(positional("TITLE"))] String);
 
 // --- the tree -----------------------------------------------------------------
 
-// Each declaration is *exactly* the item `#[group]` will be written on from
-// Rust 1.99 — doc comment, `#[group(ctx = …)]`, `#[path = …]` and all — so
-// migrating is deleting the two wrapper lines.
-//
 // This file is `tests/group_files.rs` and has a `tests/group_files/` directory
 // beside it, so the declarations resolve into that directory and the macro
 // emits the `#[path]` that makes it so. (`tests/group_files.rs` is a crate
 // root, which rustc would resolve against `tests/` instead — the emitted
 // `#[path]` is what removes the disagreement.)
-group_mod! {
-    /// events and instances
-    ///
-    /// An event is a directory; an instance is a branch of it.
-    pub mod event;
 
-    // `id`'s command names its context as `super::Ctx`, which cannot be lifted
-    // into this scope by token — so the group says what it is. Its alias is
-    // read off the same attribute, which is then removed.
-    /// identity
-    #[group(ctx = Ctx, alias = "ident")]
-    pub mod id;
+/// events and instances
+///
+/// An event is a directory; an instance is a branch of it.
+#[group]
+pub mod event;
 
-    // An author-written `#[path]` wins, and is relative to *this* file's
-    // directory. The macro synthesises nothing here.
-    /// the odds and ends
-    #[path = "group_files/odds.rs"]
-    pub mod tools;
-}
+// `id`'s command names its context as `super::Ctx`, which cannot be lifted into
+// this scope by token — so the group says what it is. Its alias is read off the
+// same attribute.
+/// identity
+#[group(ctx = Ctx, alias = "ident")]
+pub mod id;
+
+// An author-written `#[path]` wins, and is relative to *this* file's directory.
+// The macro synthesises nothing here.
+/// the odds and ends
+#[path = "group_files/odds.rs"]
+#[group]
+pub mod tools;
 
 /// The whole tree, declared.
 fn app() -> App<(), Ctx> {
@@ -129,7 +127,7 @@ fn an_inline_group_inside_a_file_module_is_a_child() {
 }
 
 #[test]
-fn a_group_mod_nests_one_file_deeper() {
+fn a_file_group_nests_one_file_deeper() {
     // `event.rs` declares `audience`, which resolves against *that* file —
     // `tests/group_files/event/audience.rs` — because `event.rs` is not a
     // mod-rs file and has an `event/` directory of its own.
@@ -153,8 +151,8 @@ fn a_declared_context_type_is_the_groups_context() {
 
 #[test]
 fn a_declarations_alias_reaches_the_file_group() {
-    // `#[group(alias = …)]` inside `group_mod!` means what it means on an
-    // inline module: another spelling, the canonical path.
+    // `#[group(alias = …)]` on a file module means what it means on an inline
+    // module: another spelling, the canonical path.
     let (_g, invocation) = app().parse(cli! { ident create }).expect("parses");
     assert_eq!(invocation.path(), ["id", "create"]);
 }
@@ -214,6 +212,27 @@ fn a_configured_out_command_in_a_file_is_not_registered() {
     assert!(
         !out.contains("roster"),
         "a cfg'd-out command is listed:\n{out}"
+    );
+}
+
+#[test]
+fn a_configured_out_file_group_is_not_registered_and_needs_no_file() {
+    // `gone` in `event.rs` is `#[cfg(any())]` and has no file anywhere: the
+    // crate compiling at all is half the proof, and this is the other half.
+    let e = app()
+        .parse(cli! { event gone })
+        .err()
+        .expect("`gone` is not compiled, so it is not a group");
+    assert_eq!(hicli::exit_code_for(&e), 2);
+
+    let e = app()
+        .parse(cli! { event --help })
+        .err()
+        .expect("--help short-circuits with a ParseFailure");
+    let out = e.unwrap_stdout();
+    assert!(
+        !out.contains("gone"),
+        "a cfg'd-out file group is listed:\n{out}"
     );
 }
 

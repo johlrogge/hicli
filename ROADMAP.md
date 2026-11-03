@@ -3,7 +3,7 @@
 ## Current milestone
 
 Land the first adopter: migrate `moniker`'s CLI onto hicli, now targeting the
-post-ADR-007 shape (`#[command]`/`#[group]`/`group_mod!`/`commands!`/`app!`) —
+post-ADR-007 shape (`#[command]`/`#[group]`/`commands!`/`app!`) —
 functions untouched, groups as modules, no list anywhere in the tree. The
 remaining question is whether that model survives contact with a real CLI:
 replace moniker's `Cli`/enums/`dispatch()` match, keep `bases/cli` parser-free,
@@ -34,10 +34,8 @@ replacement. The essentials are split across two releases:
 
 - First adopter: migrate moniker's CLI onto hicli
 - Second/third adopters: mdma-cli, ctx
-- When the toolchain pin reaches Rust 1.99.0 (stable 2026-10-01): add
-  `#[group] pub mod x;` as the preferred spelling, deprecate `group_mod!`
-- Verify `group_mod!` under rust-analyzer (manual editor check) — the ADR-005
-  spike confirmed `rustc`'s behaviour only
+- Verify `#[group] pub mod x;` under rust-analyzer (manual editor check) — the
+  ADR-010 spike confirmed `rustc`'s behaviour only
 - Deferred until a consumer needs it: richer `ArgSchema` for externals, opt-in
   `--dump-command-manifest` handshake, per-binary hash pin, auto-registration
   sugar
@@ -49,6 +47,8 @@ replacement. The essentials are split across two releases:
 
 <!-- Completed milestones -->
 
+- File groups are `#[group] pub mod x;` (ADR-010, 2026-11-03): `group_mod!`
+  removed before 0.1.0, MSRV 1.99
 - Project scaffolding (`cargo init --lib`, devenv toolchain, docs skeleton)
 - Core command model proven (2026-09-11): a trait for the parsed command, plus
   `Exit`/`App`/then-`Group`, composed a `bpaf` command tree with no central

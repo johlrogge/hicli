@@ -1,7 +1,7 @@
 //! The file system, behind a trait, so module resolution can be unit-tested.
 //!
-//! `group_mod!` is the one macro in this crate that reads something other than
-//! its own input: it resolves a `mod x;` declaration to a file and parses it.
+//! `#[group]` on a file module is the one expansion in this crate that reads
+//! something other than its own input: it resolves a `mod x;` declaration to a file and parses it.
 //! That makes the resolution rules (`crate::resolve`) the most intricate code
 //! here *and* the hardest to reach from a test, because a test that needs a
 //! directory tree on disk is a test nobody writes enough of.

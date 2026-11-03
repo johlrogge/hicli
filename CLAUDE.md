@@ -2,8 +2,7 @@
 
 **CLI-enable your code.** A standalone, crates.io-publishable Rust framework for
 building modular CLIs: one subcommand = one documented function (`#[command]`),
-groups are annotated modules (`#[group]`, `group_mod!` for file modules until
-Rust 1.99), arguments are types (`#[derive(Bpaf, Arg)]`, completion attached to
+groups are annotated modules (`#[group]`, inline or file), arguments are types (`#[derive(Bpaf, Arg)]`, completion attached to
 the type), composed into a command tree with `app!` instead of a central
 hand-written dispatch `match`. Built on [`bpaf`](https://docs.rs/bpaf).
 
@@ -25,7 +24,7 @@ This project runs in an immutable Nix environment managed by devenv.
 If a tool or package is missing, add it to `devenv.nix` and re-enter the shell.
 All tools, packages, hooks, and services are declared in `devenv.nix`.
 
-The Rust toolchain is stable (pinned in `devenv.nix`, currently 1.97.0) with
+The Rust toolchain is stable (pinned in `devenv.nix`, currently 1.99.0) with
 `rustc`, `cargo`, `clippy`, `rustfmt`, and `rust-analyzer`. No nightly features —
 hicli targets stable-Rust consumers (moniker, mdma-cli, ctx).
 
@@ -65,17 +64,15 @@ Run `just ci` before considering any change done.
   authoritative. Earned mechanisms (ADR-004, ADR-005, ADR-006): `#[command]`
   (leaves the function untouched, adds a handle, calls `<T as Arg>::parser()` per
   owned param), `#[group]` (an annotated module, children discovered by source
-  order — no list), `group_mod!` (the same group for a file module, until Rust
-  1.99), `commands!` (a bare path names a handle), `Arg` + `#[derive(Arg)]` +
+  order — no list), `#[group]` on a file-module declaration (ADR-010),
+  `commands!` (a bare path names a handle), `Arg` + `#[derive(Arg)]` +
   `#[arg(complete = …)]`/`files`/`dirs` (an argument is a type that parses
   itself, and completion attaches to that type once and is inherited by every
   command that takes it) — because moniker's pain justified each — and the
   `alias`/`hide` keys, the doc comment's `# Examples` footer plus
   `App::about`/`App::version` (ADR-008), and `completion_script` (ADR-009),
   because mdma-cli's migration from clap justified them. Deferred until
-  the next real consumer's pain justifies them: `#[group] pub mod x;` as the
-  direct spelling (blocked on the toolchain pin reaching Rust 1.99.0),
-  group-level currying (`#[group(args = T)]`), a field-composing
+  the next real consumer's pain justifies them: group-level currying (`#[group(args = T)]`), a field-composing
   `#[derive(Arg)]` for composites, `#[arg(parser = …)]`, completion masks,
   globals-aware completion, `inventory`-style auto-registration (rejected
   outright, not just deferred).

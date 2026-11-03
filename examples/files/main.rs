@@ -23,19 +23,18 @@
 //! # What is different
 //!
 //! The group's *declaration* — its doc comment, and its name — lives here; its
-//! *body* lives in `event.rs` beside this file. `group_mod!` reads that file to
-//! find the group's children, and emits `#[path = "event.rs"]` onto the
-//! declaration so rustc reads exactly the same bytes.
+//! *body* lives in `event.rs` beside this file. `#[group]` on the declaration
+//! reads that file to find the group's children, and emits
+//! `#[path = "event.rs"]` onto the declaration so rustc reads exactly the same
+//! bytes.
 //!
 //! This file is `examples/files/main.rs`, a mod-rs file by name, so `mod
-//! event;` resolves beside it: `examples/files/event.rs`. From Rust 1.99 the
-//! two wrapper lines go away and `#[group]` is written on the declaration
-//! directly.
+//! event;` resolves beside it: `examples/files/event.rs`.
 
 use std::process::ExitCode;
 
 use hicli::bpaf::Bpaf;
-use hicli::{app, command, group_mod, App, Arg, Failure};
+use hicli::{app, command, group, App, Arg, Failure};
 
 // ---------------------------------------------------------------------------
 // Globals and context
@@ -117,15 +116,15 @@ fn at_most_five_words(words: &Vec<String>) -> bool {
 // The tree
 // ---------------------------------------------------------------------------
 
-// The whole registration: a doc comment and a `mod` declaration. The children
-// are whatever is marked in `event.rs` — there is no list here to keep in step
-// with that file, and moving a command in `--help` means moving a function.
-group_mod! {
-    /// events and instances
-    ///
-    /// An event is a directory; an instance is a branch of it.
-    pub mod event;
-}
+// The whole registration: a doc comment, `#[group]` and a `mod` declaration.
+// The children are whatever is marked in `event.rs` — there is no list here to
+// keep in step with that file, and moving a command in `--help` means moving a
+// function.
+/// events and instances
+///
+/// An event is a directory; an instance is a branch of it.
+#[group]
+pub mod event;
 
 /// show demo status
 #[command]

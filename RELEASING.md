@@ -6,7 +6,7 @@ this template).
 
 ## Branch Model
 
-- `main` — released code only, always tagged
+- `master` — released code only, always tagged
 - `develop` — integration branch, features merge here
 - `feature/*` — individual features, branch from develop
 - `release/*` — release prep, branch from develop
@@ -29,9 +29,9 @@ honest.
 
 The workspace publishes **two** crates, and they move as one:
 
-- `hicli-macros` — the proc macros `#[command]`, `#[group]`, `group_mod!`,
+- `hicli-macros` — the proc macros `#[command]`, `#[group]`,
   `commands!` and `#[derive(Arg)]`, re-exported as `hicli::command`,
-  `hicli::group`, `hicli::group_mod`, `hicli::commands` and `hicli::Arg`
+  `hicli::group`, `hicli::commands` and `hicli::Arg`
 - `hicli` — the runtime crate, which depends on it as
   `hicli-macros = { version = "=0.1.0", path = "macros" }`
 
@@ -57,12 +57,13 @@ Rules:
 
 ## MSRV
 
-`rust-version = "1.88"`, set in **both** `Cargo.toml` and `macros/Cargo.toml`.
+`rust-version = "1.99"`, set in **both** `Cargo.toml` and `macros/Cargo.toml`.
 
-1.88 is where `proc_macro::Span::local_file` became stable, which is how `group_mod!`
-finds the file it was invoked in (ADR-005 §5). An adopter on an older toolchain can
-write every group inline, but the crate as a whole will not build, so the number is a
-real floor and not a hope.
+1.99 is where attribute macros on file-module declarations stopped being
+feature-gated, which is what `#[group] pub mod x;` needs (ADR-010).
+`proc_macro::Span::local_file` (stable since 1.88) is still how `#[group]` finds the
+declaring file. Older toolchains are not supported, so the number is a real floor and
+not a hope.
 
 Rules:
 
@@ -132,7 +133,7 @@ Run these agents in order before cutting a release:
 
 6. **Human** — push to remote and publish
    ```
-   git push origin main develop --tags
+   git push origin master develop --tags
    cargo publish --workspace      # hicli-macros first, then hicli
    ```
 

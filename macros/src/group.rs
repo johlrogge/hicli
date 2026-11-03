@@ -19,30 +19,28 @@
 //! # The two forms
 //!
 //! A group's body is either **inline** (`#[group] mod event { … }`) or in a
-//! **file** (`group_mod! { pub mod event; }`, and `#[group] pub mod event;`
-//! from Rust 1.99). They differ in exactly one thing: where the items come
-//! from. The inline form has them already; the file form resolves the
-//! declaration to a path (`crate::resolve`), reads it and parses it. From
-//! there, everything — the doc split, the children, the context, the handle —
-//! is the same code, which is what makes the 1.99 migration *deleting the
-//! wrapper and keeping the item*.
+//! **file** (`#[group] pub mod event;`). Both are the same attribute, and they
+//! differ in exactly one thing: where the items come from. The inline form has
+//! them already; the file form resolves the declaration to a path
+//! (`crate::resolve`), reads it and parses it. From there, everything — the doc
+//! split, the children, the context, the handle — is the same code.
 
 use std::io;
 use std::path::Path;
 
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use syn::parse::{Parse, ParseStream, Parser};
-use syn::{Attribute, Error, Ident, Item, ItemMod, LitStr, Meta, Result, Token, Type};
+use syn::parse::{Parse, ParseStream};
+use syn::{Attribute, Error, Ident, Item, ItemMod, LitStr, Result, Token, Type};
 
 use crate::ctx::{self, Ctx, Outline};
-use crate::discover::{children_of, parse_items, Child};
+use crate::discover::{children_of, Child, ChildKind};
 use crate::expand::metadata;
 use crate::fs::Fs;
 use crate::resolve::{resolve as resolve_file, show};
 use crate::shared::{
-    cfg_attrs, dashed, handle_doc, handle_ident, marks, parse_keys, path_attr, read_doc,
-    unraw_name, CommandMeta, GROUP_NEEDS_DOC,
+    cfg_attrs, dashed, handle_doc, handle_ident, parse_keys, path_attr, read_doc, unraw_name,
+    CommandMeta, GROUP_NEEDS_DOC,
 };
 
 /// The message for an argument `#[group]` does not take (D10).
@@ -51,14 +49,6 @@ const UNKNOWN_ARG: &str =
 
 /// The message for `#[group]` on anything but a module (D9).
 const NOT_A_MODULE: &str = "#[group] goes on a module: #[group] pub mod event { … }";
-
-/// The message for something in `group_mod!` that is not a declaration (D7).
-const NOT_A_DECLARATION: &str = "group_mod! takes one or more module declarations: group_mod! { \
-                                 /// help\n pub mod event; }";
-
-/// The message for a `group_mod!` declaration that has a body after all (D8).
-const INLINE_BODY: &str =
-    "this module has a body: write #[group] on it instead of wrapping it in group_mod!";
 
 /// The file a group was declared in — or, when it could not be found, every
 /// path that was looked for (D6).
@@ -114,76 +104,8 @@ pub(crate) fn expand(
 ) -> Result<TokenStream> {
     match item {
         Item::Mod(m) if m.content.is_some() => inline_form(args, m),
-        // ADR-005 §5: `#[attr] pub mod x;` is feature-gated until Rust 1.99, so
-        // on the pinned toolchain rustc rejects the attribute itself. This arm
-        // is the 1.99 alias, wired to the same `file_form` `group_mod!` uses —
-        // moving the pin adds a spelling, not a code path.
         Item::Mod(m) => file_form(fs, source, args, m),
         other => Err(Error::new_spanned(other, NOT_A_MODULE)),
-    }
-}
-
-/// Expand `group_mod! { … }`: one declaration in, one module and one handle
-/// out, for each.
-///
-/// Every declaration is expanded, and every failure is reported: a body with
-/// three modules in it, two of them wrong, should say so twice rather than
-/// making the author fix them one compile at a time.
-pub(crate) fn expand_group_mod(
-    fs: &dyn Fs,
-    source: Source<'_>,
-    body: TokenStream,
-) -> Result<TokenStream> {
-    let mut out = TokenStream::new();
-    let mut failed: Option<Error> = None;
-    for item in parse_items.parse2(body)? {
-        let expanded = match item {
-            Item::Mod(m) if m.content.is_some() => Err(Error::new(
-                m.content
-                    .as_ref()
-                    .expect("a body was just matched on")
-                    .0
-                    .span
-                    .join(),
-                INLINE_BODY,
-            )),
-            Item::Mod(m) => declaration(fs, source, m),
-            other => Err(Error::new_spanned(other, NOT_A_DECLARATION)),
-        };
-        match expanded {
-            Ok(tokens) => out.extend(tokens),
-            Err(e) => match &mut failed {
-                Some(first) => first.combine(e),
-                None => failed = Some(e),
-            },
-        }
-    }
-    match failed {
-        Some(e) => Err(e),
-        None => Ok(out),
-    }
-}
-
-/// One `pub mod event;` inside `group_mod!`.
-///
-/// The declaration is *exactly* the item `#[group]` will be written on from
-/// Rust 1.99, so its own `#[group(ctx = …)]` is read here and removed before
-/// the module is re-emitted: what is left is a plain `mod` declaration, and
-/// migrating is deleting the wrapper.
-fn declaration(fs: &dyn Fs, source: Source<'_>, mut item: ItemMod) -> Result<TokenStream> {
-    let args = take_group_args(&mut item.attrs)?;
-    file_form(fs, source, args, item)
-}
-
-/// Take the `#[group]` / `#[group(ctx = T)]` off a declaration and read it.
-fn take_group_args(attrs: &mut Vec<Attribute>) -> Result<GroupArgs> {
-    let Some(at) = attrs.iter().position(|a| marks(a, "group")) else {
-        return Ok(GroupArgs::default());
-    };
-    match attrs.remove(at).meta {
-        Meta::Path(_) => Ok(GroupArgs::default()),
-        Meta::List(list) => syn::parse2(list.tokens),
-        Meta::NameValue(nv) => Err(Error::new_spanned(nv, UNKNOWN_ARG)),
     }
 }
 
@@ -204,6 +126,7 @@ fn inline_form(args: GroupArgs, item: ItemMod) -> Result<TokenStream> {
             no_children(&item.ident, "its body"),
         ));
     }
+    check_no_file_children(&children)?;
     let handle = emit_handle(&Handle {
         module: &item.ident,
         name,
@@ -213,9 +136,9 @@ fn inline_form(args: GroupArgs, item: ItemMod) -> Result<TokenStream> {
         aliases: args.meta.aliases,
         hide: args.meta.hide.is_some(),
         cfgs: cfg_attrs(&item.attrs),
-        // An inline module's own outlined declarations are the case
-        // `group_mod!` cannot serve at all — it has to be at a file's top level
-        // — so there is no file for the context walk to follow.
+        // An inline group has no file of its own, and its only file children
+        // carry an explicit `#[path]` — so there is no file for the context
+        // walk to follow.
         ctx: ctx::resolve(args.ctx, &children, None)?,
         children,
     });
@@ -223,6 +146,37 @@ fn inline_form(args: GroupArgs, item: ItemMod) -> Result<TokenStream> {
         #item
         #handle
     })
+}
+
+/// Refuse a `#[group] mod b;` without a `#[path]` inside an inline group.
+///
+/// The child's own `#[group]` resolves its file against the *declaring file*,
+/// because that is all `Span::local_file` can say; rustc resolves it against
+/// the inline module's directory (`a/b.rs` for `mod a { mod b; }`). The two
+/// disagree, so the child would read one file and rustc compile another — the
+/// mistake is caught here, where it is written, rather than as a confusing
+/// "cannot find the file". An explicit `#[path]` means the same thing to both,
+/// so it is allowed. Every such child is reported at once.
+fn check_no_file_children(children: &[Child]) -> Result<()> {
+    let mut failed: Option<Error> = None;
+    for child in children {
+        if let ChildKind::Outlined { path: None } = child.kind {
+            let e = Error::new_spanned(&child.ident, file_in_inline(&child.ident));
+            match &mut failed {
+                Some(first) => first.combine(e),
+                None => failed = Some(e),
+            }
+        }
+    }
+    failed.map_or(Ok(()), Err)
+}
+
+/// The message for a file group declared inside an inline group.
+fn file_in_inline(ident: &Ident) -> String {
+    format!(
+        "`#[group] mod {ident};` inside an inline module resolves against the wrong directory; \
+         make `{ident}` inline, or move the declaring module to its own file"
+    )
 }
 
 /// A file module: `pub mod event;` plus the file it names.
@@ -313,16 +267,18 @@ fn no_children(ident: &Ident, where_: &str) -> String {
 
 /// The message for a declaration whose file was not found (D3).
 ///
-/// The note is the one limitation of the shim, said at the only moment it can
-/// be mistaken for something else: a `group_mod!` inside an inline `mod a { … }`
-/// resolves against the declaring *file*, while rustc would resolve against
-/// `a/`, and "cannot find the file" is exactly what that looks like.
+/// The note is the one limitation of the file form, said at the only moment it
+/// can be mistaken for something else: a `#[group] mod b;` inside an inline
+/// `mod a { … }` resolves against the declaring *file*, while rustc would
+/// resolve against `a/`, and "cannot find the file" is exactly what that looks
+/// like. (Inside an inline `#[group]` it is refused outright; inside a plain
+/// inline `mod`, this note is the only warning.)
 fn not_found(ident: &Ident, tried: &[String]) -> String {
     let tried: Vec<String> = tried.iter().map(|t| format!("`{t}`")).collect();
     format!(
         "cannot find the file for module `{ident}`: tried {}\n\
-         note: a group_mod! declaration must be at the top level of its file; inside an inline \
-         `mod`, use #[group] on an inline module instead",
+         note: #[group] on a file module must be at the top level of its file; inside an inline \
+         `mod`, use an inline #[group] mod instead",
         tried.join(", ")
     )
 }
@@ -355,16 +311,16 @@ fn unknown_source(ident: &Ident, tried: &[String]) -> String {
         )
     };
     format!(
-        "hicli cannot locate the source file of this group_mod! ({looked}); use an inline \
-         #[group] mod {ident} {{ … }}"
+        "hicli cannot locate the source file of this #[group] file module ({looked}); use an \
+         inline #[group] mod {ident} {{ … }}"
     )
 }
 
 /// Everything a group's handle is written from.
 ///
-/// Shared by both forms of `#[group]`: the inline module and — from Rust 1.99,
-/// or through `group_mod!` before it — the file module. Only `module` and
-/// `children` differ between them, and neither changes what the handle says.
+/// Shared by both forms of `#[group]`: the inline module and the file module.
+/// Only `module` and `children` differ between them, and neither changes what
+/// the handle says.
 pub(crate) struct Handle<'a> {
     /// The module the children live in: the path prefix of every child call.
     pub(crate) module: &'a Ident,
@@ -481,27 +437,35 @@ mod tests {
             .to_string()
     }
 
-    /// Expand a `group_mod!` body written in `file`, against `tree`.
-    fn file_expansion(tree: &[(&str, &str)], file: &str, body: &str) -> String {
-        let body: TokenStream = body.parse().expect("the body is tokens");
-        expand_group_mod(&MapFs::new(tree), source(Some(file)), body)
+    /// Expand `#[group(attr)]` on the file module `item`, declared in `file`,
+    /// against `tree`.
+    fn file_expansion(tree: &[(&str, &str)], file: &str, attr: &str, item: &str) -> String {
+        let args: GroupArgs = syn::parse_str(attr).expect("the attribute parses");
+        let item: Item = syn::parse_str(item).expect("the item parses");
+        expand(&MapFs::new(tree), source(Some(file)), args, item)
             .expect("expands")
             .to_string()
     }
 
-    /// Every error a `group_mod!` body raises, one per failed declaration.
-    fn file_rejections(tree: &[(&str, &str)], file: Option<&str>, body: &str) -> Vec<String> {
-        let body: TokenStream = body.parse().expect("the body is tokens");
-        expand_group_mod(&MapFs::new(tree), source(file), body)
+    /// Every error `#[group(attr)]` raises on the file module `item`.
+    fn file_rejections(
+        tree: &[(&str, &str)],
+        file: Option<&str>,
+        attr: &str,
+        item: &str,
+    ) -> Vec<String> {
+        let args: GroupArgs = syn::parse_str(attr).expect("the attribute parses");
+        let item: Item = syn::parse_str(item).expect("the item parses");
+        expand(&MapFs::new(tree), source(file), args, item)
             .expect_err("does not expand")
             .into_iter()
             .map(|e| e.to_string())
             .collect()
     }
 
-    /// The one error a `group_mod!` body raises.
-    fn file_rejection(tree: &[(&str, &str)], file: Option<&str>, body: &str) -> String {
-        let mut all = file_rejections(tree, file, body);
+    /// The one error `#[group]` raises on the file module `item`.
+    fn file_rejection(tree: &[(&str, &str)], file: Option<&str>, item: &str) -> String {
+        let mut all = file_rejections(tree, file, "", item);
         assert_eq!(all.len(), 1, "expected exactly one error: {all:?}");
         all.remove(0)
     }
@@ -643,21 +607,58 @@ mod tests {
     }
 
     #[test]
-    fn a_file_module_with_no_source_path_names_the_inline_form() {
-        // D6: the attribute form routes to the same `file_form`, and without a
-        // file to resolve against there is nothing to do but say so.
+    fn a_file_group_inside_an_inline_group_is_rejected() {
+        // The child's own `#[group]` would resolve `audience` against the
+        // declaring file; rustc resolves it against `event/`. Every such child
+        // is named, at its own ident.
+        let all: Vec<String> = expand(
+            &no_files(),
+            source(None),
+            GroupArgs::default(),
+            syn::parse_str(
+                "/// events\n\
+                 mod event {\n\
+                     /// c\n#[command] fn create(c: &Ctx) {}\n\
+                     /// a\n#[group] pub mod audience;\n\
+                     /// r\n#[group] pub mod roster;\n\
+                 }",
+            )
+            .expect("the item parses"),
+        )
+        .expect_err("is not a group")
+        .into_iter()
+        .map(|e| e.to_string())
+        .collect();
         assert_eq!(
-            rejection("", "/// events\npub mod event;"),
-            "hicli cannot locate the source file of this group_mod! (the path is remapped or \
-             synthetic); use an inline #[group] mod event { … }"
+            all,
+            [
+                "`#[group] mod audience;` inside an inline module resolves against the wrong \
+                 directory; make `audience` inline, or move the declaring module to its own file",
+                "`#[group] mod roster;` inside an inline module resolves against the wrong \
+                 directory; make `roster` inline, or move the declaring module to its own file",
+            ]
         );
+    }
+
+    #[test]
+    fn a_file_group_with_its_own_path_inside_an_inline_group_is_allowed() {
+        // An explicit `#[path]` means the same file to rustc and to the child's
+        // own `#[group]`, so there is nothing to disagree about.
+        let got = expansion(
+            "",
+            "/// events\n\
+             mod event {\n\
+                 /// a\n#[group] #[path = \"audience.rs\"] pub mod audience;\n\
+             }",
+        );
+        assert!(got.contains("event :: __hicli_audience ()"), "{got}");
     }
 
     // --- the file form --------------------------------------------------------
 
     /// A two-level tree: a cfg'd command, a nested inline `#[group]`, and a nested
-    /// `group_mod!` declaration — the three shapes a child comes in, one of
-    /// each, read out of a file.
+    /// file `#[group]` — the three shapes a child comes in, one of each, read
+    /// out of a file.
     fn event_tree() -> Vec<(&'static str, &'static str)> {
         vec![
             ("src/main.rs", ""),
@@ -670,7 +671,9 @@ mod tests {
                  /// manage instances\n\
                  #[group]\n\
                  pub mod instance { /// branch\n#[command] pub fn branch(c: &Ctx) {} }\n\
-                 group_mod! { /// manage audiences\n pub mod audience; }\n",
+                 /// manage audiences\n\
+                 #[group]\n\
+                 pub mod audience;\n",
             ),
             (
                 "src/event/audience.rs",
@@ -688,6 +691,7 @@ mod tests {
         let got = file_expansion(
             &event_tree(),
             "src/main.rs",
+            "",
             "/// events and instances\n\
              ///\n\
              /// An event is a directory; an instance is a branch of it.\n\
@@ -720,28 +724,10 @@ mod tests {
     }
 
     #[test]
-    fn several_declarations_expand_in_one_invocation() {
-        let got = file_expansion(
-            &[
-                ("src/main.rs", ""),
-                (
-                    "src/event.rs",
-                    "/// c\n#[command] pub fn create(c: &Ctx) {}",
-                ),
-                ("src/id.rs", "/// c\n#[command] pub fn create(c: &Ctx) {}"),
-            ],
-            "src/main.rs",
-            "/// events\npub mod event;\n/// identity\npub mod id;",
-        );
-        assert!(got.contains("pub fn __hicli_event"), "{got}");
-        assert!(got.contains("pub fn __hicli_id"), "{got}");
-    }
-
-    #[test]
-    fn a_declarations_ctx_argument_is_read_and_then_removed() {
-        // The body of `group_mod!` is *exactly* the item `#[group]` will be
-        // written on at 1.99 — so the argument is read off the declaration, and
-        // the declaration goes back out as a plain `mod`.
+    fn a_ctx_given_to_group_on_a_file_module_is_the_named_ctx() {
+        // The explicit context wins over the module-relative one the file's
+        // command names — which could not be lifted — and the declaration goes
+        // back out as a plain `mod`.
         let got = file_expansion(
             &[
                 ("src/main.rs", ""),
@@ -751,13 +737,14 @@ mod tests {
                 ),
             ],
             "src/main.rs",
-            "/// identity\n#[group(ctx = Ctx)]\npub mod id;",
+            "ctx = Ctx",
+            "/// identity\npub mod id;",
         );
         assert!(
             got.contains("pub fn __hicli_id () -> :: hicli :: Command < Ctx >"),
             "{got}"
         );
-        assert!(!got.contains("# [group"), "the #[group] survived:\n{got}");
+        assert!(!got.contains("# [group"), "a #[group] was emitted:\n{got}");
     }
 
     #[test]
@@ -771,6 +758,7 @@ mod tests {
                 ),
             ],
             "src/main.rs",
+            "",
             "/// events\n#[path = \"other/dir.rs\"]\npub mod event;",
         );
         assert_eq!(
@@ -789,6 +777,7 @@ mod tests {
                 ("src/tools.rs", "/// v\n#[command] pub fn version() {}"),
             ],
             "src/main.rs",
+            "",
             "/// the odds and ends\npub mod tools;",
         );
         assert!(
@@ -808,7 +797,7 @@ mod tests {
                 ("src/main.rs", ""),
                 (
                     "src/event.rs",
-                    "group_mod! { /// manage audiences\n pub mod audience; }",
+                    "/// manage audiences\n#[group]\npub mod audience;",
                 ),
                 (
                     "src/event/audience.rs",
@@ -816,6 +805,7 @@ mod tests {
                 ),
             ],
             "src/main.rs",
+            "",
             "/// events\npub mod event;",
         );
         assert!(
@@ -833,8 +823,8 @@ mod tests {
                 "/// events\npub mod event;"
             ),
             "cannot find the file for module `event`: tried `src/event.rs`, `src/event/mod.rs`\n\
-             note: a group_mod! declaration must be at the top level of its file; inside an \
-             inline `mod`, use #[group] on an inline module instead"
+             note: #[group] on a file module must be at the top level of its file; inside an \
+             inline `mod`, use an inline #[group] mod instead"
         );
     }
 
@@ -877,10 +867,12 @@ mod tests {
 
     #[test]
     fn an_unlocatable_source_file_names_the_inline_form() {
+        // D6: without a file to resolve against there is nothing to do but say
+        // so, and name the form that needs no file.
         assert_eq!(
             file_rejection(&[], None, "/// events\npub mod event;"),
-            "hicli cannot locate the source file of this group_mod! (the path is remapped or \
-             synthetic); use an inline #[group] mod event { … }"
+            "hicli cannot locate the source file of this #[group] file module (the path is \
+             remapped or synthetic); use an inline #[group] mod event { … }"
         );
     }
 
@@ -889,53 +881,35 @@ mod tests {
         // The path the compiler reported, said out loud: under a front end that
         // is not cargo it is the only clue to why nothing opened.
         let tried = ["examples/files/main.rs".to_string()];
-        let body: TokenStream = "/// events\npub mod event;"
-            .parse()
-            .expect("the body is tokens");
-        let e = expand_group_mod(&no_files(), Source::Unknown(&tried), body)
-            .expect_err("does not expand")
-            .to_string();
+        let item: Item = syn::parse_str("/// events\npub mod event;").expect("the item parses");
+        let e = expand(
+            &no_files(),
+            Source::Unknown(&tried),
+            GroupArgs::default(),
+            item,
+        )
+        .expect_err("does not expand")
+        .to_string();
         assert_eq!(
             e,
-            "hicli cannot locate the source file of this group_mod! (tried \
+            "hicli cannot locate the source file of this #[group] file module (tried \
              `examples/files/main.rs` under the working directory and the manifest directory and \
              its parents); use an inline #[group] mod event { … }"
         );
     }
 
     #[test]
-    fn something_that_is_not_a_declaration_is_rejected() {
+    fn an_alias_equal_to_a_file_groups_name_is_rejected() {
+        // Checked before the file is looked for: the tree is empty.
         assert_eq!(
-            file_rejection(&[], Some("src/main.rs"), "/// help\npub fn status() {}"),
-            NOT_A_DECLARATION
-        );
-    }
-
-    #[test]
-    fn a_declaration_with_a_body_names_the_attribute() {
-        assert_eq!(
-            file_rejection(
+            file_rejections(
                 &[],
                 Some("src/main.rs"),
-                "/// events\npub mod event { /// c\n#[command] fn create(c: &Ctx) {} }"
+                "alias = \"add-admin\"",
+                "/// admins\npub mod add_admin;"
             ),
-            INLINE_BODY
+            ["alias `add-admin` is this group's own name: an alias is another name"]
         );
-    }
-
-    #[test]
-    fn every_bad_declaration_is_reported() {
-        // Three declarations, two of them wrong: an author fixing a
-        // `group_mod!` should see both at once.
-        let all = file_rejections(
-            &[
-                ("src/main.rs", ""),
-                ("src/event.rs", "/// c\n#[command] fn c(x: &Ctx) {}"),
-            ],
-            Some("src/main.rs"),
-            "/// events\npub mod event;\npub mod undocumented;\n/// help\nstruct NotAMod;",
-        );
-        assert_eq!(all, [GROUP_NEEDS_DOC, NOT_A_DECLARATION]);
     }
 
     /// The error parsing `attr` as `#[group]`'s arguments raises.
@@ -1011,16 +985,17 @@ mod tests {
     }
 
     #[test]
-    fn a_declarations_keys_are_read_and_then_removed() {
+    fn keys_given_to_group_on_a_file_module_become_calls() {
         let got = file_expansion(
             &[
                 ("src/main.rs", ""),
                 ("src/id.rs", "/// c\n#[command] pub fn create(c: &Ctx) {}"),
             ],
             "src/main.rs",
-            "/// identity\n#[group(alias = \"identity\", hide)]\npub mod id;",
+            "alias = \"identity\", hide",
+            "/// identity\npub mod id;",
         );
         assert!(got.contains(". alias (\"identity\") . hide ()"), "{got}");
-        assert!(!got.contains("# [group"), "the #[group] survived:\n{got}");
+        assert!(!got.contains("# [group"), "a #[group] was emitted:\n{got}");
     }
 }

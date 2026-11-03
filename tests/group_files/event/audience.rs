@@ -1,7 +1,7 @@
 //! The body of the `audience` group, declared in `tests/group_files/event.rs`.
 //!
 //! Third level, second file: `event.rs` is not a mod-rs file, so its own
-//! `group_mod!` resolves `audience` into the directory named after it —
+//! `#[group] pub mod audience;` resolves into the directory named after it —
 //! `tests/group_files/event/` — which is the same rule rustc would apply, and
 //! the emitted `#[path]` says so out loud.
 

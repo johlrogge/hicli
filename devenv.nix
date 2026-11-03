@@ -3,7 +3,7 @@
   # hicli — CLI-enable your code. A crates.io-publishable framework for building
   # modular CLIs: one subcommand is a documented function (`#[command]`), a group
   # of subcommands is a documented module whose children are discovered
-  # (`#[group]`, `group_mod!`), and an argument is a type (`#[derive(Arg)]`) —
+  # (`#[group]`, on an inline or file module), and an argument is a type (`#[derive(Arg)]`) —
   # composed with `commands!`/`app!` into a command tree instead of a
   # hand-written dispatch match. Built on `bpaf` (parser-as-value combinators),
   # which hicli re-exports.
@@ -22,7 +22,7 @@
   languages.rust = {
     enable = true;
     channel = "stable";
-    version = "1.97.0";
+    version = "1.99.0";
     components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" ];
   };
 

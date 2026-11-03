@@ -59,7 +59,7 @@ from clean (`cargo-polylith`) to monolithic (`mdma-cli`, 7292 lines in one file;
 
 Commands are functions (ADR-004, ADR-005): a consumer never implements a trait or
 builds a tree with a chain of method calls. `command`/`group`/`external` and
-`App` are the primitives; `#[command]`, `#[group]`, `group_mod!`, `commands!` and
+`App` are the primitives; `#[command]`, `#[group]`, `commands!` and
 `app!` are macros that expand to them, documented in the next section.
 
 ```rust
@@ -120,7 +120,7 @@ pub fn group<Ctx: 'static>(name: &'static str, help: impl Into<String>,
 pub fn external<Ctx: 'static>(ext: ExternalCommand) -> Command<Ctx>;   // git-style plugin
 
 /// Anything that denotes a `Command`: a `Command` itself, or a zero-argument
-/// callable returning one — a `#[command]`/`#[group]`/`group_mod!` handle. What
+/// callable returning one — a `#[command]`/`#[group]` handle. What
 /// lets `commands![create, event]` mix handles without the call site writing `()`.
 pub trait IntoCommand<Ctx> { fn into_command(self) -> Command<Ctx>; }
 
@@ -262,13 +262,11 @@ fn app() -> App<Globals, Ctx> {
 }                                                            //   .commands(commands![…])
 ```
 A child is a child because it is in the module — no list to keep in step with
-the code. A file module uses `group_mod!` until Rust 1.99 makes
-`#[group] pub mod event;` legal:
+the code. A file module is the same attribute on the declaration (ADR-010):
 ```rust
-group_mod! {
-    /// events and instances
-    pub mod event;
-}
+/// events and instances
+#[group]
+pub mod event;
 ```
 which emits `pub mod event;` (with a synthesised `#[path]`) plus the same
 sibling handle, discovering children by reading `src/event.rs`. `commands!`
@@ -420,8 +418,8 @@ bpaf has built-in suggestions for both misspelled commands (since 0.5.1) and fla
 (`command`/`group`/`external`) + `App` (`command`/`commands`/`run` + test seams, `complete`); the
 proc-macro crate `hicli-macros` (exact-pinned): `#[command]` (leaves the function alone, adds a
 handle; calls `<T as Arg>::parser()` per owned param rather than a synthesised name), `#[group]`
-(an annotated inline module, discovered children, no list), `group_mod!` (the same group for a
-file module, until Rust 1.99 allows `#[group] pub mod event;` directly), `commands!` (a bare path
+(an annotated module — inline, or a file module `#[group] pub mod event;` (ADR-010) — discovered
+children, no list), `commands!` (a bare path
 names a handle); the `app!` declarative macro forwarding into `commands!`; `cli!`/`cli_test!`;
 the suggestion gap-closer; **`Arg` + `#[derive(Arg)]` + the `files`/`dirs` completion shorthands
 (ADR-006)** — an argument is a type that parses itself, and completion is attached to that type
@@ -433,9 +431,7 @@ canonical names are suggested), the doc comment's **examples footer** (a trailin
 `App::about` / `App::version` on the composition root; **`completion_script(Shell, bin)`**
 (ADR-009) — the shell script a user installs to wire TAB to the app.
 
-**Deferred:** `#[group] pub mod event;` as the direct spelling — blocked on the toolchain pin
-reaching Rust 1.99.0 (stable 2026-10-01), at which point it becomes an alias and `group_mod!` is
-deprecated; group-level arguments ("currying" — `#[group(args = T)]`, ADR-005's syntax slot moved
+**Deferred:** group-level arguments ("currying" — `#[group(args = T)]`, ADR-005's syntax slot moved
 from ADR-004's `event(EventRef): […]` — the primitives are shaped for it, but nothing is built);
 `inventory`/`linkme` auto-registration (still rejected outright — discovery here is lexical and
 local, reading one module body or one file, not link-time collection); argument-level proc-macro
@@ -457,10 +453,10 @@ them, not built ahead of that evidence.
 
 - `devenv shell`: build, test (parser/dispatch/suggestion golden matrix + macro tests, all
   in-process), `clippy -D warnings`, `fmt --check`.
-- **`#[command]`/`#[group]`/`group_mod!`/`#[derive(Arg)]`'s rejections, as `trybuild` UI tests:** no
+- **`#[command]`/`#[group]`/`#[derive(Arg)]`'s rejections, as `trybuild` UI tests:** no
   doc comment, two reference parameters, a `&mut` parameter, a `self` receiver, generics/lifetimes,
-  an empty group, a module-relative context type, `#[group]` on a non-module, a missing
-  `group_mod!` file, a `group_mod!` declaration that is not a `mod` or that has a body, a command
+  an empty group, a module-relative context type, `#[group]` on a non-module, a `#[group]` file
+  module whose file is missing, a `#[group] mod b;` nested inside an inline `#[group]` module, a command
   parameter whose type does not implement `Arg`, `#[derive(Arg)]` without `#[derive(Bpaf)]`,
   `#[arg(complete = …)]` on a multi-field struct or an enum, `#[derive(Arg)]` on a generic type,
   and ADR-008's attribute keys and examples slot — an unknown key, `name`/`hide` given twice, an
@@ -470,10 +466,11 @@ them, not built ahead of that evidence.
   checked like any other behaviour, not just that it fails to compile.
 - **Group discovery and file resolution, as their own golden matrix:** `#[group]` on an inline
   module discovers `#[command]`/`#[group]` children in source order, honours a child's `#[cfg]`, and
-  lifts a context type from the first `&T` — `tests/groups.rs` (16 cases). `group_mod!` resolves a
-  declaration to a file against the Reference's mod-rs/non-mod-rs rules, reads it, and nests groups
-  across file boundaries — `tests/group_files.rs` plus `tests/group_files/` (11 cases: a command in
-  a file, an inline group inside a file module, a `group_mod!` nested one file deeper, a declared
+  lifts a context type from the first `&T` — `tests/groups.rs` (16 cases). `#[group]` on a
+  file-module declaration resolves it to a file against the Reference's mod-rs/non-mod-rs rules,
+  reads it, and nests groups across file boundaries — `tests/group_files.rs` plus
+  `tests/group_files/` (a command in a file, an inline group inside a file module, a `#[group]` file
+  module nested one file deeper, a declared
   `#[group(ctx = T)]`, an author's own `#[path]`, a context-free file group, run-level dispatch three
   levels down, a `#[cfg]`'d-out command, and the help/details split) — plus `macros`'s own unit tests
   for `crate::resolve` against an in-memory `Fs`.
@@ -500,7 +497,7 @@ them, not built ahead of that evidence.
   Only the returned code is assertable — the streams are the process's real ones — so `did you
   mean` text remains covered by the `augment_stderr`/`suggest` unit tests.
 - **Help text:** every command and group carries a mandatory one-line `help` (a doc comment, for
-  `#[command]`/`#[group]`/`group_mod!`), asserted as substrings of top-level, group and leaf `--help`
+  `#[command]`/`#[group]`), asserted as substrings of top-level, group and leaf `--help`
   output (never whole-output snapshots); a multi-line doc comment's first line is the help, the
   rest is `details()` up to an examples heading, and the examples are the footer —
   `tests/help_examples.rs` asserts, for the indented, `# Examples` and ```` ```sh ````-fenced
@@ -556,26 +553,29 @@ them, not built ahead of that evidence.
 - **A bare path in `commands!`/`app!` is always a handle, never a local.** `commands![c]` where `c`
   is a variable already holding a `Command` looks for `__hicli_c` and fails to find it; the local
   must be written `(c)`. This is by design (ADR-005) but is a real edge a consumer hits once.
-- **`group_mod!` is top-level-only, and depends on the compiler disclosing the source path.** A
-  proc macro cannot see the inline module it sits in, so `group_mod!` inside `mod a { … }` fails
+- **A `#[group]` file module is top-level-only, and depends on the compiler disclosing the source
+  path.** A proc macro cannot see the inline module it sits in, so `#[group] mod b;` inside
+  `mod a { … }` fails
   loudly rather than resolving against the wrong directory; under `--remap-path-prefix`, or any
   front end that doesn't implement `Span::local_file`/`Span::file`, it reports that it cannot find
   the file and points at the inline `#[group]` form instead. rust-analyzer's proc-macro server
   was observed *not* to run with the workspace root as its working directory, so the macro
   searches for its anchor (the working directory, then `CARGO_MANIFEST_DIR` and its ancestors)
-  instead of assuming one; **a manual editor check that `group_mod!` is squiggle-free is still
+  instead of assuming one; **a manual editor check that `#[group] pub mod x;` is squiggle-free is still
   outstanding** (see `ROADMAP.md`).
 - **An external, or any hand-built `Command`, cannot be a discovered child of `#[group]`.** There is
   no item to mark, so its parent group needs a hand-written `__hicli_<name>` handle calling
   `hicli::group`/`commands!` itself — the handle convention is documented public API for exactly
   this case.
-- **MSRV becomes Rust 1.88** (`Span::local_file`, stabilised there). A consumer on an older
-  toolchain can still use inline `#[group]`, which touches no file, but the crate as a whole will
-  not build below 1.88.
-- **A span from a file `group_mod!` reads collapses to the invocation.** `syn::parse_file` inside a
-  proc macro loses the original `path:line` of every token in the scanned file (confirmed by
-  spike); a diagnostic about something inside `event.rs` is reported at the `group_mod! { … }` call
-  site, with the file and reason named in the message text, not in the span.
+- **MSRV is Rust 1.99** (ADR-010): `#[group] pub mod x;` needs attribute macros on file-module
+  declarations, stable since 1.99 (`Span::local_file`, stable since 1.88, is still used). Both
+  crates carry `rust-version = "1.99"`; older toolchains are not supported.
+- **A span from a file a `#[group]` file module reads collapses to the `#[group]` declaration.**
+  `syn::parse_file` inside a proc macro loses the original `path:line` of every token in the scanned
+  file (confirmed by spike); a diagnostic hicli raises about something inside `event.rs` is reported
+  at the `#[group] pub mod event;` declaration, with the file and reason named in the message text,
+  not in the span. rustc's own diagnostics keep their real spans, since the file is loaded by rustc,
+  never inlined.
 - **The completer filters; bpaf does not.** `bpaf` passes a completer's output through
   **unfiltered** (verified against 0.9.28) — it prefix-filters only the flag names it derives
   itself. A `#[arg(complete = f)]` that ignores the word it is handed offers every candidate at

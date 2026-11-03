@@ -2,11 +2,11 @@
 //!
 //! An ordinary Rust file: the group's own help lives on the *declaration*, so
 //! what is left here is the commands. Note that both nesting forms appear —
-//! `instance` is an inline `#[group]`, `audience` is another `group_mod!` — and
-//! that the declaring file for `audience` is *this* file, so it resolves into
-//! `tests/group_files/event/`.
+//! `instance` is an inline `#[group]`, `audience` is a `#[group]` on a file
+//! module — and that the declaring file for `audience` is *this* file, so it
+//! resolves into `tests/group_files/event/`.
 
-use hicli::{command, group, group_mod, Outcome};
+use hicli::{command, group, Outcome};
 
 // The type is the whole import: its `Arg` impl carries the parser with it.
 use crate::{Ctx, Title};
@@ -43,9 +43,16 @@ pub mod instance {
     }
 }
 
-group_mod! {
-    /// manage audiences
-    ///
-    /// An audience is a set of people invited together.
-    pub mod audience;
-}
+/// manage audiences
+///
+/// An audience is a set of people invited together.
+#[group]
+pub mod audience;
+
+// Configured out, and there is no `gone.rs` anywhere: the `#[cfg]` is evaluated
+// before `#[group]` expands, so the macro never looks for the file, and the
+// parent's `push` — which carries the same `#[cfg]` — is not compiled either.
+/// gone
+#[cfg(any())]
+#[group]
+pub mod gone;

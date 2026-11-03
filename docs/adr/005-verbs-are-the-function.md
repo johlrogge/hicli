@@ -27,6 +27,8 @@ doc comment becomes a compile error, where it was a runtime panic.
 
 Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verbandi` → `hicli`, `#[verb]` → `#[command]`, `Verb` → `Invocation`, `VerbResult` → `Outcome`). The text below is kept exactly as written.
 
+§5, and the Consequences items about `group_mod!`, the 1.97 E0658 and MSRV 1.88, superseded by [ADR-010](010-file-groups-are-an-attribute.md) (2026-11-03).
+
 ## Decision
 
 ### 1. `#[verb]` leaves the function alone

@@ -31,7 +31,7 @@ use std::process::ExitCode;
 
 use cli::Session; // bases/cli — unchanged, parser-free
 use hicli::bpaf::Bpaf; // argument *structs* derive; commands and groups don't
-use hicli::{app, group_mod, App, Failure};
+use hicli::{app, group, App, Failure};
 
 mod args;
 mod top;
@@ -96,29 +96,26 @@ fn mk_ctx(g: Globals) -> Result<Ctx, Failure> {
 // ---------------------------------------------------------------------------
 // The groups: one file each, declared here.
 //
-// `group_mod!` is `#[group]` for a file module. Rust 1.99 allows the attribute
-// on `pub mod event;` directly; until the toolchain pin moves, the declaration
-// is wrapped. When it moves, delete the wrapper and keep the item — the body of
-// `group_mod!` is exactly what you will write.
-//
-// The macro emits `pub mod event;` plus a hidden sibling handle, and discovers
+// `#[group]` on a file-module declaration is the same group as on an inline
+// module. It emits `pub mod event;` plus a hidden sibling handle, and discovers
 // the group's children by reading `src/event.rs`: every `#[command]` function and
-// every `#[group]`/`group_mod!` module in it, in source order. There is no
-// registration line per command — adding a command is adding a function.
+// every `#[group]` module in it, in source order. There is no registration line
+// per command — adding a command is adding a function.
 // ---------------------------------------------------------------------------
 
-group_mod! {
-    /// events and instances
-    ///
-    /// An event is a directory; an instance is a branch of it.
-    pub mod event;
+/// events and instances
+///
+/// An event is a directory; an instance is a branch of it.
+#[group]
+pub mod event;
 
-    /// identity
-    pub mod id;
+/// identity
+#[group]
+pub mod id;
 
-    /// cards and deliverables
-    pub mod wallet;
-}
+/// cards and deliverables
+#[group]
+pub mod wallet;
 
 /// The whole command tree. Named, so the tests below get the same one.
 fn app() -> App<Globals, Ctx> {
@@ -455,8 +452,8 @@ pub fn cards(ctx: &Ctx) -> Outcome {
 // ===========================================================================
 // ===== src/top.rs ==========================================================
 //
-// Top-level commands. NOT a group: `top` is never declared with `#[group]` or
-// `group_mod!`, so it contributes no `top` subcommand — its commands are named
+// Top-level commands. NOT a group: `top` is never declared with `#[group]`,
+// so it contributes no `top` subcommand — its commands are named
 // individually in `main.rs`'s `app!` list as `top::apply`, `top::badge`.
 // ===========================================================================
 
@@ -623,7 +620,7 @@ mod tests {
 // tuple pattern. No `&Ctx` parameter at all -> `pub fn __hicli_create<Ctx: 'static>()`,
 // and the context is ignored. The handle is always `pub` + `#[doc(hidden)]`.
 //
-// `group_mod! { /// events and instances\n pub mod event; }` emits
+// `/// events and instances\n#[group]\npub mod event;` emits
 //
 //     /// events and instances
 //     #[path = "event.rs"]

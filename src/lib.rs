@@ -16,10 +16,8 @@
 //! `hicli` adds four things a `bpaf` CLI usually hand-rolls:
 //!
 //! - **A tree that is a declaration.** [`#[command]`](macro@command) on a
-//!   function, [`#[group]`](macro@group) on an inline module, and
-//!   [`group_mod!`](macro@group_mod) on a `mod` declaration whose body is
-//!   another file. Each writes a hidden `__hicli_<ident>` handle beside the
-//!   item, which [`commands!`](macro@commands) and [`app!`] mount by **bare
+//!   function, and [`#[group]`](macro@group) on a module, inline or a file.
+//!   Each writes a hidden `__hicli_<ident>` handle beside the item, which [`commands!`](macro@commands) and [`app!`] mount by **bare
 //!   name** — a group and a command are indistinguishable in a list, which is
 //!   the point. Every one of them expands to public API ([`command`](fn@command),
 //!   [`group`](fn@group), [`App::new`], [`App::commands`]), so anything that
@@ -121,19 +119,14 @@
 //! }
 //! ```
 //!
-//! A group whose body is a **file** is declared with
-//! [`group_mod!`](macro@group_mod) instead — the same group, one file per group:
+//! A group whose body is a **file** is the same attribute on a `mod`
+//! declaration — one file per group, its children discovered by reading it:
 //!
 //! ```ignore
-//! group_mod! {
-//!     /// events and instances
-//!     pub mod event;
-//! }
+//! /// events and instances
+//! #[group]
+//! pub mod event;
 //! ```
-//!
-//! That is the Rust 1.97 spelling. From Rust 1.99 the attribute may be written
-//! on the declaration itself, and the body of `group_mod!` is already exactly
-//! the item it goes on — migration is deleting the wrapper.
 
 pub use bpaf;
 
@@ -560,64 +553,57 @@ pub use hicli_macros::command;
 ///   equal to the group's own name;
 /// - **an examples heading with nothing under it**;
 /// - **a module-relative context type** among the children;
-/// - **`#[group]` on a file module** (`#[group] pub mod event;`) — an
-///   attribute on a `mod` declaration needs Rust 1.99. Until then the file form
-///   is written [`group_mod!`](macro@group_mod), which is the same group with a
-///   wrapper around the declaration.
-pub use hicli_macros::group;
-
-/// Declare **file** modules as groups: the same group, whose body is a file.
+/// - **a file group inside an inline group** (`#[group] mod b;` in the body of
+///   an inline `#[group] mod a { … }`, with no `#[path]`) — it would resolve
+///   against the wrong directory (see [File modules](#file-modules)); make `b`
+///   inline, or move `a` to its own file.
+///
+/// A file module adds the rejections listed under
+/// [File modules](#file-modules).
+///
+/// # File modules
+///
+/// The same attribute on a `mod` **declaration** makes a group whose body is
+/// another file:
 ///
 /// ```ignore
-/// use hicli::group_mod;
+/// use hicli::group;
 ///
-/// group_mod! {
-///     /// events and instances
-///     ///
-///     /// An event is a directory; an instance is a branch of it.
-///     pub mod event;
+/// /// events and instances
+/// ///
+/// /// An event is a directory; an instance is a branch of it.
+/// #[group]
+/// pub mod event;
 ///
-///     /// identity
-///     #[group(ctx = Ctx)]
-///     pub mod id;
-/// }
+/// /// identity
+/// #[group(ctx = Ctx)]
+/// pub mod id;
 /// ```
 ///
-/// Everything [`#[group]`](macro@group) reads, it reads the same way here —
-/// the name from the ident, the help from the doc comment, the children from
-/// the module's items in source order, the context from the first `&T` among
-/// them — with one difference: the items are in another file, which the macro
-/// **reads** and parses. `examples/files/` in the repository is a working CLI
-/// written this way. (The example above is `ignore`d because a doctest's source
-/// is a synthetic file with no module tree beside it.)
-///
-/// # Grammar
-///
-/// One or more **outlined** module declarations, each with a doc comment:
+/// Everything above reads the same way — the name from the ident, the help from
+/// the doc comment, the children from the module's items in source order, the
+/// context from the first `&T` among them — with one difference: the items are
+/// in another file, which the macro **reads** and parses. `examples/files/` in
+/// the repository is a working CLI written this way. (The example above is
+/// `ignore`d because a doctest's source is a synthetic file with no module tree
+/// beside it.)
 ///
 /// ```text
-/// group_mod! {
-///     <doc comment>
-///     [#[group(ctx = T, alias = "…", hide)]] [#[cfg(…)]] [#[path = "…"]]
-///     <visibility> mod <ident> ;
-///     …
-/// }
+/// <doc comment>
+/// [#[cfg(…)]] [#[path = "…"]]
+/// #[group(ctx = T, alias = "…", hide)]   // every key optional
+/// <visibility> mod <ident> ;
 /// ```
 ///
-/// The body is **exactly** the item `#[group]` will be written on from Rust
-/// 1.99, which is what makes the migration *delete the wrapper, keep the item*
-/// — including the context override, aliases and `hide`, which are written as
-/// `#[group(…)]` **on the declaration** rather than as an argument to
-/// `group_mod!`. That attribute is read and then removed; everything else on
-/// the declaration is re-emitted untouched.
+/// The keys are written on the attribute exactly as for an inline module. A
+/// `#[cfg]` on the declaration rides onto the group's registration as it does
+/// for an inline one — and a configured-out declaration needs no file at all.
+/// An author's `#[path]` is honoured and re-emitted untouched; write it before
+/// `#[group]`.
 ///
-/// There is no argument to the invocation itself, and therefore no place to put
-/// a `#[cfg]` for all of it: **a `#[cfg]` goes on each declaration**, where it
-/// rides onto that group's own registration exactly as `#[group]`'s does.
+/// ## Finding the file
 ///
-/// # Finding the file
-///
-/// The Reference's rules, applied to the file the macro was invoked in:
+/// The Reference's rules, applied to the file the declaration is in:
 ///
 /// - an explicit `#[path = "…"]` **wins**, and is relative to the declaring
 ///   file's directory;
@@ -634,42 +620,30 @@ pub use hicli_macros::group;
 /// the file rustc is told to use. The emitted path is always relative to the
 /// declaring file's directory; an absolute path never appears in the output.
 ///
-/// # Rebuilds
+/// ## Rebuilds
 ///
 /// Nothing to do: the file is `mod`-linked into the crate, so it is in cargo's
 /// dep-info and editing it re-runs the macro like any other source change.
 ///
-/// # It must be at a file's top level
+/// ## It must be at a file's top level
 ///
 /// Rust resolves `mod x;` inside an inline `mod a { … }` against `a/`, and a
-/// proc macro cannot see the inline module path it sits in. Nested use fails
-/// with *"cannot find the file for module"*, whose note says so. Inside an
-/// inline module, write [`#[group]`](macro@group) on an inline module instead.
+/// proc macro cannot see the inline module path it sits in. Inside an inline
+/// `#[group]` that is refused where it is written; inside a plain inline `mod`
+/// it fails with *"cannot find the file for module"*, whose note says so.
+/// Inside an inline module, write [`#[group]`](macro@group) on an inline module
+/// instead.
 ///
-/// # Rejections
-///
-/// [`#[group]`](macro@group)'s rejections all apply — no doc comment, an empty
-/// group, a module-relative context type, an unknown key, a bad alias, an
-/// empty examples section — plus:
+/// ## Rejections only a file module has
 ///
 /// - **the file was not found** — the message lists every candidate it tried,
 ///   and notes the top-level-only rule above;
 /// - **the file is not valid Rust**, or could not be read — the message names
 ///   the file and quotes the compiler's or the operating system's reason;
-/// - **something in the body is not a `mod` declaration**;
-/// - **a declaration has a body** — that is the inline form, so write
-///   `#[group]` on it and drop the wrapper;
 /// - **the source file cannot be located** (`--remap-path-prefix`, or a front
 ///   end that discloses no path) — there is nothing to read, so the message
 ///   points at the inline form.
-///
-/// # After Rust 1.99
-///
-/// `#[group] pub mod event;` becomes an alias for all of this and `group_mod!`
-/// is deprecated. Migration is deleting the wrapper and keeping the item:
-/// the declaration inside `group_mod!` — doc comment, `#[group(ctx = …)]`,
-/// `#[cfg]`, `#[path]` and all — is already exactly what the attribute goes on.
-pub use hicli_macros::group_mod;
+pub use hicli_macros::group;
 
 /// Build a `Vec<Command<Ctx>>` from a list of registrations.
 ///

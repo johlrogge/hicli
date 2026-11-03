@@ -27,7 +27,7 @@ a derive-enum plus a hand-written central `match` that grows without bound.
 - **A group of subcommands is a documented module.** `#[group]` leaves the module
   alone too, and discovers its children: a child is a child because it is *in* the
   module, in source order. There is no list to keep in step with the code.
-- **A group whose body is a file** is declared with `group_mod!` — the same group, one
+- **A group whose body is a file** is the same `#[group]` on `pub mod wallet;` — one
   file per group.
 
 There is no central dispatcher, and no name, help string or registration line written
@@ -55,7 +55,7 @@ use bpaf::Bpaf;
 // One `use` for `command`, one for `group` (and, below, `Arg`): the
 // attribute/trait and the function/derive they expand into share a name across
 // two namespaces each.
-use hicli::{app, command, group, group_mod, App, Arg, Failure, Outcome};
+use hicli::{app, command, group, App, Arg, Failure, Outcome};
 
 /// Global options, accepted before or after the subcommand.
 #[derive(Debug, Clone, Bpaf)]
@@ -160,17 +160,11 @@ mod event {
 }
 
 // A group whose body is a file — `src/wallet.rs`, found by Rust's own module
-// rules. `group_mod!` reads that file to discover the group's children, exactly
-// as `#[group]` reads a module body.
-//
-// This is the **Rust 1.97 spelling**. From Rust 1.99, an attribute is allowed on
-// a `mod` declaration, and the body of `group_mod!` is already exactly the item
-// the attribute goes on: migration is writing `#[group]` on `pub mod wallet;`
-// and deleting the two wrapper lines.
-group_mod! {
-    /// cards and deliverables
-    pub mod wallet;
-}
+// rules. `#[group]` reads that file to discover the group's children, exactly
+// as it reads an inline module body.
+/// cards and deliverables
+#[group]
+pub mod wallet;
 
 /// show status
 #[command]
@@ -190,7 +184,7 @@ fn show(id: Id, ctx: &Ctx) {
 /// The whole command tree. Named, so the tests below drive the same one.
 ///
 /// Each bare name is a registration: `commands!` reads it as the hidden handle
-/// `#[command]`, `#[group]` or `group_mod!` wrote beside the item of that name. A
+/// `#[command]` or `#[group]` wrote beside the item of that name. A
 /// group and a command are indistinguishable here, which is the point — `event` is
 /// a module, `status` is a function, both are just names in a list.
 fn app() -> App<Globals, Ctx> {
@@ -247,7 +241,7 @@ That is the whole thing: `app event create ./ev "Summer Party"`, `app wallet car
   command with no `&T` parameter is generic over `Ctx`. A group takes its `Ctx` from
   the first `&T` among its children, or from `#[group(ctx = T)]` when you say so.
 - **The children** of a group are every `#[command]` function and every
-  `#[group]`/`group_mod!` module in the body, in source order. Nothing else is — not
+  `#[group]` module (inline or a file) in the body, in source order. Nothing else is — not
   an argument struct, not an `impl`, not an unmarked `mod`, not `#[cfg(test)] mod
   tests`.
 - **The return** is anything implementing `IntoOutcome`: `()`, `Success`,
@@ -393,14 +387,10 @@ Thirteen things that will otherwise bite you, stated plainly:
    `:expr` capture wraps each element in an invisible group and says "expression" about
    something whose whole meaning is that it is a *name*.
 
-4. **`group_mod!` must be at a file's top level**, and only until Rust 1.99. Rust
-   resolves `mod x;` inside an inline `mod a { … }` against `a/`, and a proc macro
-   cannot see the inline module path it sits in; nested use fails with *"cannot find
-   the file for module"*. Inside an inline module, write `#[group]` on an inline module
-   instead. This two-line wrapper is also the *only* thing rustfmt does not format any
-   more — everything inside a `#[group]` module, and everything in a group's file, is
-   ordinary Rust that rustfmt formats and rust-analyzer follows. At 1.99 the wrapper
-   goes away and so does the papercut.
+4. **A `#[group]` file module must be at a file's top level.** Rust resolves `mod x;`
+   inside an inline `mod a { … }` against `a/`, and a proc macro cannot see the inline
+   module path it sits in; nested use is a compile error. Inside an inline module,
+   write `#[group]` on an inline module instead.
 
 5. **An external subcommand inside a group needs a hand-written handle.** Discovery
    finds *items*, and an external is a value — there is nothing to mark. Write the
@@ -442,10 +432,9 @@ Thirteen things that will otherwise bite you, stated plainly:
    otherwise — and a command that was written can never be a command that was never
    registered.
 
-7. **The MSRV is Rust 1.88.** `group_mod!` locates its declaring file with
-   `proc_macro::Span::local_file`, stable since 1.88. Both `hicli` and
-   `hicli-macros` carry `rust-version = "1.88"`. On an older toolchain you can write
-   every group inline, but the crate as a whole will not build.
+7. **The MSRV is Rust 1.99.** `#[group] pub mod x;` needs attribute macros on
+   file-module declarations, stable since 1.99; both crates carry
+   `rust-version = "1.99"`, and older toolchains are not supported.
 
 8. **hicli ships no `Arg` impls.** Not for `String`, not for `u64`, not for
    `PathBuf`. A primitive in a command's parameter list is a compile error by design —

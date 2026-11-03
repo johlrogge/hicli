@@ -40,7 +40,7 @@ ui-bless:
 demo *args:
     cargo run --quiet --example demo -- {{ args }}
 
-# The same shape with its groups in files (`group_mod!`) rather than inline.
+# The same shape with its groups in files (`#[group] pub mod x;`) rather than inline.
 # `just demo-files --help`, `just demo-files event audience define ./dir Friends`, …
 [group: 'dev']
 demo-files *args:

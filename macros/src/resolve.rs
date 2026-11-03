@@ -18,7 +18,8 @@
 //! and `tests/cli.rs` are, and they are mod-rs files. The heuristic is *"if
 //! there is no `demo/` directory beside `demo.rs`, it is a root"*, and the
 //! other arrangement is kept as a second-choice candidate rather than guessed
-//! at. Whichever wins, `group_mod!` then **emits `#[path]`**, so rustc reads
+//! at. Whichever wins, `#[group]` on a file module then **emits `#[path]`**, so
+//! rustc reads
 //! exactly the bytes this module read and the guess cannot silently disagree
 //! with the compiler.
 //!
