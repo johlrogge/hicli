@@ -1,0 +1,5 @@
+error: this examples section is empty: put at least one example under the heading, or remove the heading
+ --> tests/ui/command_examples_empty.rs:9:1
+  |
+9 | /// # Examples
+  | ^^^^^^^^^^^^^^

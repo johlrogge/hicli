@@ -1,0 +1,5 @@
+error: a #[command] takes at most one context parameter: the single `&T` argument that fixes its `Ctx`
+  --> tests/ui/two_contexts.rs:10:23
+   |
+10 | fn status(_ctx: &Ctx, _other: &Other) {}
+   |                       ^^^^^^^^^^^^^^

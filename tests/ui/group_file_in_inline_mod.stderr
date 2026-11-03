@@ -1,0 +1,5 @@
+error: `#[group] mod audience;` inside an inline module resolves against the wrong directory; make `audience` inline, or move the declaring module to its own file
+  --> tests/ui/group_file_in_inline_mod.rs:16:13
+   |
+16 |     pub mod audience;
+   |             ^^^^^^^^

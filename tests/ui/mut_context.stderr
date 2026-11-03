@@ -1,0 +1,5 @@
+error: a #[command]'s context is shared, not mutable: take `&T`, and put any mutability inside `T`
+ --> tests/ui/mut_context.rs:9:17
+  |
+9 | fn status(_ctx: &mut Ctx) {}
+  |                 ^^^^^^^^

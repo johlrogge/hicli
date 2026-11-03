@@ -1,0 +1,5 @@
+error: #[derive(Arg)] takes at most one `#[arg(...)]` attribute
+ --> tests/ui/arg_two_attributes.rs:9:1
+  |
+9 | #[arg(complete = files)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^

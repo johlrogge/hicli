@@ -1,0 +1,10 @@
+error[E0425]: cannot find function `id` in this scope
+ --> tests/ui/arg_without_bpaf.rs:9:8
+  |
+9 | struct Id(String);
+  |        ^^ not found in this scope
+  |
+help: consider importing this function
+  |
+6 + use std::process::id;
+  |

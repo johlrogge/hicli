@@ -1,0 +1,12 @@
+/target
+/.devenv
+
+# devenv-generated Claude Code artifacts — source of truth is devenv.nix (and
+# metadev). Regenerated on `devenv shell`; never edit or commit them.
+.mcp.json
+.claude/settings.local.json
+.claude/agents/
+.claude/commands/init.md
+.claude/commands/migrate.md
+.claude/settings.json
+.claude/skills/

@@ -1,0 +1,5 @@
+error: a #[command] cannot be `async`: hicli runs a command to completion, so drive the runtime inside the body
+  --> tests/ui/async_fn.rs:10:1
+   |
+10 | async fn status(_ctx: &Ctx) {}
+   | ^^^^^

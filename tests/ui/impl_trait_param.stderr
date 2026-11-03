@@ -1,0 +1,5 @@
+error: a #[command]'s arguments are named types implementing `Arg`; this is not a named type
+  --> tests/ui/impl_trait_param.rs:10:18
+   |
+10 | fn create(_name: impl Into<String>, _ctx: &Ctx) {}
+   |                  ^^^^^^^^^^^^^^^^^

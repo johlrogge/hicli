@@ -1,0 +1,5 @@
+error: `hide` is given twice
+ --> tests/ui/command_hide_twice.rs:8:17
+  |
+8 | #[command(hide, hide)]
+  |                 ^^^^

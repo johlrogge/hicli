@@ -1,0 +1,5 @@
+error: commands! takes a comma-separated list: a bare path (`event`, `audience::define`) names a #[command]/#[group] handle; anything else must be an expression producing a Command
+ --> tests/ui/commands_not_an_expression.rs:9:42
+  |
+9 |     let _: Vec<Command<Ctx>> = commands![struct Foo;];
+  |                                          ^^^^^^

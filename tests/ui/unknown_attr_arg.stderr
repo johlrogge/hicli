@@ -1,0 +1,5 @@
+error: #[command] takes `name = "..."`, `alias = "..."` (repeatable) and `hide`
+ --> tests/ui/unknown_attr_arg.rs:9:11
+  |
+9 | #[command(help = "show status")]
+  |           ^^^^

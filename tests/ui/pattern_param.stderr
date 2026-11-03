@@ -1,0 +1,5 @@
+error: a #[command]'s parameters are plain names: write `w: Words` and destructure in the body (`w.0`)
+  --> tests/ui/pattern_param.rs:11:8
+   |
+11 | fn say(Words(_w): Words, _ctx: &Ctx) {}
+   |        ^^^^^^^^^

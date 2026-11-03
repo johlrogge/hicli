@@ -1,0 +1,5 @@
+error: #[arg(...)] takes one argument: `complete = <fn>`, `complete = files` or `complete = dirs`
+ --> tests/ui/arg_unknown_key.rs:7:7
+  |
+7 | #[arg(name = "ID")]
+  |       ^^^^

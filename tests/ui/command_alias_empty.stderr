@@ -1,0 +1,5 @@
+error: an alias cannot be empty
+ --> tests/ui/command_alias_empty.rs:8:19
+  |
+8 | #[command(alias = "")]
+  |                   ^^

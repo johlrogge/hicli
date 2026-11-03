@@ -1,0 +1,26 @@
+[package]
+name = "hicli-macros"
+version = "0.1.0"
+edition = "2021"
+# Matches `hicli`'s: `#[group]` on a file-module declaration needs attribute
+# macros on non-inline modules, stable since 1.99 (ADR-010).
+rust-version = "1.99"
+description = "Procedural macros for hicli: `#[command]` (a documented function is a subcommand), `#[group]` (a documented module, inline or a file, is a group, its children discovered), `commands!` and `#[derive(Arg)]`. Use the `hicli` crate, which re-exports them."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/johlrogge/hicli"
+# The workspace README: this crate has no standalone story, and pointing at the
+# same file keeps the two crates.io pages telling one story.
+readme = "../README.md"
+keywords = ["cli", "subcommand", "bpaf", "macro", "parser"]
+categories = ["command-line-interface", "development-tools::procedural-macro-helpers"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[lints]
+workspace = true

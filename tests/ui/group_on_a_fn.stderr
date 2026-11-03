@@ -1,0 +1,7 @@
+error: #[group] goes on a module: #[group] pub mod event { … }
+ --> tests/ui/group_on_a_fn.rs:7:1
+  |
+7 | / /// show status
+8 | | #[group]
+9 | | fn status(_ctx: &Ctx) {}
+  | |________________________^
