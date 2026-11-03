@@ -1,0 +1,6 @@
+error: #[arg(complete = ...)] needs a single-field struct: a completer on the whole value is handed the value that already parsed, so it cannot tell which field is being completed and never fires while another field is mid-word
+       note: either make the value a newtype and complete that, or complete the field itself with bpaf's own #[bpaf(complete(f))]
+ --> tests/ui/arg_complete_on_multi_field.rs:9:1
+  |
+9 | #[arg(complete = complete_refs)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

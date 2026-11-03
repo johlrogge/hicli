@@ -1,10 +1,23 @@
+[workspace]
+members = [".", "macros"]
+
+# Shared by both crates so the lint policy is stated once. Each member opts in
+# with `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
 [package]
-name = "verbandi"
+name = "hicli"
 version = "0.1.0"
 edition = "2021"
-description = "A modular, publishable subcommand framework built on bpaf: one subcommand = one Verb, composed (not hand-matched), with first-class in-process testing, git-style external subcommands, and typo suggestions."
+# `group_mod!` locates its declaring file with `proc_macro::Span::local_file`,
+# stable since 1.88 (ADR-005 §5). An adopter on an older toolchain can write
+# every group inline, but the crate as a whole will not build.
+rust-version = "1.88"
+description = "CLI-enable your code: a subcommand is a documented function, a group of subcommands is a documented module whose children are discovered, an argument is a type — and there is no hand-written dispatch match. Built on bpaf, with first-class in-process testing, git-style external subcommands, and typo suggestions."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/johlrogge/verbandi"
+repository = "https://github.com/johlrogge/hicli"
 readme = "README.md"
 keywords = ["cli", "subcommand", "bpaf", "argument", "parser"]
 categories = ["command-line-interface"]
@@ -12,11 +25,26 @@ categories = ["command-line-interface"]
 [dependencies]
 bpaf = { version = "0.9", features = ["derive", "autocomplete"] }
 strsim = "0.11"
+# Exact-pinned: `#[command]` expands to calls into this crate's
+# private-by-contract expansion shape, so the two versions move together and are
+# published together (macros first).
+hicli-macros = { version = "=0.1.0", path = "macros" }
 
-[lints.rust]
-unsafe_code = "forbid"
-missing_docs = "warn"
+[dev-dependencies]
+# UI tests for `#[command]`'s rejections: a compile error is part of the macro's
+# contract, so it is asserted like any other behaviour.
+trybuild = "1"
+
+[lints]
+workspace = true
 
 [[example]]
 name = "demo"
 path = "examples/demo.rs"
+
+# The same CLI shape with its groups in files rather than inline. A directory
+# example needs its path stated, because cargo's auto-discovery only globs
+# `examples/*.rs`.
+[[example]]
+name = "files"
+path = "examples/files/main.rs"

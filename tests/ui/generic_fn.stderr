@@ -1,0 +1,5 @@
+error: a #[command] cannot be generic: its context type is fixed by the `&T` parameter and each argument is one concrete type deriving `Bpaf`
+  --> tests/ui/generic_fn.rs:10:10
+   |
+10 | fn status<T>(_arg: T, _ctx: &Ctx) {}
+   |          ^^^

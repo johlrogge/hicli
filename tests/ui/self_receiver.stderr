@@ -1,0 +1,5 @@
+error: a #[command] is a free function: it cannot take `self`
+  --> tests/ui/self_receiver.rs:10:11
+   |
+10 | fn status(self, _ctx: &Ctx) {}
+   |           ^^^^

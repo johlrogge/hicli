@@ -1,6 +1,6 @@
 # Feature & Release Workflow
 
-verbandi uses git flow with a multi-agent workflow for both feature development and
+hicli uses git flow with a multi-agent workflow for both feature development and
 releases (inherited from metadev — see metadev's own `RELEASING.md` for the source of
 this template).
 
@@ -14,7 +14,7 @@ this template).
 
 ## Versioning (semver)
 
-`verbandi` is a crates.io library — semver compatibility is a hard external contract,
+`hicli` is a crates.io library — semver compatibility is a hard external contract,
 not just a convention:
 
 - `feat` commits → minor bump (0.4.0 → 0.5.0)
@@ -24,6 +24,55 @@ not just a convention:
 Before `1.0.0`, minor bumps (`0.x.0`) may still carry breaking changes per Cargo's
 pre-1.0 semver convention — but mark them `!` regardless, so the commit history stays
 honest.
+
+## Two crates, one version
+
+The workspace publishes **two** crates, and they move as one:
+
+- `hicli-macros` — the proc macros `#[command]`, `#[group]`, `group_mod!`,
+  `commands!` and `#[derive(Arg)]`, re-exported as `hicli::command`,
+  `hicli::group`, `hicli::group_mod`, `hicli::commands` and `hicli::Arg`
+- `hicli` — the runtime crate, which depends on it as
+  `hicli-macros = { version = "=0.1.0", path = "macros" }`
+
+Rules:
+
+1. **The pin is exact (`=`).** `#[command]` expands into hicli's expansion shape,
+   which is private by contract, so a mismatched pair is a broken pair.
+2. **Bump both `Cargo.toml`s in the same commit** — `macros/Cargo.toml`'s
+   `[package] version` and the root `Cargo.toml`'s `hicli-macros = { version = "=X.Y.Z" }`
+   — so the two versions are never observed apart.
+3. **Publish `hicli-macros` first.** `hicli` cannot be packaged until its exact
+   pin resolves against the crates.io index. `just publish-dry` runs
+   `cargo publish --dry-run --workspace`, which orders the two correctly and verifies
+   `hicli` against the *locally* packaged macro crate; the real publish is
+   `cargo publish --workspace` (or the two `-p` runs by hand, macros first, waiting for
+   the index in between).
+4. **Name-check both crates before the first release.** `hicli` *and*
+   `hicli-macros` must be free on crates.io — a taken macro-crate name blocks the
+   release just as hard as a taken runtime-crate name. Check both at
+   <https://crates.io/crates/hicli> and <https://crates.io/crates/hicli-macros>
+   (ADR-007 renamed both),
+   and confirm neither is a squatted placeholder.
+
+## MSRV
+
+`rust-version = "1.88"`, set in **both** `Cargo.toml` and `macros/Cargo.toml`.
+
+1.88 is where `proc_macro::Span::local_file` became stable, which is how `group_mod!`
+finds the file it was invoked in (ADR-005 §5). An adopter on an older toolchain can
+write every group inline, but the crate as a whole will not build, so the number is a
+real floor and not a hope.
+
+Rules:
+
+1. **Both manifests carry it, and they are bumped together**, in the same commit, for
+   the same reason the versions are: the two crates are one artefact, and a macro crate
+   that needs a newer compiler than its runtime crate admits to is a broken pair.
+2. **Raising it is a breaking change for semver purposes** — mark the commit `!` and
+   say which feature bought the bump.
+3. **Say it once more in `README.md`** ("Rules and papercuts"), which is the only place
+   a consumer reads before adding the dependency.
 
 ## Feature Workflow
 
@@ -68,10 +117,15 @@ Run these agents in order before cutting a release:
 3. **documenter** — update README.md / docs/PLAN.md to reflect the release
 
 4. Verify crates.io readiness:
-   - `cargo publish --dry-run` succeeds
-   - `Cargo.toml` metadata (`description`, `license`, `repository`, `keywords`,
-     `categories`) is complete
-   - `examples/` CLI runs and demonstrates the current API
+   - `just publish-dry` succeeds — both crates, in order (see "Two crates, one
+     version")
+   - `Cargo.toml` metadata (`description`, `license`, `repository`, `readme`,
+     `keywords`, `categories`) is complete **in both** `Cargo.toml` and
+     `macros/Cargo.toml`
+   - the exact pin in the root `Cargo.toml` matches `macros/Cargo.toml`'s version
+   - `rust-version` is the same in both manifests and matches what `README.md` says
+   - both names are still free on crates.io (first release only)
+   - `examples/` CLI runs and demonstrates the current API (`just demo --help`)
 
 5. **release-manager** — start and finish the release branch
    > "Start release 0.x.0" → confirm → "Finish release 0.x.0"
@@ -79,7 +133,7 @@ Run these agents in order before cutting a release:
 6. **Human** — push to remote and publish
    ```
    git push origin main develop --tags
-   cargo publish
+   cargo publish --workspace      # hicli-macros first, then hicli
    ```
 
 ## Hotfix Checklist
@@ -97,4 +151,5 @@ Run these agents in order before cutting a release:
 - Multiple code-minions can run in parallel on different tasks within the same feature
 - The commit agent invokes the conventional-commits skill for commit message format
 - The architect never writes code — it designs and reviews only
-- `verbandi` has no Polylith workspace / profile concerns — it's a single crate
+- `hicli` has no Polylith workspace / profile concerns — it is a plain two-member
+  cargo workspace (`.` and `macros`), published as two crates in one step

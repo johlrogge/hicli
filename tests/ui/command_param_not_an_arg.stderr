@@ -1,0 +1,9 @@
+error[E0277]: `String` is not a hicli argument type
+  --> tests/ui/command_param_not_an_arg.rs:11:18
+   |
+11 | fn create(_name: String, _ctx: &Ctx) {}
+   |                  ^^^^^^ this parameter's type must implement `Arg`
+   |
+   = help: the trait `Arg` is not implemented for `String`
+   = note: an argument is a type: give it a newtype — `#[derive(Bpaf, Arg)] struct Id(#[bpaf(positional("ID"))] String);`
+   = note: hicli ships no `Arg` impls for `String`, `u64`, `PathBuf`, … on purpose: the metavar and positional-vs-option are yours to name

@@ -4,9 +4,24 @@
 
 Accepted (2026-09-11)
 
+**Superseded by [ADR-004](004-function-first-verbs.md) (2026-09-16).** `Exit`
+is replaced by `Success`/`Failure` (`src/outcome.rs`): `Success(u8)` for
+"finished, exit with this code" and `Failure::{Usage, Runtime}` for "failed,
+print this". `run` (a verb's, and `App::run`) returns `std::process::ExitCode`
+on the outermost path. Every substantive decision below survives the split
+intact — a code is a value, `std::process::exit` never appears in the library,
+a signal death is `128 + N` — this ADR's `Code(i32)` variant and its
+`Code(0)` → `1` normalisation are what's gone: a success code now lives on the
+`Success` side, where `Success::code(0)` is simply `Success::OK` and needs no
+normalising, and `message()` no longer needs `Option` because `Failure` (unlike
+old `Exit`) has no silent variant. See ADR-004 for why.
+
+Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verbandi` → `hicli`, `#[verb]` → `#[command]`, `Verb` → `Invocation`, `VerbResult` → `Outcome`). The text below is kept exactly as written.
+
 ## Decision
 
-`Exit` gains a third variant and `message()` changes shape:
+`Exit` gains a third variant and `message()` changes shape (pre-ADR-004 — see
+Status):
 
 ```rust
 #[non_exhaustive]

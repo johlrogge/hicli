@@ -4,10 +4,23 @@
 
 Accepted (2026-09-11)
 
+**Strengthened by [ADR-004](004-function-first-verbs.md) (2026-09-16).** The
+rule this ADR states — every command carries a one-line help string, no
+exceptions — is unchanged. What changed is *where* it is written and *how* it
+is enforced: `#[verb]`'s help is the function's doc comment, and `group!`'s is
+the entry's doc comment, so a command's help now lives in the source a human
+reads, not only in a string argument. A missing doc comment is a compile
+error, which is strictly stronger than the required-parameter enforcement
+below. The "would need a proc-macro" line under Alternatives is exactly what
+ADR-004 built once moniker's adoption justified the proc-macro dependency.
+
+Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verbandi` → `hicli`, `#[verb]` → `#[command]`, `Verb` → `Invocation`, `VerbResult` → `Outcome`). The text below is kept exactly as written.
+
 ## Decision
 
 `App::leaf`, `App::group`, `Group::leaf` and `Group::group` take a required
-`help: impl Into<String>` parameter between `name` and the parser/subgroup:
+`help: impl Into<String>` parameter between `name` and the parser/subgroup
+(pre-ADR-004 — see Status):
 
 ```rust
 pub fn leaf(self, name: &'static str, help: impl Into<String>,

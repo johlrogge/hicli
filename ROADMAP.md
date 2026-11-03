@@ -2,49 +2,144 @@
 
 ## Current milestone
 
-Land the first adopter: migrate `moniker`'s CLI onto verbandi. v1 is hardened
-(see Done) — the remaining question is whether the `Verb` model survives contact
-with a real CLI: replace moniker's `Cli`/enums/`dispatch()` match, keep
-`bases/cli` parser-free, and prove exit-code and `.feature` journey parity. Full
-design is in `docs/PLAN.md`.
+Land the first adopter: migrate `moniker`'s CLI onto hicli, now targeting the
+post-ADR-007 shape (`#[command]`/`#[group]`/`group_mod!`/`commands!`/`app!`) —
+functions untouched, groups as modules, no list anywhere in the tree. The
+remaining question is whether that model survives contact with a real CLI:
+replace moniker's `Cli`/enums/`dispatch()` match, keep `bases/cli` parser-free,
+and prove exit-code and `.feature` journey parity. `docs/sketches/moniker.rs`
+sketches the target shape. Group-level curried arguments (ADR-005's "Future
+work", `#[group(args = T)]`) stay deferred until moniker's migration shows
+they're actually needed, not built ahead of that evidence. Full design is in
+`docs/PLAN.md`.
 
 ## Backlog
 
 <!-- Upcoming work, roughly prioritised. Refine against docs/PLAN.md as it lands. -->
 
-- First adopter: migrate moniker's CLI onto verbandi
-- crates.io publish: verify the `verbandi` name is free, tag `0.1.0` per
-  `RELEASING.md`
+- First adopter: migrate moniker's CLI onto hicli
+- crates.io publish: verify the `hicli` and `hicli-macros` names are free, tag
+  `0.1.0` per `RELEASING.md`
 - Second/third adopters: mdma-cli, ctx
+- When the toolchain pin reaches Rust 1.99.0 (stable 2026-10-01): add
+  `#[group] pub mod x;` as the preferred spelling, deprecate `group_mod!`
+- Verify `group_mod!` under rust-analyzer (manual editor check) — the ADR-005
+  spike confirmed `rustc`'s behaviour only
 - Deferred until a consumer needs it: richer `ArgSchema` for externals, opt-in
-  `--dump-verb-manifest` handshake, per-binary hash pin, auto-registration sugar
+  `--dump-command-manifest` handshake, per-binary hash pin, auto-registration
+  sugar
+- Deferred until a consumer's pain names it (ADR-006): a field-composing
+  `#[derive(Arg)]` for composite types, completion masks on the shell
+  shorthands (`complete = files("*.toml")`), globals-aware completion
 
 ## Done
 
 <!-- Completed milestones -->
 
 - Project scaffolding (`cargo init --lib`, devenv toolchain, docs skeleton)
-- Core `Verb` model proven (2026-09-11): `Verb`/`Exit`/`App`/`Group` compose a
-  `bpaf` command tree with no central dispatch `match`; exit codes remapped
-  (usage 2, help 0, runtime 1)
-- In-process testability: `App::parse`/`into_parser`, `cli!` and `verb_test!`
+- Core command model proven (2026-09-11): a trait for the parsed command, plus
+  `Exit`/`App`/then-`Group`, composed a `bpaf` command tree with no central
+  dispatch `match`; exit codes remapped (usage 2, help 0, runtime 1). Superseded
+  by ADR-004 (below): `Group` as a separate builder type is gone, and the parsed
+  node — now `Invocation<Ctx>` (ADR-007) — is a struct, not a trait.
+- In-process testability: `App::parse`/`into_parser`, `cli!` and `cli_test!`
   macros, L1/L2 test matrix in `tests/cli.rs`
-- Git-style external subcommands (`ExternalVerb`), allowlisted by absolute path,
-  no `$PATH` scan
+- Git-style external subcommands (`ExternalCommand`), allowlisted by absolute
+  path, no `$PATH` scan
 - Typo suggestions: `bpaf` built-ins plus a Levenshtein gap-closer over the
   command registry
 - Publish readiness baseline: metadata, dual license, `cargo publish --dry-run`
   green
-- v1 hardening (2026-09-11): mandatory help text on every `leaf`/`group`,
-  in-process external-verb tests (nothing spawned), suggestion scoped to the
-  command position over the top-level registry, an in-process completion test,
-  and accurate "deltas from clap" docs
-- `Exit::Code` (2026-09-11): a verb — notably an external subcommand — carries a
+- v1 hardening (2026-09-11): mandatory help text on every then-`leaf`/`group`
+  (now every `Command`), in-process external-subcommand tests (nothing spawned),
+  suggestion scoped to the command position over the top-level registry, an
+  in-process completion test, and accurate "deltas from clap" docs
+- `Exit::Code` (2026-09-11): a command — notably an external one — carries a
   specific exit code back as a value; `std::process::exit` is gone from the
   library, `Exit::message()` is `Option<&str>`, and signal deaths report
-  `128 + N` on Unix (ADR-003)
+  `128 + N` on Unix (ADR-003). `Exit` itself is superseded by ADR-004's
+  `Success`/`Failure` split (below); the "code is a value, never `process::exit`"
+  substance carries forward unchanged.
 - `App::run_with_args` run-level test seam (2026-09-11): `App::run` delegates to
   it, so the last public method without coverage — exit-code remap end to end,
-  the suggestion gap-closer path, `mk_ctx` failure, verb dispatch and
+  the suggestion gap-closer path, `mk_ctx` failure, dispatch and
   `Exit::Code` propagation — is asserted in-process. Unblocks moniker's
   exit-code parity check.
+- **Function-first commands (2026-09-16, ADR-004):** a subcommand is a documented
+  function, not a struct implementing a trait plus a registration line. Landed
+  in five steps: (1) `Success`/`Failure`/`IntoOutcome` (`src/outcome.rs`)
+  replace `Exit`, closing the `Code(0)`→`1` wart structurally — a success code
+  now lives on the success side; (2) the parsed command (`Invocation<Ctx>` since
+  ADR-007) becomes a struct, not a trait, carrying `name()`/`path()`/`run()`, and
+  `Command<Ctx>` unifies what used to be `Group`/leaf into one node type, built
+  via `command`/`group`/`external` (`src/command.rs`, `src/invocation.rs`);
+  (3) a new exact-pinned `hicli-macros`
+  proc-macro crate ships `#[command]`, turning one documented function into a
+  `Command` handle plus its body module, reading the ident for the name, the
+  doc comment for mandatory help (ADR-001, now enforced by the compiler), and
+  each owned parameter's type for its `#[derive(Bpaf)]` constructor; (4)
+  `group!`/`commands!`/`app!` declarative macros (`src/macros.rs`) declare the
+  tree — a child is a child because it appears in its parent's list, no
+  registration call; (5) a `trybuild` UI suite covers `#[command]`'s compile-time
+  rejections (missing doc comment, two context parameters, `&mut` context, a
+  `self` receiver, generics/lifetimes, non-path/pattern parameters). `App::run`
+  now returns `std::process::ExitCode`; `run_with_args`/`exit_code_for` stay
+  `u8`. See `docs/adr/004-function-first-verbs.md`.
+- **Commands are the function; groups are modules (2026-09-17, ADR-005):** the
+  list-form `group! { ctx: Ctx; event: [a, b] }` and the `mod create { run }`
+  expansion are gone. Landed in three steps: (1) `#[command]` leaves the annotated
+  function verbatim and adds a hidden sibling handle, `__hicli_<ident>()`,
+  always `pub` and `#[doc(hidden)]`; `commands!` becomes a proc macro that
+  rewrites a bare path's last segment into a handle call (`create` →
+  `__hicli_create()`, `a::b` → `a::__hicli_b()`), anything else passing
+  through `IntoCommand::into_command`; `app!` forwards its list as `$($c:tt)*`
+  so the bare-path distinction survives the forward; (2) `#[group]` on an
+  inline module discovers its `#[command]`/`#[group]` children by source order —
+  a child is a child because it is in the module — derives its `Ctx` from
+  `#[group(ctx = T)]` or the first `&T` among the children, and rejects a
+  missing/blank doc comment and an empty group at compile time
+  (`macros/src/{shared,discover,ctx,group}.rs`; `tests/groups.rs`, 16 cases);
+  (3) `group_mod!` gives file modules the same group, reading the declaring
+  file's own path (`Span::local_file()`, MSRV 1.88) and resolving `mod x;`
+  declarations against the Reference's mod-rs/non-mod-rs rules
+  (`macros/src/{fs,resolve}.rs`), then emitting `#[path]` so rustc reads
+  exactly the bytes the macro read (`tests/group_files.rs` + fixtures, 11
+  cases). `src/macro_support.rs` and `__group_fn!` are deleted; the dash rule
+  and the doc-comment split now exist once, in the proc-macro crate. 22
+  `trybuild` cases across both attributes and `group_mod!`. Named `group_mod!`
+  rather than `group!` because a `#[proc_macro]` and a
+  `#[proc_macro_attribute]` cannot share a name in one crate (confirmed by
+  spike); it becomes an alias for `#[group] pub mod x;` once the toolchain pin
+  reaches Rust 1.99. See `docs/adr/005-verbs-are-the-function.md`.
+- **An argument is a type (2026-09-23, ADR-006):** the snake_case-constructor
+  rule moves out of `#[command]` and into `#[derive(Arg)]`, where it becomes one
+  line of one impl instead of a call synthesised at every command. `src/arg.rs`
+  ships `Arg` (`fn parser() -> impl Parser<Self>`, with
+  `#[diagnostic::on_unimplemented]` notes — hicli ships no impls, so a
+  primitive in a command's signature is a compile error that teaches the newtype
+  pattern), `Candidate` (`= (String, Option<String>)`), and
+  `complete_with`/`complete_files`/`complete_dirs`. `macros/src/arg.rs` adds
+  `#[derive(Arg)]`, spanned at the type's ident, with
+  `#[arg(complete = fn | files | dirs)]` attaching a completer to the type
+  once so every command taking it inherits completion for free; a completer on a
+  multi-field struct or an enum is a compile error (it cannot tell which field
+  is mid-word). `#[command]`'s expansion binds `<T as Arg>::parser()` to a local
+  per owned parameter before `construct!`, rather than a synthesised name
+  call. `App::complete(args) -> Vec<String>` is the completion-level test
+  seam, pinned at bpaf's protocol revision 1 — revision 2 through `run_inner`
+  terminates the process, a hazard confirmed by spike and outside hicli's
+  control. Verified against bpaf 0.9.28: bpaf passes a completer's output
+  through unfiltered (the completer filters), and a completer only fires for a
+  value that already parses from a partial word (a `u64` newtype never sees
+  the empty word). See `docs/adr/006-an-argument-is-a-type.md`.
+- **hicli, and `#[command]` (2026-09-23, ADR-007):** the crate is renamed
+  `verbandi` → `hicli` (`hicli-macros`; both names verified free on crates.io),
+  and the vocabulary named after the old crate with it: `#[verb]` → `#[command]`,
+  `Verb<Ctx>` → `Invocation<Ctx>`, `VerbResult` → `Outcome`, `ExternalVerb` →
+  `ExternalCommand`, `verb_test!` → `cli_test!`, handle prefix `__hicli_`. No
+  behaviour changes; every recorded diagnostic re-blessed and read; prose drops
+  "verb" outside ADR-001…006. `VISION.md` refined the same day: "CLI-enable your
+  code", hi-fi → hi-cli. Outside the commit, still the owner's: the GitHub repo
+  rename (the `repository` URLs already point at `johlrogge/hicli`), the local
+  directory, and moving `~/.metadev/projects/verbandi/` → `hicli/` to match
+  `METADEV_PROJECT`. See `docs/adr/007-hicli-and-the-command-attribute.md`.

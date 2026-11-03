@@ -1,0 +1,45 @@
+error[E0631]: type mismatch in function arguments
+  --> tests/ui/arg_complete_wrong_signature.rs:10:18
+   |
+ 9 | #[derive(Bpaf, Arg)]
+   |                --- required by a bound introduced by this call
+10 | #[arg(complete = complete_ids)]
+   |                  ^^^^^^^^^^^^ expected due to this
+...
+13 | fn complete_ids(typed: &str) -> Vec<String> {
+   | ------------------------------------------- found signature defined here
+   |
+   = note: expected function signature `for<'a> fn(&'a Id) -> _`
+              found function signature `fn(&str) -> _`
+note: required by a bound in `complete_with`
+  --> src/arg.rs
+   |
+   | pub fn complete_with<T>(
+   |        ------------- required by a bound in this function
+   |     parser: impl Parser<T>,
+   |     candidates: impl Fn(&T) -> Vec<Candidate>,
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `complete_with`
+help: consider wrapping the function in a closure
+   |
+10 | #[arg(complete = |arg0: &Id| complete_ids(/* &str */))]
+   |                  +++++++++++             ++++++++++++
+
+error[E0631]: type mismatch in function arguments
+  --> tests/ui/arg_complete_wrong_signature.rs:9:16
+   |
+ 9 | #[derive(Bpaf, Arg)]
+   |                ^^^ expected due to this
+...
+13 | fn complete_ids(typed: &str) -> Vec<String> {
+   | ------------------------------------------- found signature defined here
+   |
+   = note: expected function signature `for<'a> fn(&'a Id) -> _`
+              found function signature `fn(&str) -> _`
+note: required by a bound in `complete_with`
+  --> src/arg.rs
+   |
+   | pub fn complete_with<T>(
+   |        ------------- required by a bound in this function
+   |     parser: impl Parser<T>,
+   |     candidates: impl Fn(&T) -> Vec<Candidate>,
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `complete_with`

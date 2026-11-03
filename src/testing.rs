@@ -1,7 +1,7 @@
 //! Test-support helpers used by the [`cli!`](crate::cli) and
-//! [`verb_test!`](crate::verb_test) macros.
+//! [`cli_test!`](crate::cli_test) macros.
 
-/// Drive one [`verb_test!`](crate::verb_test) case.
+/// Drive one [`cli_test!`](crate::cli_test) case.
 ///
 /// Not part of the public API surface for direct use — it exists so the macro
 /// can give the case's closure a fully-known argument type (the parse result),
@@ -11,7 +11,7 @@ pub fn run_case<G, Ctx, F>(app: crate::App<G, Ctx>, args: Vec<String>, check: F)
 where
     G: 'static,
     Ctx: 'static,
-    F: FnOnce(Result<(G, crate::BoxedVerb<Ctx>), bpaf::ParseFailure>),
+    F: FnOnce(Result<(G, crate::Invocation<Ctx>), bpaf::ParseFailure>),
 {
     check(app.parse(args));
 }

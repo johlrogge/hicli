@@ -1,0 +1,5 @@
+error: #[command] takes one optional argument: `name = "..."`
+ --> tests/ui/unknown_attr_arg.rs:8:11
+  |
+8 | #[command(help = "show status")]
+  |           ^^^^

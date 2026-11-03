@@ -1,0 +1,5 @@
+error: group `empty` has no commands: add a #[command] function or a nested #[group] module to its body
+  --> tests/ui/group_no_children.rs:11:5
+   |
+11 | mod empty {
+   |     ^^^^^

@@ -1,0 +1,14 @@
+error[E0658]: file modules in proc macro input are unstable
+  --> tests/ui/group_on_file_mod.rs:18:1
+   |
+18 | pub mod event;
+   | ^^^^^^^^^^^^^^
+   |
+   = note: see issue #54727 <https://github.com/rust-lang/rust/issues/54727> for more information
+
+error: cannot find the file for module `event`: tried `$DIR/tests/ui/event.rs`, `$DIR/tests/ui/event/mod.rs`
+       note: a group_mod! declaration must be at the top level of its file; inside an inline `mod`, use #[group] on an inline module instead
+  --> tests/ui/group_on_file_mod.rs:18:9
+   |
+18 | pub mod event;
+   |         ^^^^^

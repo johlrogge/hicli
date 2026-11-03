@@ -1,9 +1,15 @@
-# verbandi
+# hicli
 
-A standalone, crates.io-publishable Rust framework for building modular CLIs: one
-subcommand = one self-contained "Verb" (a type with annotated args + a `run`),
-composed into a command tree instead of a central hand-written dispatch `match`.
-Built on and re-exports [`bpaf`](https://docs.rs/bpaf).
+**CLI-enable your code.** A standalone, crates.io-publishable Rust framework for
+building modular CLIs: one subcommand = one documented function (`#[command]`),
+groups are annotated modules (`#[group]`, `group_mod!` for file modules until
+Rust 1.99), arguments are types (`#[derive(Bpaf, Arg)]`, completion attached to
+the type), composed into a command tree with `app!` instead of a central
+hand-written dispatch `match`. Built on [`bpaf`](https://docs.rs/bpaf).
+
+The crate and its vocabulary were renamed by
+[ADR-007](docs/adr/007-hicli-and-the-command-attribute.md), which is the
+dictionary between the older ADRs' words and today's names.
 
 The full design — API surface, rationale, scope, verification plan — lives in
 [`docs/PLAN.md`](docs/PLAN.md). Read that before making architectural changes; this
@@ -21,7 +27,7 @@ All tools, packages, hooks, and services are declared in `devenv.nix`.
 
 The Rust toolchain is stable (pinned in `devenv.nix`, currently 1.97.0) with
 `rustc`, `cargo`, `clippy`, `rustfmt`, and `rust-analyzer`. No nightly features —
-verbandi targets stable-Rust consumers (moniker, mdma-cli, ctx).
+hicli targets stable-Rust consumers (moniker, mdma-cli, ctx).
 
 ## Conventions
 
@@ -44,14 +50,32 @@ Run `just ci` before considering any change done.
 
 - **Stable Rust only.** No nightly-only features, ever — this is a dependency other
   stable-toolchain CLIs pin.
-- **`bpaf` is re-exported, not wrapped opaquely.** Consumers pin one `bpaf` version
-  through `verbandi`; don't hide `bpaf` types behind newtypes without a reason spelled
-  out in `docs/PLAN.md`.
+- **`bpaf` is re-exported, not wrapped opaquely.** Don't hide `bpaf` types behind
+  newtypes without a reason spelled out in `docs/PLAN.md`. Consumers using
+  `#[derive(Bpaf)]` for their argument structs also add `bpaf = "0.9"` directly
+  (the derive expands to `::bpaf::…` paths that don't resolve through a
+  re-export) — hicli states the required version, cargo unifies it; see
+  ADR-004.
 - **Testability is first-class and in-process.** No subprocess spawning in tests —
-  drive parsers with an arg slice via `App::parse` / the `cli!` / `verb_test!` macros.
+  drive parsers with an arg slice via `App::parse` / the `cli!` / `cli_test!` macros.
+- **An argument is a type.** hicli ships no `Arg` impls — a primitive in a
+  command's signature (`fn create(name: String, ctx: &Ctx)`) is a compile error by
+  design, teaching the newtype pattern at the point it is broken; see ADR-006.
 - **Subtractive scope.** `docs/PLAN.md`'s "v1 scope (subtractive)" section is
-  authoritative — don't add auto-registration macros, proc-macro derives, or other
-  conveniences until a real consumer's pain justifies them.
+  authoritative. Earned mechanisms (ADR-004, ADR-005, ADR-006): `#[command]`
+  (leaves the function untouched, adds a handle, calls `<T as Arg>::parser()` per
+  owned param), `#[group]` (an annotated module, children discovered by source
+  order — no list), `group_mod!` (the same group for a file module, until Rust
+  1.99), `commands!` (a bare path names a handle), `Arg` + `#[derive(Arg)]` +
+  `#[arg(complete = …)]`/`files`/`dirs` (an argument is a type that parses
+  itself, and completion attaches to that type once and is inherited by every
+  command that takes it) — because moniker's pain justified each. Deferred until
+  the next real consumer's pain justifies them: `#[group] pub mod x;` as the
+  direct spelling (blocked on the toolchain pin reaching Rust 1.99.0),
+  group-level currying (`#[group(args = T)]`), a field-composing
+  `#[derive(Arg)]` for composites, `#[arg(parser = …)]`, completion masks,
+  globals-aware completion, `inventory`-style auto-registration (rejected
+  outright, not just deferred).
 - **No implicit `$PATH` scanning** for external subcommand discovery — allowlist by
   absolute path only. This is a trust boundary, not a convenience default.
 
@@ -87,7 +111,7 @@ When an MCP tool exists but misbehaves:
 ## Agents & Skills
 
 - **architect** — reviews/designs Rust architecture; loads
-  `.claude/skills/architect/SKILL.md` (project context: the Verb model, crate layout,
+  `.claude/skills/architect/SKILL.md` (project context: the command model, crate layout,
   design contracts, delegation workflow). The underlying Rust reference docs live in
   `.claude/skills/rust-architect/references/` (async/tokio, error handling, lifetimes,
   patterns, testing, tooling, type-driven design, polylith, ECS, embedded) — load

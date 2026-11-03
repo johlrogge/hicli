@@ -1,72 +1,114 @@
-# Vision
+# Vision — hicli
 
-> Draft — captured from the decisions and intent behind `verbandi`. Refine freely;
-> this is the north star, not a spec. The *what* and *how* live in `README.md`,
-> `ROADMAP.md`, and `docs/PLAN.md`.
+> The north star, not a spec. The *what* and *how* live in `README.md`, `ROADMAP.md`,
+> `docs/PLAN.md` and the ADRs. Refined 2026-09-23 against what has actually been built.
+
+## In one line
+
+**CLI-enable your code.**
+
+Write ordinary, well-typed, well-documented Rust functions. Get a command-line interface
+for them — help, completion, exit codes, tests — without writing a CLI.
+
+## The name
+
+**hicli**, as in hi-fi: a *high-fidelity* CLI, rendered faithfully from your code — the
+function untouched, the doc comment as the help, the type as the argument. Read it as a
+greeting too: *hi cli — adds the line to your command.* (Swedish readers may hear
+"hej cli", after the "Hej matematik" school books and the old "Hej XML — jag skyfflar
+text" joke. That is intentional.)
 
 ## The belief
 
-Pretty much any `clap` CLI ends up less modular than it could be. The derive-macro
-path pulls you toward a central enum of subcommands and one hand-written dispatch
-`match` that grows without bound — the arguments for a command live in one place, its
-behavior in another, and adding a command means editing a shared file that everyone
-else is also editing.
+A command-line tool is code first and interface second. Most CLI frameworks invert
+that: you describe the interface in their vocabulary (a derive enum, a builder, a
+central dispatch `match`) and hang your code off it. The interface description grows
+into the thing you maintain; the code becomes an afterthought that lives somewhere
+else; adding a command means editing a shared file everyone else is editing.
 
-It doesn't have to be that way. **A subcommand is naturally one self-contained thing:
-its arguments *and* its behavior, together, testable on its own.** `verbandi` exists to
-make that the path of least resistance — one subcommand = one `Verb`, composed into a
-tree by combination, so the central dispatcher disappears.
+It doesn't have to be that way. **A subcommand is a function. A group of subcommands is
+a module. An argument is a type.** Those are things Rust already has, already documents,
+already type-checks and already tests. The framework's job is to *derive* the interface
+from them — and to get out of the way.
+
+## The programming model
+
+This is a programming model, not a parser library. It is opinionated in ways a general
+parser cannot be:
+
+- **Code-centric.** The function *is* the command: `#[command]` leaves it exactly as
+  written — same name, same signature, callable from a test, callable from another
+  function. Nothing is generated that you would ever have to call instead of your own
+  code. Registration is by containment: a function in a `#[group]` module is a command
+  in that group, in source order. No list to keep in step, no dispatcher to grow.
+
+- **Statically typed, newtypes everywhere.** An argument is a type you name: `Id`,
+  `EventDir`, `Moniker` — never a bare `String` or `PathBuf`. The type carries the
+  metavar, the help, the validation and the completion, once, and every command that
+  takes it inherits all four. A primitive in a command's signature is a compile error
+  that shows you the newtype to write. The framework ships no argument types of its
+  own, on purpose: the vocabulary of your CLI is yours.
+
+- **Documentation is the interface.** Your doc comment *is* the help text — on a
+  command, on a group, on an argument type. Help cannot go stale, cannot be forgotten
+  (a missing doc comment is a compile error), and reads the same in `--help`,
+  in `cargo doc` and in the source.
+
+- **Function-oriented, and willing to pay for it.** Where CLI expressiveness and a
+  natural programming experience conflict, the programming experience wins. Arguments
+  are plain parameters composed in declaration order; effects come back as values
+  (`Success`, `Failure`), never as `process::exit`. If a parsing feature would cost the
+  function its ordinary shape, we leave the feature out.
+
+- **Unit-testable by construction.** Every layer has an in-process seam: an argument
+  type's parser, the command function itself, the parsed tree (`cli_test!`, written
+  like a terminal session), the whole run with its exit code, and shell completion —
+  no subprocess, no string-scraping. The next step on this road is making the *bodies*
+  as testable as the parsing: typed alternatives to raw `File`, `Path` and directory
+  access so a command can be exercised against an in-memory world.
 
 ## What we're really buying
 
-Not fewer lines of code — **locality and testability**. Adding a command becomes a new
-file and one registration line, not a scar across a monolith. A command can be
-understood, changed, and tested in isolation. On a large CLI (the kind that grows to
-thousands of lines in a single file) that difference compounds.
+Not fewer lines — **locality and honesty.** Everything about a command is in one place,
+in the language you already write, checked by the compiler you already run. On a large
+CLI that difference compounds: adding a command is adding a function in the right
+module, and the tool's help, completion and tests follow from that automatically.
 
-## The bets that make it worth a crate
+## The bets that stay
 
-`verbandi` is opinionated about four things `clap` treats as secondary or leaves to you:
-
-1. **Testing is first-class, in-process.** You drive a parser with the arguments a user
-   would type and assert on the result — no subprocess, no brittle string-scraping.
-   Tests read like a terminal session (`cli! { event create x "My Event" }`), so the
-   test *is* the documentation of what the user types.
-2. **A CLI can span several binaries and still feel like one** — the `git` model.
-   `app foo` can hand off to `app-foo`, yet `app --help` and shell completion still
-   describe `foo`, without executing anything to find out.
-3. **Good error ergonomics are not optional.** Typo/"did you mean?" suggestions stay on
-   par with `clap`; a misspelled command or flag points you at the right one.
-4. **Discovery is trust-conscious by construction.** No implicit `$PATH` scanning, ever;
-   external subcommands are allowlisted by absolute path and never handed secrets
-   implicitly. A framework used by security-sensitive tools must not widen their attack
-   surface as a side effect of being convenient.
-
-Built on `bpaf` (parsers as plain values), which is what makes 1 and 2 honest rather
-than aspirational.
+1. **A CLI can span several binaries and still feel like one** — the `git` model, with
+   `--help` and completion describing external subcommands without executing them.
+2. **Good error ergonomics are not optional.** Typo suggestions on par with `clap`;
+   compile errors that teach the model rather than merely reject.
+3. **Discovery is trust-conscious by construction.** No implicit `$PATH` scanning;
+   externals are allowlisted by absolute path and never handed secrets implicitly.
+4. **Built on `bpaf`** (parsers as plain values), which is what makes in-process
+   testing and composition honest rather than aspirational. `bpaf` is re-exported,
+   never wrapped; argument spelling stays `bpaf`'s, so there is one dialect to learn.
 
 ## What success looks like
 
-- **It proves itself on real CLIs.** `moniker` migrates onto it first (its handlers are
-  already parser-free), with identical behavior, exit codes, and passing journey tests —
-  then `mdma-cli` and `ctx`. Adoption by the author's own tools is the acceptance test.
-- **It's a good crates.io citizen** — documented, dual-licensed, semver-disciplined,
-  small enough to read in one sitting.
+- **It proves itself on real CLIs.** `moniker` migrates first, with identical
+  behaviour, exit codes and passing journey tests; then `mdma-cli` and `ctx`.
 - **The modular path is genuinely easier** than the central-match path it replaces. If
   writing a new command ever feels heavier than a `match` arm, the design has failed.
+- **A reader can learn the model from one example** and predict the rest: function,
+  module, type, doc comment.
+- **It's a good crates.io citizen** — documented, dual-licensed, semver-disciplined,
+  small enough to read in one sitting.
 
-## Non-goals (at least for now)
+## Non-goals
 
-- **Not a `clap` replacement for everyone.** It's for people who feel the modularity
-  itch, not a claim that everyone should switch.
-- **Not a proc-macro DSL.** v1 leans on `bpaf`'s own derive plus small declarative
-  macros. Auto-registration sugar (`inventory`-style) waits until a real consumer's pain
-  justifies it — earn the mechanism, don't front-load it.
-- **Not a kitchen sink.** Every feature must pull its weight against the subtractive
-  default: improve the core idea and remove, rather than pile on mechanisms.
+- **Not a `clap` replacement for everyone.** It is for people who want their CLI to be
+  a thin, typed, documented skin over code they would write anyway.
+- **Not maximal CLI expressiveness.** Exotic parsing shapes that would distort the
+  function are out of scope; `bpaf`'s primitives remain reachable by hand for the rare
+  case.
+- **Not a kitchen sink.** Every mechanism is earned by a real consumer's pain and
+  recorded in an ADR. Auto-registration by link-time magic is rejected outright.
 
 ## Guiding principle
 
-Subtractive design. The win is a *smaller, clearer* way to build a CLI. Prefer sharpening
-the `Verb` concept and deleting scaffolding over adding knobs. When in doubt, leave it
-out until a consumer proves it's needed.
+Subtractive design. The win is a *smaller, clearer* way to build a CLI. Prefer
+sharpening the three concepts — function, module, type — and deleting scaffolding
+over adding knobs. When in doubt, leave it out until a consumer proves it's needed.

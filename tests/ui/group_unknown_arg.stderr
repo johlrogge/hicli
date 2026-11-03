@@ -1,0 +1,5 @@
+error: #[group] takes one optional argument: `ctx = <Type>`
+ --> tests/ui/group_unknown_arg.rs:9:9
+  |
+9 | #[group(name = "events")]
+  |         ^^^^

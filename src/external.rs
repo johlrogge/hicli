@@ -1,18 +1,28 @@
 //! Git-style external subcommands.
 //!
 //! `app foo ARGS…` execs an external binary `foo`, yet `app --help` and
-//! completion still enumerate `foo` — because the [`ExternalVerb`] manifest is
+//! completion still enumerate `foo` — because the [`ExternalCommand`] manifest is
 //! the single source both the parser and help read. Discovery is never
 //! implicit: there is no `$PATH` scan; a binary is advertised only if it was
 //! registered by absolute path.
 //!
 //! An external's exit code is propagated as a *value*: the child's code comes
-//! back as [`Exit::Code`], never `std::process::exit`. The library never
+//! back as [`Success::code`], never `std::process::exit`. The library never
 //! terminates the process on the consumer's behalf — destructors run, the
 //! consumer's `main` gets its code, and the dispatch path is the same
-//! in-process one every other verb uses.
+//! in-process one every other command uses.
+//!
+//! A child that exits non-zero is a *success* here, not a [`Failure`]: the
+//! external ran, it reported its own diagnostics, and hicli's only remaining
+//! job is to carry the code out. Only hicli's own failure — being unable to
+//! run the binary at all — is a [`Failure`], because that message is the one
+//! nobody else will print.
+//!
+//! An `ExternalCommand` is a *manifest*, not a tree node: wrap it in
+//! [`external`](crate::external) to get the [`Command`](crate::Command) that
+//! mounts it into the tree.
 
-use crate::verb::{BoxedVerb, Exit, Verb};
+use crate::outcome::{Failure, Success};
 use bpaf::{any, Parser};
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
@@ -44,16 +54,16 @@ pub struct ArgSpec {
 /// 2. Allowlisted by **absolute path**, supplied at registration.
 /// 3. No implicit secret forwarding — the child receives argv only.
 ///
-/// Construct with [`ExternalVerb::new`].
+/// Construct with [`ExternalCommand::new`].
 #[derive(Debug, Clone)]
-pub struct ExternalVerb {
+pub struct ExternalCommand {
     pub(crate) name: &'static str,
     pub(crate) help: String,
     pub(crate) bin: PathBuf,
     pub(crate) schema: Option<ArgSchema>,
 }
 
-impl ExternalVerb {
+impl ExternalCommand {
     /// Register an external subcommand named `name`, backed by the binary at
     /// the absolute path `bin`.
     ///
@@ -62,7 +72,7 @@ impl ExternalVerb {
     /// against the current directory, which defeats the trust posture. Prefer
     /// an absolute path.
     pub fn new(name: &'static str, help: impl Into<String>, bin: impl Into<PathBuf>) -> Self {
-        ExternalVerb {
+        ExternalCommand {
             name,
             help: help.into(),
             bin: bin.into(),
@@ -81,37 +91,34 @@ impl ExternalVerb {
         self.name
     }
 
-    /// The external's command parser, yielding the concrete [`ExternalRun`].
-    ///
-    /// Split out of [`ExternalVerb::into_parser`] so unit tests can inspect the
-    /// captured `rest` without downcasting a `Box<dyn Verb<_>>`.
-    fn into_run_parser(self) -> impl Parser<ExternalRun> {
-        let name = self.name;
-        let bin = self.bin;
-        let help = self.help;
-        let rest = any::<String, _, _>("ARGS", Some).many();
-        rest.to_options()
-            .descr(help.as_str())
-            .command(name)
-            .help(help.as_str())
-            .map(move |rest| ExternalRun {
-                name,
-                bin: bin.clone(),
-                rest,
-            })
+    /// The one-line help from the manifest — what
+    /// [`external`](crate::external) gives the [`Command`](crate::Command).
+    pub(crate) fn help(&self) -> &str {
+        self.help.as_str()
     }
 
-    /// Build the `bpaf` parser for this external: a `command` that captures the
-    /// remainder verbatim and maps it to a runnable [`Verb`].
-    pub(crate) fn into_parser<Ctx: 'static>(self) -> impl Parser<BoxedVerb<Ctx>> {
-        self.into_run_parser()
-            .map(|r| Box::new(r) as BoxedVerb<Ctx>)
+    /// The external's **inner** parser: everything after the external's name,
+    /// captured verbatim, as a runnable [`ExternalRun`].
+    ///
+    /// Inner on purpose — the `command(name)` wrapper, the `descr` and the
+    /// `help` are applied by [`Command::mount`](crate::Command), so an external
+    /// is mounted by exactly the same code as every other command.
+    pub(crate) fn into_run_parser(self) -> impl Parser<ExternalRun> {
+        let name = self.name;
+        let bin = self.bin;
+        let rest = any::<String, _, _>("ARGS", Some).many();
+        rest.map(move |rest| ExternalRun {
+            name,
+            bin: bin.clone(),
+            rest,
+        })
     }
 }
 
-/// The verb that execs an external binary and propagates its exit code.
+/// The child-process run behind an external subcommand: what the mounted
+/// [`Invocation`](crate::Invocation)'s action calls.
 #[derive(Debug)]
-struct ExternalRun {
+pub(crate) struct ExternalRun {
     name: &'static str,
     bin: PathBuf,
     rest: Vec<String>,
@@ -123,7 +130,7 @@ struct ExternalRun {
 /// `ExitStatus::code()` is `None` when the child was killed by a signal; git
 /// and every POSIX shell report `128 + N` there, and an external subcommand
 /// must fail the same way it would have if the user had run the binary
-/// directly. (`verbandi` reports the code; it deliberately does **not**
+/// directly. (`hicli` reports the code; it deliberately does **not**
 /// re-raise the signal on itself — that is the consumer's `main`'s business.)
 #[cfg(unix)]
 fn code_of(status: ExitStatus) -> Option<i32> {
@@ -137,37 +144,44 @@ fn code_of(status: ExitStatus) -> Option<i32> {
     status.code()
 }
 
-/// Map a finished child's status onto verbandi's exit convention.
+/// Map a finished child's status onto hicli's exit convention.
+///
+/// The child ran, so whatever it reported is a [`Success`] carrying its code:
+/// `0` for a clean exit, the child's own `n` otherwise, `128 + N` for a Unix
+/// signal death. Nothing is printed for any of them — the child already wrote
+/// its own diagnostics, and a `Success` has no message to add.
+///
+/// A code outside `0..=255` collapses to `1` rather than being truncated into a
+/// different code — or, worse, into `0`. It is defensive only: `ExitStatus`
+/// already masks a clean exit to the low 8 bits, and `128 + N` tops out at
+/// `255` because `wait(2)` carries the signal number in 7 bits.
 ///
 /// Split out of [`ExternalRun::run`] so the mapping is unit-testable without
 /// spawning anything: an `ExitStatus` can be constructed directly on Unix via
 /// `ExitStatusExt::from_raw`.
-fn exit_from_status(name: &str, status: ExitStatus) -> Result<(), Exit> {
+fn exit_from_status(name: &str, status: ExitStatus) -> Result<Success, Failure> {
     match code_of(status) {
-        Some(0) => Ok(()),
-        // The child's exact code, carried back as a value. `Exit::Code` is
-        // silent: the child already wrote its own diagnostics.
-        Some(n) => Err(Exit::Code(n)),
+        Some(n) => Ok(Success::code(u8::try_from(n).unwrap_or(1))),
         // Unreachable on Unix (`status()` waits for termination, and a signal
-        // death is handled above) — kept as a defensive runtime error rather
-        // than a panic or a silent zero.
-        None => Err(Exit::Runtime(format!(
+        // death is handled by `code_of`) — kept as a defensive runtime error
+        // rather than a panic or a silent zero.
+        None => Err(Failure::Runtime(format!(
             "external `{name}` terminated without an exit status"
         ))),
     }
 }
 
-impl<Ctx> Verb<Ctx> for ExternalRun {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn run(self: Box<Self>, _ctx: &Ctx) -> Result<(), Exit> {
+impl ExternalRun {
+    /// Exec the binary, wait, and report the child's outcome.
+    ///
+    /// This is the *only* place hicli spawns anything, and it happens on the
+    /// run path alone: parsing, help and completion never reach it.
+    pub(crate) fn run(self) -> Result<Success, Failure> {
         let status = Command::new(&self.bin)
             .args(&self.rest)
             .status()
             .map_err(|e| {
-                Exit::Runtime(format!(
+                Failure::Runtime(format!(
                     "external `{}`: cannot run {}: {e}",
                     self.name,
                     self.bin.display()
@@ -182,12 +196,18 @@ mod tests {
     use super::*;
 
     /// Deliberately a path that cannot exist: nothing here may spawn anything.
-    const BIN: &str = "/nonexistent/verbandi-external-foo";
+    const BIN: &str = "/nonexistent/hicli-external-foo";
 
     /// Parse `args` through the external's command parser, in-process.
+    ///
+    /// The `command("foo")` wrapper is applied here because it is applied by
+    /// `Command::mount` in production — these tests assert what the external
+    /// captures *inside* its own subcommand, which is where `rest` comes from.
     fn run(args: &[&str]) -> Result<ExternalRun, bpaf::ParseFailure> {
-        ExternalVerb::new("foo", "the foo plugin", BIN)
+        ExternalCommand::new("foo", "the foo plugin", BIN)
             .into_run_parser()
+            .to_options()
+            .command("foo")
             .to_options()
             .run_inner(args)
     }
@@ -239,25 +259,26 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn external_zero_status_is_success() {
-        assert_eq!(exit_from_status("foo", exited(0)), Ok(()));
+        assert_eq!(exit_from_status("foo", exited(0)), Ok(Success::OK));
     }
 
     #[test]
     #[cfg(unix)]
     fn external_nonzero_status_becomes_a_silent_exit_code() {
-        let e = exit_from_status("foo", exited(7)).expect_err("nonzero is a failure");
-        assert_eq!(e, Exit::Code(7));
-        assert_eq!(e.code(), 7);
-        assert!(e.message().is_none());
+        // The child ran and reported for itself, so this is a success carrying
+        // the child's code — nothing of hicli's is printed.
+        let s = exit_from_status("foo", exited(7)).expect("the child ran");
+        assert_eq!(s, Success::code(7));
+        assert_eq!(s.get(), 7);
     }
 
     #[test]
     #[cfg(unix)]
     fn external_killed_by_signal_is_128_plus_signal() {
         // SIGKILL: 128 + 9, matching what a shell reports for a signalled child.
-        let e = exit_from_status("foo", signalled(9)).expect_err("a signal death is a failure");
-        assert_eq!(e, Exit::Code(137));
-        assert_eq!(e.code(), 137);
+        let s = exit_from_status("foo", signalled(9)).expect("the child ran");
+        assert_eq!(s, Success::code(137));
+        assert_eq!(s.get(), 137);
     }
 
     #[test]
@@ -270,9 +291,9 @@ mod tests {
             bin: PathBuf::from(BIN),
             rest: Vec::new(),
         };
-        let e = Verb::<()>::run(Box::new(r), &()).expect_err("the binary cannot exist");
+        let e = r.run().expect_err("the binary cannot exist");
         assert_eq!(e.code(), 1);
-        let m = e.message().expect("a spawn failure is reported");
+        let m = e.message();
         assert!(m.contains("foo"), "message missing the name:\n{m}");
         assert!(m.contains(BIN), "message missing the path:\n{m}");
     }

@@ -1,0 +1,7 @@
+error: group_mod! takes one or more module declarations: group_mod! { /// help
+        pub mod event; }
+  --> tests/ui/group_mod_not_a_mod.rs:10:5
+   |
+10 | /     /// show status
+11 | |     pub fn status(_ctx: &Ctx) {}
+   | |________________________________^

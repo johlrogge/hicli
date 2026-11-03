@@ -4,6 +4,17 @@
 
 Accepted (2026-09-11)
 
+**Unaffected in substance by [ADR-004](004-function-first-verbs.md) (2026-09-16).**
+The scope rule — top-level command names only, applied to the command position
+only — is unchanged. What changed is where the registry comes from: `App`
+no longer accumulates names as `.leaf`/`.group` are called; `App::fold` derives
+`Vec<&'static str>` from the top-level `Vec<Command<Ctx>>` at fold time
+(`commands.iter().map(Command::name).collect()`), so there remains exactly one
+list and no way for it to disagree with the tree — the property this ADR
+already relied on, now harder to violate by construction.
+
+Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verbandi` → `hicli`, `#[verb]` → `#[command]`, `Verb` → `Invocation`, `VerbResult` → `Outcome`). The text below is kept exactly as written.
+
 ## Decision
 
 `App::names` remains a flat list of **top-level** command names (leaves, mounted

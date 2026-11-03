@@ -1,0 +1,5 @@
+error: #[derive(Arg)] cannot be generic: an argument type is concrete — `Arg::parser()` takes no parameters, so there is nothing to fix a type parameter with
+ --> tests/ui/arg_on_a_generic.rs:7:10
+  |
+7 | struct Id<T>(T);
+  |          ^^^

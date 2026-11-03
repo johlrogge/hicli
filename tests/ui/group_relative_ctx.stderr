@@ -1,0 +1,5 @@
+error: the context type of `create` is written relative to its module (`super::Ctx`); name this group's context with #[group(ctx = …)]
+  --> tests/ui/group_relative_ctx.rs:14:26
+   |
+14 |     pub fn create(_ctx: &super::Ctx) {}
+   |                          ^^^^^^^^^^
