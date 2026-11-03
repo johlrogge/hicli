@@ -21,6 +21,18 @@ repository = "https://github.com/johlrogge/hicli"
 readme = "README.md"
 keywords = ["cli", "subcommand", "bpaf", "argument", "parser"]
 categories = ["command-line-interface"]
+# Development tooling (agent config, devenv, task runner, workflow docs) is not
+# part of the published crate.
+exclude = [
+  ".claude/",
+  ".mcp.json",
+  "CLAUDE.md",
+  "devenv.*",
+  "justfile",
+  "RELEASING.md",
+  "ROADMAP.md",
+  "docs/sketches/",
+]
 
 [dependencies]
 bpaf = { version = "0.9.27", features = ["derive", "autocomplete"] }
