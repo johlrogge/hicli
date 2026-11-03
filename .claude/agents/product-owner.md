@@ -1,1 +1,1 @@
-/nix/store/0gl8bik0gx67zb3b2chs153wvjsf32r7-claude-agents-product-owner.md
+/nix/store/1rxycrvsmv122216d2qywigsjsmya76x-claude-agents-product-owner.md

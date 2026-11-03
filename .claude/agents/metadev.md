@@ -1,1 +1,1 @@
-/nix/store/hni5pl28krzpzgd026x9j63gdlcwyzc3-claude-agents-metadev.md
+/nix/store/0g7r71g63vqabm5zc9bc06vc6lbbdxx4-claude-agents-metadev.md

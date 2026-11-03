@@ -1,1 +1,1 @@
-/nix/store/1dbybj185ibiqhykb93ad285a3n22jrx-claude-commands-migrate.md
+/nix/store/23sdwy1faympa9kfkflq48ijg2j4c36j-claude-commands-migrate.md
