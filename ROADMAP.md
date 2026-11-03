@@ -9,17 +9,30 @@ remaining question is whether that model survives contact with a real CLI:
 replace moniker's `Cli`/enums/`dispatch()` match, keep `bases/cli` parser-free,
 and prove exit-code and `.feature` journey parity. `docs/sketches/moniker.rs`
 sketches the target shape. Group-level curried arguments (ADR-005's "Future
-work", `#[group(args = T)]`) stay deferred until moniker's migration shows
-they're actually needed, not built ahead of that evidence. Full design is in
+work", `#[group(args = T)]`) are now earned by mdma-cli (#1) and scheduled for
+0.2.0, see "Releases for mdma-cli" below. Full design is in
 `docs/PLAN.md`.
+
+## Releases for mdma-cli
+
+The mdma-cli evaluation (2026-11-03) filed issues #1–#18 against hicli as a clap
+replacement. The essentials are split across two releases:
+
+- **0.1.0:** help metadata and examples (#2, #9: ADR-008), completion scripts
+  (#12: ADR-009), values starting with `-` (#5: documented recipe), and the
+  release itself (#3).
+- **0.2.0:** group-level arguments (#1) and a group's default command (#4),
+  designed together (they reshape the group node), plus `?` on application
+  errors (#6) and `mk_ctx` seeing the selected command (#7).
+- **Unscheduled:** choice enums (#8), owned command names (#10), the
+  positionals-last check (#11), globals-aware completion (#13), and the
+  nice-to-haves #14–#18.
 
 ## Backlog
 
 <!-- Upcoming work, roughly prioritised. Refine against docs/PLAN.md as it lands. -->
 
 - First adopter: migrate moniker's CLI onto hicli
-- crates.io publish: verify the `hicli` and `hicli-macros` names are free, tag
-  `0.1.0` per `RELEASING.md`
 - Second/third adopters: mdma-cli, ctx
 - When the toolchain pin reaches Rust 1.99.0 (stable 2026-10-01): add
   `#[group] pub mod x;` as the preferred spelling, deprecate `group_mod!`

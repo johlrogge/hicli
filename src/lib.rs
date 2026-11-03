@@ -39,13 +39,19 @@
 //!   process, so `App::run` itself is covered by ordinary tests. The [`cli!`] /
 //!   [`cli_test!`] macros let tests read like the terminal.
 //! - **Typo suggestions.** On a usage error with no built-in `bpaf`
-//!   suggestion, a Levenshtein pass over the registered **top-level** command
-//!   names — applied to the command position only — appends a `did you mean`
-//!   hint. This gap-closer runs only on the run path ([`App::run`] /
+//!   suggestion, a Levenshtein pass over the listed (non-hidden) **top-level**
+//!   command names — applied to the command position only — appends a `did you
+//!   mean` hint. Aliases and hidden names are recognised as exact matches but
+//!   never suggested, so a hint never reveals what `--help` does not show. This
+//!   gap-closer runs only on the run path ([`App::run`] /
 //!   [`App::run_with_args`]); a usage error returned by [`App::parse`] carries
 //!   `bpaf`'s own suggestions, never hicli's hint.
 //!
-//! `hicli` re-exports [`bpaf`] so consumers pin a single version through it.
+//! `hicli` re-exports [`bpaf`] for its builder API (`hicli::bpaf::positional`
+//! and friends). A crate that uses `#[derive(Bpaf)]` also depends on `bpaf`
+//! directly — the derive expands to `::bpaf::…` paths that do not resolve
+//! through a re-export. `hicli` states the version it needs, and cargo unifies
+//! the two into one.
 //!
 //! # One word, four things
 //!
@@ -180,13 +186,57 @@ pub use bpaf;
 /// |---|---|
 /// | the ident, `_` → `-` (`add_admin` → `add-admin`) | the command's name; override it with `#[command(name = "…")]` |
 /// | the doc comment's first line | the one-line `help` **and** the heading of `app <cmd> --help` |
-/// | the rest of the doc comment | [`Command::details`] |
+/// | the rest of the doc comment, up to an examples heading | [`Command::details`] — prose, reflowed by `bpaf` |
+/// | a trailing `# Examples` / `Examples:` section | [`Command::footer`] — printed verbatim after the options |
+/// | `#[command(alias = "…")]`, repeatable | [`Command::alias`] — another spelling; not listed, path stays canonical |
+/// | `#[command(hide)]` | [`Command::hide`] — left out of help, completion and suggestions; still parses |
 /// | each **owned** parameter `p: T` | one argument type; its parser is `<T as Arg>::parser()`, composed in declaration order |
 /// | the single `&T` parameter | the context; `T` is the command's `Ctx`. Conventionally last, but first works too |
 /// | the return type | anything implementing [`IntoOutcome`]: `()`, [`Success`], [`Outcome`] or `Outcome<Success>` |
 ///
 /// A command with **no** `&T` parameter is generic over `Ctx`, so it can be
 /// mounted in any app.
+///
+/// # The doc comment has three slots
+///
+/// All of a command's help text lives in its doc comment (ADR-008): the first
+/// line is the **help**, the prose after it the **details**, and a trailing
+/// section headed by a line that is exactly `# Examples` or `Examples:` the
+/// **footer**:
+///
+/// ````ignore
+/// /// search the library
+/// ///
+/// /// Matches are printed newest first.
+/// ///
+/// /// # Examples
+/// ///
+/// /// ```sh
+/// /// mdma search --artist Bowie
+/// /// mdma search --added -7 --genre jazz
+/// /// ```
+/// #[command(alias = "s")]
+/// pub fn search(q: Query, ctx: &Ctx) -> Outcome { … }
+/// ````
+///
+/// renders, at the end of `mdma search --help`, after the options:
+///
+/// ```text
+/// Examples:
+///   mdma search --artist Bowie
+///   mdma search --added -7 --genre jazz
+/// ```
+///
+/// The body loses its code fences, its common indentation and its leading and
+/// trailing blank lines, and is indented by two; interior blank lines stay.
+/// The heading is printed as `Examples:` however it was spelled, and a heading
+/// with nothing under it is a compile error. `## Examples` is not the heading.
+///
+/// **Fence examples as ```` ```sh ````.** In a library crate rustdoc compiles
+/// an untagged ```` ``` ```` block, a ```` ```rust ```` block or an indented
+/// code block as a doctest — on private items too — and a shell command line
+/// is not Rust. Keep each example under 100 columns: `bpaf` wraps longer
+/// lines, and the continuation loses its indentation.
 ///
 /// The parameters are composed with `bpaf`'s `construct!` in declaration
 /// order, so `bpaf`'s rule applies: every argument struct containing a
@@ -320,7 +370,17 @@ pub use bpaf;
 ///   primitive such as `String`, reported by the trait itself with the newtype
 ///   to write;
 /// - **a pattern parameter** (`Words(w): Words`) — the handle's closure calls
-///   the function by naming its arguments; take `w: Words` and use `w.0`.
+///   the function by naming its arguments; take `w: Words` and use `w.0`;
+/// - **an examples heading with nothing under it**;
+/// - **any attribute key but `name`, `alias` and `hide`** — help, details,
+///   footer and usage all live in the doc comment, never in a key;
+/// - **`name` or `hide` given twice**;
+/// - **an alias that is empty, contains whitespace, starts with `-`, repeats
+///   another alias, or equals the command's own name**.
+///
+/// Two *siblings* answering to the same word — one's name is the other's
+/// alias, say — cannot be seen from one function, so that is a panic when the
+/// tree is folded ([`App::into_parser`] / `run`), like an empty group.
 pub use hicli_macros::command;
 
 /// Register a documented module as a group of commands — and leave the module
@@ -376,7 +436,10 @@ pub use hicli_macros::command;
 /// |---|---|
 /// | the ident, `_` → `-` (`add_admin` → `add-admin`) | the group's name. There is no `name = "…"` override |
 /// | the doc comment's first line | the one-line `help` **and** the heading of `app <group> --help` |
-/// | the rest of the doc comment | [`Command::details`] |
+/// | the rest of the doc comment, up to an examples heading | [`Command::details`] |
+/// | a trailing `# Examples` / `Examples:` section | [`Command::footer`], exactly as for [`#[command]`](macro@command) |
+/// | `#[group(alias = "…")]`, repeatable | [`Command::alias`] — another spelling of the group |
+/// | `#[group(hide)]` | [`Command::hide`] — left out of its parent's help, completion and suggestions; still parses |
 /// | every marked item in the body, **in source order** | the group's children |
 /// | the first `&T` among the children | the group's `Ctx` (see below) |
 ///
@@ -396,8 +459,8 @@ pub use hicli_macros::command;
 /// A group's handle has to name the `Ctx` of the [`Command`] it returns, and a
 /// `fn` cannot infer its return type. In order:
 ///
-/// 1. `#[group(ctx = T)]`, when you say so — the only argument the attribute
-///    takes;
+/// 1. `#[group(ctx = T)]`, when you say so (beside `alias` and `hide`, the
+///    attribute's only other keys);
 /// 2. otherwise the **first** `&T` in a depth-first, source-order walk of the
 ///    children: a group's context is whatever its commands already take;
 /// 3. otherwise the handle is **generic over `Ctx`**, exactly as a context-free
@@ -491,7 +554,11 @@ pub use hicli_macros::command;
 ///   refused where it is written. ([`group`](fn@group) still panics at fold
 ///   time for a hand-built one);
 /// - **`#[group]` on anything but a module**;
-/// - **any argument but `ctx = <Type>`**;
+/// - **any argument but `ctx = <Type>`, `alias = "…"` and `hide`**, and
+///   `ctx` or `hide` given twice;
+/// - **a bad alias** — by [`#[command]`](macro@command)'s rules, including one
+///   equal to the group's own name;
+/// - **an examples heading with nothing under it**;
 /// - **a module-relative context type** among the children;
 /// - **`#[group]` on a file module** (`#[group] pub mod event;`) — an
 ///   attribute on a `mod` declaration needs Rust 1.99. Until then the file form
@@ -531,7 +598,7 @@ pub use hicli_macros::group;
 /// ```text
 /// group_mod! {
 ///     <doc comment>
-///     [#[group(ctx = T)]] [#[cfg(…)]] [#[path = "…"]]
+///     [#[group(ctx = T, alias = "…", hide)]] [#[cfg(…)]] [#[path = "…"]]
 ///     <visibility> mod <ident> ;
 ///     …
 /// }
@@ -539,10 +606,10 @@ pub use hicli_macros::group;
 ///
 /// The body is **exactly** the item `#[group]` will be written on from Rust
 /// 1.99, which is what makes the migration *delete the wrapper, keep the item*
-/// — including the context override, which is written as `#[group(ctx = T)]`
-/// **on the declaration** rather than as an argument to `group_mod!`. That
-/// attribute is read and then removed; everything else on the declaration is
-/// re-emitted untouched.
+/// — including the context override, aliases and `hide`, which are written as
+/// `#[group(…)]` **on the declaration** rather than as an argument to
+/// `group_mod!`. That attribute is read and then removed; everything else on
+/// the declaration is re-emitted untouched.
 ///
 /// There is no argument to the invocation itself, and therefore no place to put
 /// a `#[cfg]` for all of it: **a `#[cfg]` goes on each declaration**, where it
@@ -582,8 +649,8 @@ pub use hicli_macros::group;
 /// # Rejections
 ///
 /// [`#[group]`](macro@group)'s rejections all apply — no doc comment, an empty
-/// group, a module-relative context type, an argument that is not
-/// `ctx = <Type>` — plus:
+/// group, a module-relative context type, an unknown key, a bad alias, an
+/// empty examples section — plus:
 ///
 /// - **the file was not found** — the message lists every candidate it tried,
 ///   and notes the top-level-only rule above;
@@ -661,7 +728,9 @@ pub use hicli_macros::commands;
 
 mod app;
 mod command;
+mod completion;
 mod external;
+mod help;
 mod invocation;
 mod macros;
 
@@ -671,6 +740,7 @@ pub mod testing;
 
 pub use app::{exit_code_for, App};
 pub use command::{command, external, group, Command, IntoCommand};
+pub use completion::{completion_script, Shell, UnknownShell};
 pub use external::{ArgSchema, ArgSpec, ExternalCommand};
 pub use invocation::Invocation;
 pub use outcome::{Failure, IntoOutcome, Outcome, Success};

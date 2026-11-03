@@ -1,0 +1,5 @@
+error: alias `event` is this group's own name: an alias is another name
+ --> tests/ui/group_alias_is_name.rs:9:17
+  |
+9 | #[group(alias = "event")]
+  |                 ^^^^^^^

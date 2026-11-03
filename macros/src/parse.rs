@@ -9,32 +9,42 @@ use quote::format_ident;
 use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, Error, FnArg, Ident, ItemFn, LitStr, Pat, Result, Signature, Token, Type};
 
-use crate::shared::{cfg_attrs, dashed, handle_ident, read_doc, COMMAND_NEEDS_DOC};
+use crate::shared::{
+    cfg_attrs, check_spelling, dashed, handle_ident, parse_keys, read_doc, CommandMeta, Spelling,
+    COMMAND_NEEDS_DOC,
+};
 
-/// What `#[command]` itself was given: nothing, or `name = "..."`.
+/// The message for an argument `#[command]` does not take.
+const UNKNOWN_ARG: &str =
+    "#[command] takes `name = \"...\"`, `alias = \"...\"` (repeatable) and `hide`";
+
+/// What `#[command]` itself was given: `name = "..."`, `alias = "..."`
+/// (repeatable) and `hide`, each optional.
+#[derive(Default)]
 pub(crate) struct CommandArgs {
     /// An explicit command name, overriding the ident.
     name: Option<LitStr>,
+    /// The aliases and the visibility, read by the rules `#[group]` shares.
+    meta: CommandMeta,
 }
 
 impl Parse for CommandArgs {
     fn parse(input: ParseStream) -> Result<Self> {
-        if input.is_empty() {
-            return Ok(CommandArgs { name: None });
-        }
-        let key: Ident = input.parse()?;
-        if key != "name" {
-            return Err(Error::new_spanned(
-                &key,
-                "#[command] takes one optional argument: `name = \"...\"`",
-            ));
-        }
-        let _: Token![=] = input.parse()?;
-        let name: LitStr = input.parse()?;
-        if !input.is_empty() {
-            return Err(input.error("#[command] takes one optional argument: `name = \"...\"`"));
-        }
-        Ok(CommandArgs { name: Some(name) })
+        let mut name: Option<LitStr> = None;
+        let meta = parse_keys(input, UNKNOWN_ARG, |key, input| {
+            if key != "name" {
+                return Ok(false);
+            }
+            if name.is_some() {
+                return Err(Error::new_spanned(key, "`name` is given twice"));
+            }
+            let _: Token![=] = input.parse()?;
+            let lit: LitStr = input.parse()?;
+            check_spelling(&lit, Spelling::Name)?;
+            name = Some(lit);
+            Ok(true)
+        })?;
+        Ok(CommandArgs { name, meta })
     }
 }
 
@@ -53,8 +63,14 @@ pub(crate) struct CommandFn {
     pub(crate) name: String,
     /// The one-line help: the doc comment's first line.
     pub(crate) help: String,
-    /// The rest of the doc comment, if any.
+    /// The rest of the doc comment up to an examples heading, if any.
     pub(crate) details: Option<String>,
+    /// The examples section, laid out for verbatim rendering, if any.
+    pub(crate) footer: Option<String>,
+    /// Every `alias = "…"`, in source order.
+    pub(crate) aliases: Vec<LitStr>,
+    /// Whether `hide` was given.
+    pub(crate) hide: bool,
     /// The function's own ident — what the handle's closure calls.
     pub(crate) ident: Ident,
     /// The handle's ident: `__hicli_` + the fn's ident, unescaped.
@@ -82,16 +98,20 @@ impl CommandFn {
     pub(crate) fn from_item(args: CommandArgs, item: ItemFn) -> Result<CommandFn> {
         check_signature(&item.sig)?;
         let params = Params::read(&item.sig)?;
-        let (help, details) = read_doc(&item.attrs, &item.sig, COMMAND_NEEDS_DOC)?;
+        let doc = read_doc(&item.attrs, &item.sig, COMMAND_NEEDS_DOC)?;
         let ident = item.sig.ident.clone();
         let name = match args.name {
             Some(n) => n.value(),
             None => dashed(&ident),
         };
+        args.meta.check_name(&name, "command")?;
         Ok(CommandFn {
             name,
-            help,
-            details,
+            help: doc.help,
+            details: doc.details,
+            footer: doc.footer,
+            aliases: args.meta.aliases,
+            hide: args.meta.hide.is_some(),
             handle: handle_ident(&ident),
             cfg_attrs: cfg_attrs(&item.attrs),
             ident,
@@ -239,8 +259,92 @@ mod tests {
     /// Read `src` as a command and report `(command name, handle ident)`.
     fn names_of(src: &str) -> (String, String) {
         let f: ItemFn = syn::parse_str(src).expect("parses");
-        let c = CommandFn::from_item(CommandArgs { name: None }, f).expect("is a command");
+        let c = CommandFn::from_item(CommandArgs::default(), f).expect("is a command");
         (c.name, c.handle.to_string())
+    }
+
+    /// Read `src` as a command with `attr` as `#[command]`'s own arguments.
+    fn command_with(attr: &str, src: &str) -> Result<CommandFn> {
+        let args: CommandArgs = syn::parse_str(attr)?;
+        let f: ItemFn = syn::parse_str(src).expect("parses");
+        CommandFn::from_item(args, f)
+    }
+
+    /// The error `#[command(attr)]` raises on a plain documented function.
+    fn rejection(attr: &str) -> String {
+        match command_with(attr, "/// list things\nfn list() {}") {
+            Ok(_) => panic!("`{attr}` was accepted"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn every_key_is_read() {
+        let c = command_with(
+            "name = \"show\", alias = \"ls\", hide, alias = \"l\"",
+            "/// list things\nfn list() {}",
+        )
+        .expect("is a command");
+        assert_eq!(c.name, "show");
+        let aliases: Vec<String> = c.aliases.iter().map(LitStr::value).collect();
+        assert_eq!(aliases, ["ls", "l"]);
+        assert!(c.hide);
+
+        let c = command_with("", "/// list things\nfn list() {}").expect("is a command");
+        assert!(c.aliases.is_empty());
+        assert!(!c.hide);
+    }
+
+    #[test]
+    fn the_doc_comment_fills_the_footer() {
+        let c = command_with(
+            "",
+            "/// list things\n///\n/// # Examples\n///\n/// ```sh\n/// demo list\n/// ```\nfn list() {}",
+        )
+        .expect("is a command");
+        assert_eq!(c.footer.as_deref(), Some("Examples:\n  demo list"));
+    }
+
+    #[test]
+    fn each_rejection_is_raised() {
+        assert_eq!(rejection("help = \"x\""), UNKNOWN_ARG);
+        assert_eq!(
+            rejection("name = \"a\", name = \"b\""),
+            "`name` is given twice"
+        );
+        assert_eq!(rejection("hide, hide"), "`hide` is given twice");
+        assert_eq!(rejection("name = \"\""), "a name cannot be empty");
+        assert_eq!(
+            rejection("name = \"sh ow\""),
+            "a name is one word: it cannot contain whitespace"
+        );
+        assert_eq!(
+            rejection("name = \"--show\""),
+            "a name is a command name, not a flag: it cannot start with `-`"
+        );
+        assert_eq!(rejection("alias = \"\""), "an alias cannot be empty");
+        assert_eq!(
+            rejection("alias = \"a b\""),
+            "an alias is one word: it cannot contain whitespace"
+        );
+        assert_eq!(
+            rejection("alias = \"-l\""),
+            "an alias is a command name, not a flag: it cannot start with `-`"
+        );
+        assert_eq!(
+            rejection("alias = \"ls\", alias = \"ls\""),
+            "alias `ls` is given twice"
+        );
+        // the derived name …
+        assert_eq!(
+            rejection("alias = \"list\""),
+            "alias `list` is this command's own name: an alias is another name"
+        );
+        // … and an explicit one
+        assert_eq!(
+            rejection("name = \"show\", alias = \"show\""),
+            "alias `show` is this command's own name: an alias is another name"
+        );
     }
 
     #[test]
@@ -267,7 +371,7 @@ mod tests {
             "/// only here\n#[cfg(unix)]\n#[cfg_attr(test, allow(unused))]\n#[inline]\nfn go() {}",
         )
         .expect("parses");
-        let c = CommandFn::from_item(CommandArgs { name: None }, f).expect("is a command");
+        let c = CommandFn::from_item(CommandArgs::default(), f).expect("is a command");
         let copied: Vec<String> = c
             .cfg_attrs
             .iter()

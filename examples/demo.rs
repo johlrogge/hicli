@@ -7,6 +7,10 @@
 //! cargo run --example demo -- event --help
 //! cargo run --example demo -- event create ./dir "My Event"
 //! cargo run --example demo -- event list
+//! cargo run --example demo -- event ls          # an alias: same command
+//! cargo run --example demo -- event create --help   # examples after the options
+//! cargo run --example demo -- debug-ctx         # hidden: unlisted, still runs
+//! cargo run --example demo -- --version
 //! cargo run --example demo -- event audience --help
 //! cargo run --example demo -- event audience define ./dir Friends --seal-roster
 //! cargo run --example demo -- id create
@@ -143,9 +147,19 @@ mod event {
     /// create an event
     ///
     /// The event directory is created if it does not exist.
+    ///
+    /// # Examples
+    ///
+    /// ```sh
+    /// demo event create ./summer "Summer Party"
+    /// demo --home /srv event create ./board Board meeting
+    /// ```
     // ^ the first line is the one-line help (the parent's listing *and* the
-    //   heading of `--help`); the rest becomes the long description. A command
-    //   with no doc comment is a compile error — help is mandatory.
+    //   heading of `--help`); the prose after it becomes the long description;
+    //   the `# Examples` section becomes a footer, printed verbatim after the
+    //   options. A command with no doc comment is a compile error — help is
+    //   mandatory. Fence examples as ```sh: in a library crate rustdoc would
+    //   try to compile an untagged block as Rust.
     #[command]
     pub fn create(dir: EventDir, name: EventName, ctx: &Ctx) -> Outcome {
         // Each owned parameter is one argument type, parsed through its own
@@ -166,9 +180,11 @@ mod event {
     }
 
     // A command with no owned parameters takes no arguments at all, and a
-    // one-line doc comment leaves it with no long description.
+    // one-line doc comment leaves it with no long description. `alias` is
+    // another spelling: `demo event ls` runs this, its path is still
+    // `["event", "list"]`, and `--help` lists only `list`.
     /// list events
-    #[command]
+    #[command(alias = "ls")]
     pub fn list(ctx: &Ctx) -> Outcome {
         println!("[home={}] no events yet", ctx.home);
         Ok(())
@@ -240,6 +256,14 @@ fn status(ctx: &Ctx) {
     println!("[home={}] ok", ctx.home);
 }
 
+// `hide` keeps a command out of `--help`, completion and `did you mean`, but
+// typed exactly it still runs: `demo debug-ctx`.
+/// print the context, for debugging
+#[command(hide)]
+fn debug_ctx(ctx: &Ctx) {
+    println!("home = {:?}", ctx.home);
+}
+
 // ---------------------------------------------------------------------------
 // Assembly
 // ---------------------------------------------------------------------------
@@ -262,11 +286,17 @@ fn foo() -> ExternalCommand {
 /// `#[command]` or `#[group]` wrote beside the item of that name. A group and a
 /// command are indistinguishable here, which is the point — `event` is a
 /// module, `status` is a function, and both are just names in a list.
+///
+/// The app's own description and version are set on the composition root:
+/// `demo --help` opens with the description, and `demo --version` / `demo -V`
+/// print the version and exit 0.
 fn app() -> App<Globals, Ctx> {
     app! {
         globals: globals(),
-        commands: [event, id, status, hicli::external(foo())],
+        commands: [event, id, status, debug_ctx, hicli::external(foo())],
     }
+    .about("A small end-to-end hicli CLI.")
+    .version(env!("CARGO_PKG_VERSION"))
 }
 
 fn main() -> ExitCode {

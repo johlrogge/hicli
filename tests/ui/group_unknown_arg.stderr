@@ -1,4 +1,4 @@
-error: #[group] takes one optional argument: `ctx = <Type>`
+error: #[group] takes `ctx = <Type>`, `alias = "..."` (repeatable) and `hide`
  --> tests/ui/group_unknown_arg.rs:9:9
   |
 9 | #[group(name = "events")]

@@ -1,0 +1,5 @@
+error: alias `status` is this command's own name: an alias is another name
+ --> tests/ui/command_alias_is_name.rs:8:19
+  |
+8 | #[command(alias = "status")]
+  |                   ^^^^^^^^

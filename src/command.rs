@@ -61,7 +61,20 @@ pub struct Command<Ctx> {
     name: &'static str,
     help: String,
     details: Option<String>,
+    footer: Option<String>,
+    aliases: Vec<&'static str>,
+    listing: Listing,
     kind: Kind<Ctx>,
+}
+
+/// Whether a command shows up in help, completion and suggestions. Either way
+/// it parses.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Listing {
+    /// The default: listed everywhere.
+    Listed,
+    /// Set by [`Command::hide`]: typed exactly, it works; nothing advertises it.
+    Hidden,
 }
 
 /// What a [`Command`] actually is. Private: a group and a leaf are one type to
@@ -117,11 +130,10 @@ where
     R: IntoOutcome,
     Ctx: 'static,
 {
-    Command {
+    Command::new(
         name,
-        help: help.into(),
-        details: None,
-        kind: Kind::Leaf(Box::new(move |at: Mount| {
+        help.into(),
+        Kind::Leaf(Box::new(move |at: Mount| {
             let path = at.path;
             parser
                 .map(move |args| {
@@ -130,7 +142,7 @@ where
                 })
                 .boxed()
         })),
-    }
+    )
 }
 
 /// A group of commands, mounted under `name`.
@@ -165,12 +177,7 @@ pub fn group<Ctx: 'static>(
     help: impl Into<String>,
     children: Vec<Command<Ctx>>,
 ) -> Command<Ctx> {
-    Command {
-        name,
-        help: help.into(),
-        details: None,
-        kind: Kind::Group(children),
-    }
+    Command::new(name, help.into(), Kind::Group(children))
 }
 
 /// A git-style external subcommand as a [`Command`].
@@ -180,25 +187,106 @@ pub fn group<Ctx: 'static>(
 /// everywhere else in hicli, without the binary ever being executed to find
 /// out what it is.
 pub fn external<Ctx: 'static>(ext: ExternalCommand) -> Command<Ctx> {
-    Command {
-        name: ext.name(),
-        help: ext.help().to_string(),
-        details: None,
-        kind: Kind::External(ext),
-    }
+    Command::new(ext.name(), ext.help().to_string(), Kind::External(ext))
 }
 
 impl<Ctx> Command<Ctx> {
+    /// A listed command with no details, footer or aliases.
+    fn new(name: &'static str, help: String, kind: Kind<Ctx>) -> Self {
+        Command {
+            name,
+            help,
+            details: None,
+            footer: None,
+            aliases: Vec::new(),
+            listing: Listing::Listed,
+            kind,
+        }
+    }
+
     /// Attach a longer description, shown as the header of
     /// `app <cmd> --help` under the one-line `help`.
+    ///
+    /// `bpaf` reflows it as prose: lines are joined, and plain `--help` shows
+    /// only its first paragraph. For text that must keep its lines, use
+    /// [`footer`](Command::footer).
     pub fn details(mut self, details: impl Into<String>) -> Self {
         self.details = Some(details.into());
+        self
+    }
+
+    /// Attach a footer, printed at the end of `app <cmd> --help`, after the
+    /// options — **verbatim**, unlike [`details`](Command::details): every line
+    /// on its own line, indentation and blank lines kept, in plain `--help` as
+    /// well as `--help --help`.
+    ///
+    /// This is the slot a doc comment's `# Examples` section fills under
+    /// [`#[command]`](macro@crate::command) and [`#[group]`](macro@crate::group).
+    /// Keep its lines under 100 columns: a longer one wraps, and the
+    /// continuation loses its indentation.
+    ///
+    /// ```
+    /// # use hicli::App;
+    /// # use hicli::bpaf::pure;
+    /// let search = hicli::command("search", "search the library", pure(()), |(), _: &()| {})
+    ///     .footer("Examples:\n  mdma search --artist Bowie\n  mdma search --added -7");
+    /// let help = App::new(pure(()))
+    ///     .command(search)
+    ///     .parse(["search", "--help"])
+    ///     .err()
+    ///     .expect("--help short-circuits")
+    ///     .unwrap_stdout();
+    /// assert!(help.ends_with("Examples:\n  mdma search --artist Bowie\n  mdma search --added -7\n"));
+    /// ```
+    pub fn footer(mut self, footer: impl Into<String>) -> Self {
+        self.footer = Some(footer.into());
+        self
+    }
+
+    /// Accept `alias` on the command line as another spelling of this command.
+    ///
+    /// Repeatable. An alias parses exactly like the name — the
+    /// [`Invocation::path`](crate::Invocation::path) is still the canonical
+    /// name — but is not listed in help or offered by completion. It is an
+    /// exact match for the `did you mean` gap-closer, never a suggestion.
+    ///
+    /// Two siblings sharing a spelling — name or alias — panic when the tree
+    /// is folded.
+    ///
+    /// # Panics
+    ///
+    /// Here, if `alias` is this command's own name: it would answer to the
+    /// same word twice. (`#[command]` and `#[group]` refuse it at compile
+    /// time.)
+    pub fn alias(mut self, alias: &'static str) -> Self {
+        assert!(
+            alias != self.name,
+            "a command's alias equals its own name: `{alias}`"
+        );
+        self.aliases.push(alias);
+        self
+    }
+
+    /// Leave this command out of help, completion and suggestions. Typed
+    /// exactly — by its name or an alias — it still parses and runs.
+    pub fn hide(mut self) -> Self {
+        self.listing = Listing::Hidden;
         self
     }
 
     /// The command's name, as it appears on the command line.
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// Every word this command answers to: its name, then its aliases.
+    pub(crate) fn spellings(&self) -> impl Iterator<Item = &'static str> + '_ {
+        std::iter::once(self.name).chain(self.aliases.iter().copied())
+    }
+
+    /// Whether help, completion and suggestions may mention this command.
+    pub(crate) fn is_listed(&self) -> bool {
+        self.listing == Listing::Listed
     }
 }
 
@@ -213,12 +301,16 @@ impl<Ctx: 'static> Command<Ctx> {
     ///
     /// # Panics
     ///
-    /// Panics if this command is a group with no children.
+    /// Panics if this command is a group with no children, or a group with two
+    /// children sharing a spelling.
     pub(crate) fn mount(self, parent: &Mount) -> InvocationParser<Ctx> {
         let Command {
             name,
             help,
             details,
+            footer,
+            aliases,
+            listing,
             kind,
         } = self;
         let at = parent.child(name);
@@ -229,12 +321,23 @@ impl<Ctx: 'static> Command<Ctx> {
             }),
             Kind::External(ext) => external_parser(ext, at.path),
         };
-        let opts = inner.to_options().descr(help.as_str());
-        let opts = match &details {
-            Some(d) => opts.header(d.as_str()),
-            None => opts,
-        };
-        opts.command(name).help(help.as_str()).boxed()
+        let mut opts = inner.to_options().descr(help.as_str());
+        if let Some(d) = &details {
+            opts = opts.header(d.as_str());
+        }
+        if let Some(f) = &footer {
+            opts = opts.footer(crate::help::verbatim(f));
+        }
+        // Always `long`, never `short`: an alias is a whole word, and `long`
+        // is the spelling `bpaf` matches a one-character command by too.
+        let mut cmd = opts.command(name).help(help.as_str());
+        for alias in aliases {
+            cmd = cmd.long(alias);
+        }
+        match listing {
+            Listing::Listed => cmd.boxed(),
+            Listing::Hidden => cmd.hide().boxed(),
+        }
     }
 }
 
@@ -243,10 +346,28 @@ impl<Ctx: 'static> Command<Ctx> {
 /// The first branch that matches wins — this is what replaces the central
 /// `match`: every child folds one more command into the alternative. `None`
 /// when there are no children; the caller decides what that means.
+///
+/// # Panics
+///
+/// Panics if two children share a spelling — a name or an alias — because
+/// the second could never be reached by it.
 pub(crate) fn alternative<Ctx: 'static>(
     children: Vec<Command<Ctx>>,
     at: &Mount,
 ) -> Option<InvocationParser<Ctx>> {
+    let mut seen: Vec<&'static str> = Vec::new();
+    for spelling in children.iter().flat_map(Command::spellings) {
+        if seen.contains(&spelling) {
+            let place = match at.path.as_slice() {
+                [] => "at the top level".to_string(),
+                path => format!("in hicli::group `{}`", path.join(" ")),
+            };
+            panic!(
+                "two commands answer to `{spelling}` {place}; give each its own name and aliases"
+            );
+        }
+        seen.push(spelling);
+    }
     let mut acc: Option<InvocationParser<Ctx>> = None;
     for child in children {
         let next = child.mount(at);
@@ -361,6 +482,78 @@ mod tests {
         let c: Command<()> =
             command("apply", "apply something", pure(()), |(), _c: &()| {}).details("at length");
         assert_eq!(c.details.as_deref(), Some("at length"));
+    }
+
+    #[test]
+    fn an_alias_parses_with_the_canonical_path() {
+        let c = group(
+            "event",
+            "manage events",
+            vec![command("list", "list events", pure(()), |(), _c: &()| {})
+                .alias("ls")
+                .alias("l")],
+        )
+        .alias("e");
+        assert_eq!(parse(c, &["e", "ls"]).path(), ["event", "list"]);
+        let c = command("list", "list events", pure(()), |(), _c: &()| {}).alias("l");
+        assert_eq!(parse(c, &["l"]).path(), ["list"]);
+    }
+
+    #[test]
+    fn a_hidden_command_parses_and_dispatches() {
+        let c = command("secret", "do it quietly", pure(7u8), |n: u8, _c: &()| {
+            Success::code(n)
+        })
+        .hide();
+        assert!(!c.is_listed());
+        let invocation = parse(c, &["secret"]);
+        assert_eq!(invocation.path(), ["secret"]);
+        assert_eq!(invocation.run(&()), Ok(Success::code(7)));
+    }
+
+    #[test]
+    fn spellings_are_the_name_then_the_aliases() {
+        let c: Command<()> = command("list", "list", pure(()), |(), _c: &()| {}).alias("ls");
+        assert_eq!(c.spellings().collect::<Vec<_>>(), ["list", "ls"]);
+        assert!(c.is_listed());
+    }
+
+    #[test]
+    #[should_panic(expected = "two commands answer to `ls` in hicli::group `event`")]
+    fn siblings_sharing_a_spelling_cannot_be_mounted() {
+        let c: Command<()> = group(
+            "event",
+            "manage events",
+            vec![
+                command("list", "list events", pure(()), |(), _c: &()| {}).alias("ls"),
+                command("ls", "list differently", pure(()), |(), _c: &()| {}),
+            ],
+        );
+        let _ = c.mount(&Mount::root());
+    }
+
+    #[test]
+    #[should_panic(expected = "a command's alias equals its own name: `list`")]
+    fn an_alias_equal_to_the_name_panics() {
+        let _: Command<()> =
+            command("list", "list events", pure(()), |(), _c: &()| {}).alias("list");
+    }
+
+    #[test]
+    #[should_panic(expected = "two commands answer to `s` at the top level")]
+    fn top_level_siblings_sharing_an_alias_cannot_be_folded() {
+        let children: Vec<Command<()>> = vec![
+            command("status", "show status", pure(()), |(), _c: &()| {}).alias("s"),
+            command("sync", "sync up", pure(()), |(), _c: &()| {}).alias("s"),
+        ];
+        let _ = alternative(children, &Mount::root());
+    }
+
+    #[test]
+    fn footer_is_optional_and_kept() {
+        let c: Command<()> =
+            command("apply", "apply something", pure(()), |(), _c: &()| {}).footer("Examples:");
+        assert_eq!(c.footer.as_deref(), Some("Examples:"));
     }
 
     #[test]

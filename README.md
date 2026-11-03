@@ -8,8 +8,10 @@ Say it out loud (*hej cli*, if you are Swedish about it), or read it as *hi-fi �
 hi-cli*: a high-fidelity command-line interface rendered from the code you
 already have.
 
-> **Status:** v1 is implemented and covered by an in-process test suite. The crate is
-> not yet published to crates.io, and the API may still break before the first release.
+> **Status:** v1 is implemented and covered by an in-process test suite. The source is
+> public at [github.com/johlrogge/hicli](https://github.com/johlrogge/hicli). 0.1.0 is
+> the first release, published to crates.io as `hicli` and `hicli-macros`. Before
+> 1.0, a minor version may carry breaking changes.
 
 ## The idea
 
@@ -224,9 +226,15 @@ That is the whole thing: `app event create ./ev "Summer Party"`, `app wallet car
 
 - **The name** is the ident, `_` → `-` (`add_admin` → `add-admin`); a command can
   override it with `#[command(name = "…")]`, a group cannot.
+- **Another spelling, or none at all,** comes from the same two keys on both
+  attributes: `#[command(alias = "ls")]` / `#[group(alias = "…")]` (repeatable) adds an
+  unlisted alias — the canonical path never changes — and `#[command(hide)]` /
+  `#[group(hide)]` drops a command or group out of `--help`, completion and
+  suggestions while it still runs when typed exactly.
 - **The help** is the doc comment — first line for the one-line listing and the
-  `--help` heading, the rest for the long description. **A `#[command]` or `#[group]`
-  without a doc comment is a compile error.**
+  `--help` heading, the rest for the long description, and a trailing `# Examples`
+  section (fence it ```` ```sh ````) rendered verbatim after the options however it is
+  headed. **A `#[command]` or `#[group]` without a doc comment is a compile error.**
 - **The arguments** are the command's owned parameters, each a type implementing
   `Arg` — ordinarily `#[derive(Bpaf, Arg)]`. `EventDir` above is shared by three
   commands: an argument is a type, written once, helped once, completed once,
@@ -245,6 +253,17 @@ That is the whole thing: `app event create ./ev "Summer Party"`, `app wallet car
 - **The return** is anything implementing `IntoOutcome`: `()`, `Success`,
   `Outcome` (`= Result<(), Failure>`) or `Outcome<Success>`. Usage failures
   exit 2, runtime failures 1, a `Success` carries its own code and prints nothing.
+
+The app itself, not a command, carries two more things, set on the composition root:
+`App::about(..)` is the text printed above `Usage:`, and
+`App::version(env!("CARGO_PKG_VERSION"))` wires `--version`/`-V` to print it and exit
+0 (`app! { … }.about(..).version(..)` reads fine). Installable completion is the same
+idea one level up: `hicli::completion_script(Shell, bin) -> String` renders the
+bash/zsh/fish script for a binary name, which you wire to a hidden command of your
+own. See
+[`docs/adr/008-command-metadata-and-help-layout.md`](docs/adr/008-command-metadata-and-help-layout.md)
+and
+[`docs/adr/009-completion-scripts-are-rendered-by-hicli.md`](docs/adr/009-completion-scripts-are-rendered-by-hicli.md).
 
 One word, four things, in three namespaces: `Command<Ctx>` (the tree node),
 `hicli::command` (the function that builds a leaf), `#[command]` (the attribute)
@@ -351,7 +370,7 @@ it), and returns the candidate values a shell would have offered.
 
 ## Rules and papercuts
 
-Twelve things that will otherwise bite you, stated plainly:
+Thirteen things that will otherwise bite you, stated plainly:
 
 1. **Your crate needs its own `bpaf` dependency** — `bpaf = "0.9"`, no features.
    `#[derive(Bpaf)]` expands to `::bpaf::…` paths, which only resolve against your
@@ -459,6 +478,14 @@ Twelve things that will otherwise bite you, stated plainly:
 12. **`Globals` is not an `Arg`, and must not derive it.** Globals are composed at the
     top level by `App::new`, never as a command's parameter, so a `Globals` type never
     goes through `Arg::parser` — deriving `Arg` on it would compile and never run.
+
+13. **An option value that starts with `-` (`--since -7`) needs the `adjacent` + `any`
+    pattern, not a plain `argument`.** `bpaf` tokenises `-7` as the short flag `-7`
+    before any parser runs, so a plain `argument` accepts `--since=-7` but rejects the
+    separate-word spelling. The recipe — the flag and an `any` item glued together with
+    `adjacent`, with the separate-word branch `hide()`n so `--help` still shows one
+    `--since=DAYS` line — is written out on `Arg`'s own docs (`src/arg.rs`) and pinned
+    by `tests/hyphen_values.rs`.
 
 A missing `#[derive(Bpaf)]` on a type named `Id` produces one extra, unrelated-looking
 line of rustc noise: it is also the name of `std::process::id`, so the "cannot find

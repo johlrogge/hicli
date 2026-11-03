@@ -69,7 +69,10 @@ Run `just ci` before considering any change done.
   1.99), `commands!` (a bare path names a handle), `Arg` + `#[derive(Arg)]` +
   `#[arg(complete = …)]`/`files`/`dirs` (an argument is a type that parses
   itself, and completion attaches to that type once and is inherited by every
-  command that takes it) — because moniker's pain justified each. Deferred until
+  command that takes it) — because moniker's pain justified each — and the
+  `alias`/`hide` keys, the doc comment's `# Examples` footer plus
+  `App::about`/`App::version` (ADR-008), and `completion_script` (ADR-009),
+  because mdma-cli's migration from clap justified them. Deferred until
   the next real consumer's pain justifies them: `#[group] pub mod x;` as the
   direct spelling (blocked on the toolchain pin reaching Rust 1.99.0),
   group-level currying (`#[group(args = T)]`), a field-composing

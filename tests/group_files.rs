@@ -86,9 +86,10 @@ group_mod! {
     pub mod event;
 
     // `id`'s command names its context as `super::Ctx`, which cannot be lifted
-    // into this scope by token — so the group says what it is.
+    // into this scope by token — so the group says what it is. Its alias is
+    // read off the same attribute, which is then removed.
     /// identity
-    #[group(ctx = Ctx)]
+    #[group(ctx = Ctx, alias = "ident")]
     pub mod id;
 
     // An author-written `#[path]` wins, and is relative to *this* file's
@@ -147,6 +148,14 @@ fn a_declared_context_type_is_the_groups_context() {
     assert_eq!(c.name(), "id");
 
     let (_g, invocation) = app().parse(cli! { id create }).expect("parses");
+    assert_eq!(invocation.path(), ["id", "create"]);
+}
+
+#[test]
+fn a_declarations_alias_reaches_the_file_group() {
+    // `#[group(alias = …)]` inside `group_mod!` means what it means on an
+    // inline module: another spelling, the canonical path.
+    let (_g, invocation) = app().parse(cli! { ident create }).expect("parses");
     assert_eq!(invocation.path(), ["id", "create"]);
 }
 

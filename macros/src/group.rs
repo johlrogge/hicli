@@ -33,19 +33,21 @@ use std::path::Path;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::parse::{Parse, ParseStream, Parser};
-use syn::{Attribute, Error, Ident, Item, ItemMod, Meta, Result, Token, Type};
+use syn::{Attribute, Error, Ident, Item, ItemMod, LitStr, Meta, Result, Token, Type};
 
 use crate::ctx::{self, Ctx, Outline};
 use crate::discover::{children_of, parse_items, Child};
+use crate::expand::metadata;
 use crate::fs::Fs;
 use crate::resolve::{resolve as resolve_file, show};
 use crate::shared::{
-    cfg_attrs, dashed, handle_doc, handle_ident, marks, path_attr, read_doc, unraw_name,
-    GROUP_NEEDS_DOC,
+    cfg_attrs, dashed, handle_doc, handle_ident, marks, parse_keys, path_attr, read_doc,
+    unraw_name, CommandMeta, GROUP_NEEDS_DOC,
 };
 
-/// The message for an argument that is not `ctx = <Type>` (D10).
-const UNKNOWN_ARG: &str = "#[group] takes one optional argument: `ctx = <Type>`";
+/// The message for an argument `#[group]` does not take (D10).
+const UNKNOWN_ARG: &str =
+    "#[group] takes `ctx = <Type>`, `alias = \"...\"` (repeatable) and `hide`";
 
 /// The message for `#[group]` on anything but a module (D9).
 const NOT_A_MODULE: &str = "#[group] goes on a module: #[group] pub mod event { … }";
@@ -72,29 +74,31 @@ pub(crate) enum Source<'a> {
     Unknown(&'a [String]),
 }
 
-/// What `#[group]` itself was given: nothing, or `ctx = <Type>`.
+/// What `#[group]` itself was given: `ctx = <Type>`, `alias = "…"`
+/// (repeatable) and `hide`, each optional.
+#[derive(Default)]
 pub(crate) struct GroupArgs {
     /// The context type, said out loud instead of lifted from a child.
     ctx: Option<Type>,
+    /// The aliases and the visibility, read by the rules `#[command]` shares.
+    meta: CommandMeta,
 }
 
 impl Parse for GroupArgs {
     fn parse(input: ParseStream) -> Result<Self> {
-        if input.is_empty() {
-            return Ok(GroupArgs { ctx: None });
-        }
-        let key: Ident = input
-            .parse()
-            .map_err(|e| Error::new(e.span(), UNKNOWN_ARG))?;
-        if key != "ctx" {
-            return Err(Error::new_spanned(&key, UNKNOWN_ARG));
-        }
-        let _: Token![=] = input.parse()?;
-        let ctx: Type = input.parse()?;
-        if !input.is_empty() {
-            return Err(input.error(UNKNOWN_ARG));
-        }
-        Ok(GroupArgs { ctx: Some(ctx) })
+        let mut ctx: Option<Type> = None;
+        let meta = parse_keys(input, UNKNOWN_ARG, |key, input| {
+            if key != "ctx" {
+                return Ok(false);
+            }
+            if ctx.is_some() {
+                return Err(Error::new_spanned(key, "`ctx` is given twice"));
+            }
+            let _: Token![=] = input.parse()?;
+            ctx = Some(input.parse()?);
+            Ok(true)
+        })?;
+        Ok(GroupArgs { ctx, meta })
     }
 }
 
@@ -174,10 +178,10 @@ fn declaration(fs: &dyn Fs, source: Source<'_>, mut item: ItemMod) -> Result<Tok
 /// Take the `#[group]` / `#[group(ctx = T)]` off a declaration and read it.
 fn take_group_args(attrs: &mut Vec<Attribute>) -> Result<GroupArgs> {
     let Some(at) = attrs.iter().position(|a| marks(a, "group")) else {
-        return Ok(GroupArgs { ctx: None });
+        return Ok(GroupArgs::default());
     };
     match attrs.remove(at).meta {
-        Meta::Path(_) => Ok(GroupArgs { ctx: None }),
+        Meta::Path(_) => Ok(GroupArgs::default()),
         Meta::List(list) => syn::parse2(list.tokens),
         Meta::NameValue(nv) => Err(Error::new_spanned(nv, UNKNOWN_ARG)),
     }
@@ -190,7 +194,9 @@ fn inline_form(args: GroupArgs, item: ItemMod) -> Result<TokenStream> {
         .as_ref()
         .expect("an inline module has a body")
         .1;
-    let (help, details) = read_doc(&item.attrs, &item.ident, GROUP_NEEDS_DOC)?;
+    let doc = read_doc(&item.attrs, &item.ident, GROUP_NEEDS_DOC)?;
+    let name = dashed(&item.ident);
+    args.meta.check_name(&name, "group")?;
     let children = children_of(items);
     if children.is_empty() {
         return Err(Error::new_spanned(
@@ -200,9 +206,12 @@ fn inline_form(args: GroupArgs, item: ItemMod) -> Result<TokenStream> {
     }
     let handle = emit_handle(&Handle {
         module: &item.ident,
-        name: dashed(&item.ident),
-        help,
-        details,
+        name,
+        help: doc.help,
+        details: doc.details,
+        footer: doc.footer,
+        aliases: args.meta.aliases,
+        hide: args.meta.hide.is_some(),
         cfgs: cfg_attrs(&item.attrs),
         // An inline module's own outlined declarations are the case
         // `group_mod!` cannot serve at all — it has to be at a file's top level
@@ -229,7 +238,9 @@ fn file_form(
     args: GroupArgs,
     mut item: ItemMod,
 ) -> Result<TokenStream> {
-    let (help, details) = read_doc(&item.attrs, &item.ident, GROUP_NEEDS_DOC)?;
+    let doc = read_doc(&item.attrs, &item.ident, GROUP_NEEDS_DOC)?;
+    let name = dashed(&item.ident);
+    args.meta.check_name(&name, "group")?;
     let source = match source {
         Source::Found(file) => file,
         Source::Unknown(tried) => {
@@ -264,9 +275,12 @@ fn file_form(
     )?;
     let handle = emit_handle(&Handle {
         module: &item.ident,
-        name: dashed(&item.ident),
-        help,
-        details,
+        name,
+        help: doc.help,
+        details: doc.details,
+        footer: doc.footer,
+        aliases: args.meta.aliases,
+        hide: args.meta.hide.is_some(),
         cfgs: cfg_attrs(&item.attrs),
         ctx,
         children,
@@ -358,8 +372,14 @@ pub(crate) struct Handle<'a> {
     pub(crate) name: String,
     /// The one-line help: the doc comment's first line.
     pub(crate) help: String,
-    /// The rest of the doc comment, if any.
+    /// The rest of the doc comment up to an examples heading, if any.
     pub(crate) details: Option<String>,
+    /// The examples section, laid out for verbatim rendering, if any.
+    pub(crate) footer: Option<String>,
+    /// Every `alias = "…"`, in source order.
+    pub(crate) aliases: Vec<LitStr>,
+    /// Whether `hide` was given.
+    pub(crate) hide: bool,
     /// The module's own `#[cfg]` / `#[cfg_attr]`, copied onto the handle so a
     /// configured-out group takes its registration with it.
     pub(crate) cfgs: Vec<Attribute>,
@@ -399,7 +419,12 @@ pub(crate) fn emit_handle(h: &Handle) -> TokenStream {
     let cfgs = &h.cfgs;
     let name = &h.name;
     let help = &h.help;
-    let details = h.details.as_ref().map(|d| quote!(.details(#d)));
+    let metadata = metadata(
+        h.details.as_deref(),
+        h.footer.as_deref(),
+        &h.aliases,
+        h.hide,
+    );
 
     quote! {
         #[doc = #doc]
@@ -413,7 +438,7 @@ pub(crate) fn emit_handle(h: &Handle) -> TokenStream {
                 ::std::vec::Vec::new();
             #(#pushes)*
             ::hicli::group(#name, #help, __children)
-            #details
+            #metadata
         }
     }
 }
@@ -928,5 +953,74 @@ mod tests {
         // … and something that is not `key = value` at all.
         assert_eq!(arg_rejection("\"events\""), UNKNOWN_ARG);
         assert_eq!(arg_rejection("ctx = Ctx, name = \"x\""), UNKNOWN_ARG);
+    }
+
+    #[test]
+    fn each_shared_key_rejection_is_raised_on_a_group_too() {
+        assert_eq!(arg_rejection("ctx = A, ctx = B"), "`ctx` is given twice");
+        assert_eq!(arg_rejection("hide, hide"), "`hide` is given twice");
+        assert_eq!(arg_rejection("alias = \"\""), "an alias cannot be empty");
+        assert_eq!(
+            arg_rejection("alias = \"e v\""),
+            "an alias is one word: it cannot contain whitespace"
+        );
+        assert_eq!(
+            arg_rejection("alias = \"-e\""),
+            "an alias is a command name, not a flag: it cannot start with `-`"
+        );
+        assert_eq!(
+            arg_rejection("alias = \"e\", alias = \"e\""),
+            "alias `e` is given twice"
+        );
+    }
+
+    #[test]
+    fn an_alias_equal_to_the_groups_name_is_rejected() {
+        assert_eq!(
+            rejection(
+                "alias = \"add-admin\"",
+                "/// admins\nmod add_admin { /// g\n#[command] fn grant(c: &Ctx) {} }"
+            ),
+            "alias `add-admin` is this group's own name: an alias is another name"
+        );
+    }
+
+    #[test]
+    fn the_keys_and_the_examples_become_calls_on_the_group() {
+        let got = expansion(
+            "ctx = Ctx, alias = \"e\", hide, alias = \"ev\"",
+            "/// events\n\
+             ///\n\
+             /// All of them.\n\
+             ///\n\
+             /// # Examples\n\
+             ///\n\
+             /// ```sh\n\
+             /// demo event create x\n\
+             /// ```\n\
+             mod event { /// c\n#[command] fn create(c: &Ctx) {} }",
+        );
+        assert!(
+            got.ends_with(
+                ":: hicli :: group (\"event\" , \"events\" , __children) . details (\"All of them.\") \
+                 . footer (\"Examples:\\n  demo event create x\") . alias (\"e\") . alias (\"ev\") \
+                 . hide () }"
+            ),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn a_declarations_keys_are_read_and_then_removed() {
+        let got = file_expansion(
+            &[
+                ("src/main.rs", ""),
+                ("src/id.rs", "/// c\n#[command] pub fn create(c: &Ctx) {}"),
+            ],
+            "src/main.rs",
+            "/// identity\n#[group(alias = \"identity\", hide)]\npub mod id;",
+        );
+        assert!(got.contains(". alias (\"identity\") . hide ()"), "{got}");
+        assert!(!got.contains("# [group"), "the #[group] survived:\n{got}");
     }
 }

@@ -103,7 +103,10 @@ impl<Ctx> Invocation<Ctx> {
 /// `Vec<Command<Ctx>>` and `commands![…]` homogeneous.
 pub struct Command<Ctx> { /* name, help, details, leaf|group|external */ }
 impl<Ctx> Command<Ctx> {
-    pub fn details(self, d: impl Into<String>) -> Self;
+    pub fn details(self, d: impl Into<String>) -> Self;   // bpaf header: reflowed prose
+    pub fn footer(self, f: impl Into<String>) -> Self;    // after the options, verbatim (ADR-008)
+    pub fn alias(self, a: &'static str) -> Self;          // repeatable; unlisted; path stays canonical
+    pub fn hide(self) -> Self;                            // out of help/completion/suggestions; parses
     pub fn name(&self) -> &'static str;
 }
 // `help` is mandatory (ADR-001): the parent's one-line command entry AND the
@@ -148,6 +151,8 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
                                                              // with the command at the top level
     pub fn command(self, c: impl IntoCommand<Ctx>) -> Self;
     pub fn commands(self, cs: impl IntoIterator<Item = Command<Ctx>>) -> Self;
+    pub fn about(self, about: impl Into<String>) -> Self;     // above `Usage:` (ADR-008)
+    pub fn version(self, v: impl Into<String>) -> Self;       // -V/--version, exit 0; both reserved
     pub fn run(self, mk_ctx: impl FnOnce(G) -> Result<Ctx, Failure>) -> std::process::ExitCode;
                                      // = ExitCode::from(run_with_args(env::args().skip(1), …))
 
@@ -161,6 +166,16 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     where I: IntoIterator<Item = S>, S: Into<String>;   // the completion-level test seam (ADR-006)
 }
 pub fn exit_code_for(f: &bpaf::ParseFailure) -> u8;    // Stderr => 2 (usage), else 0
+
+/// An installable completion script (ADR-009). `#[non_exhaustive]`; parses from
+/// and displays as its lowercase name. hicli ships no `Arg` for it (ADR-006).
+#[non_exhaustive]
+pub enum Shell { Bash, Zsh, Fish }
+impl FromStr for Shell { type Err = UnknownShell; /* "bash" | "zsh" | "fish" */ }
+pub struct UnknownShell(/* the name it did not know */);   // Display + Error
+pub fn completion_script(shell: Shell, bin: &str) -> String;
+                                     // bpaf 0.9.27's templates, revs 8/7/9; panics unless
+                                     // `bin` is non-empty [A-Za-z0-9._+-] (pasted unquoted)
 ```
 
 - **Tree by composition:** a group *is* a `Command<Ctx>` with children — not a
@@ -410,7 +425,13 @@ file module, until Rust 1.99 allows `#[group] pub mod event;` directly), `comman
 names a handle); the `app!` declarative macro forwarding into `commands!`; `cli!`/`cli_test!`;
 the suggestion gap-closer; **`Arg` + `#[derive(Arg)]` + the `files`/`dirs` completion shorthands
 (ADR-006)** — an argument is a type that parses itself, and completion is attached to that type
-once and inherited by every command that takes it.
+once and inherited by every command that takes it; **command metadata (ADR-008)** — the
+`alias = "…"` (repeatable) and `hide` keys on `#[command]`/`#[group]` (with `Command::alias` /
+`Command::hide` beneath them; every spelling is a known exact match for the gap-closer, only listed
+canonical names are suggested), the doc comment's **examples footer** (a trailing `# Examples` /
+`Examples:` section rendered verbatim after the options via `Command::footer`), and
+`App::about` / `App::version` on the composition root; **`completion_script(Shell, bin)`**
+(ADR-009) — the shell script a user installs to wire TAB to the app.
 
 **Deferred:** `#[group] pub mod event;` as the direct spelling — blocked on the toolchain pin
 reaching Rust 1.99.0 (stable 2026-10-01), at which point it becomes an alias and `group_mod!` is
@@ -427,8 +448,10 @@ type whose `bpaf` constructor was renamed (a three-line hand-written impl covers
 masks on the shell shorthands (`complete = files("*.toml")`); globals-aware completion (a
 completer sees only the parsed value, never `--home` — pre-parsing the globals leniently in
 completion mode needs a type-erased process-global stash with a runtime-fallible downcast, which
-hicli cannot synthesise) — all deferred until a consumer's pain names them, not built ahead of
-that evidence.
+hicli cannot synthesise); a usage-line override; deprecated-name warnings (an alias that prints
+a hint); visible aliases (`list, ls` in the command list); elvish completion; a helper for
+option values that start with `-` (`--since -7`) — all deferred until a consumer's pain names
+them, not built ahead of that evidence.
 
 ## Verification
 
@@ -439,7 +462,10 @@ that evidence.
   an empty group, a module-relative context type, `#[group]` on a non-module, a missing
   `group_mod!` file, a `group_mod!` declaration that is not a `mod` or that has a body, a command
   parameter whose type does not implement `Arg`, `#[derive(Arg)]` without `#[derive(Bpaf)]`,
-  `#[arg(complete = …)]` on a multi-field struct or an enum, `#[derive(Arg)]` on a generic type —
+  `#[arg(complete = …)]` on a multi-field struct or an enum, `#[derive(Arg)]` on a generic type,
+  and ADR-008's attribute keys and examples slot — an unknown key, `name`/`hide` given twice, an
+  empty name or alias, one with whitespace or a leading `-`, a repeated alias, an alias equal to the
+  command's or the group's own name, an examples heading with nothing under it —
   fixed `.rs`/`.stderr` pairs under `tests/ui/` (the trybuild suite), so a rejection's wording is
   checked like any other behaviour, not just that it fails to compile.
 - **Group discovery and file resolution, as their own golden matrix:** `#[group]` on an inline
@@ -476,7 +502,12 @@ that evidence.
 - **Help text:** every command and group carries a mandatory one-line `help` (a doc comment, for
   `#[command]`/`#[group]`/`group_mod!`), asserted as substrings of top-level, group and leaf `--help`
   output (never whole-output snapshots); a multi-line doc comment's first line is the help, the
-  rest is `details()`.
+  rest is `details()` up to an examples heading, and the examples are the footer —
+  `tests/help_examples.rs` asserts, for the indented, `# Examples` and ```` ```sh ````-fenced
+  spellings in plain `--help` and `--help --help`, that the footer comes after the options and ends
+  the output verbatim, and that no example text leaks into the details. `tests/metadata.rs` covers
+  `about` above `Usage:`, `--version`/`-V` (stdout, exit 0), a hidden command absent from help and
+  completion but parsing, and an alias dispatching under its canonical path without being listed.
 - **Completion:** driven in-process through bpaf's own wire protocol
   (`--bpaf-complete-rev=1`, the revision bpaf 0.9.28 emits in its generated shell scripts, verified
   by spike), both raw (`ParseFailure::Completion`'s payload, so the wire format itself stays

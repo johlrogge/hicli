@@ -1,0 +1,5 @@
+error: an alias is a command name, not a flag: it cannot start with `-`
+ --> tests/ui/command_alias_flag.rs:8:19
+  |
+8 | #[command(alias = "-s")]
+  |                   ^^^^

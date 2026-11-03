@@ -1,0 +1,5 @@
+error: an alias is one word: it cannot contain whitespace
+ --> tests/ui/command_alias_whitespace.rs:8:19
+  |
+8 | #[command(alias = "show status")]
+  |                   ^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: `name` is given twice
+ --> tests/ui/command_name_twice.rs:8:26
+  |
+8 | #[command(name = "show", name = "st")]
+  |                          ^^^^

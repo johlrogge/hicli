@@ -1,4 +1,5 @@
-//! `#[command]` has one argument, and no argument-level attributes at all.
+//! `#[command]` takes `name`, `alias` and `hide` — help is the doc comment,
+//! never an attribute key.
 
 use hicli::command;
 

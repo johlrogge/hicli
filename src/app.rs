@@ -22,6 +22,10 @@ pub struct App<G, Ctx> {
     /// [`App::into_parser`] folds them, because a command's parser cannot be
     /// built before its mount point is known.
     commands: Vec<Command<Ctx>>,
+    /// The app's own description, above `Usage:` in top-level `--help`.
+    about: Option<String>,
+    /// The version `--version` / `-V` prints.
+    version: Option<String>,
 }
 
 impl<G: 'static, Ctx: 'static> App<G, Ctx> {
@@ -30,7 +34,46 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
         App {
             globals: globals.boxed(),
             commands: Vec::new(),
+            about: None,
+            version: None,
         }
+    }
+
+    /// Describe the app: printed at the top of `app --help`, above `Usage:`.
+    ///
+    /// A command's description lives in its doc comment; the app's lives here,
+    /// on the composition root, because the app is not an item with a doc
+    /// comment of its own.
+    pub fn about(mut self, about: impl Into<String>) -> Self {
+        self.about = Some(about.into());
+        self
+    }
+
+    /// Give the app a version: `app --version` and `app -V` print
+    /// `Version: <version>` to stdout and exit `0`, and both flags are listed
+    /// in top-level `--help`.
+    ///
+    /// Once a version is set, **`-V` and `--version` are reserved** at the top
+    /// level: a global option spelled the same way silently shadows the
+    /// version flag instead of failing, so don't declare one.
+    ///
+    /// ```
+    /// # use hicli::{App, cli, exit_code_for};
+    /// # use hicli::bpaf::pure;
+    /// # fn app() -> App<(), ()> {
+    /// #     App::new(pure(()))
+    /// #         .version("1.2.3")
+    /// #         .command(hicli::command("status", "show status", pure(()), |(), _: &()| {}))
+    /// # }
+    /// // usually `.version(env!("CARGO_PKG_VERSION"))`
+    /// let e = app().parse(cli! { --version }).err().expect("--version short-circuits");
+    /// assert_eq!(exit_code_for(&e), 0);
+    /// assert_eq!(e.unwrap_stdout(), "Version: 1.2.3\n");
+    /// assert_eq!(app().run_with_args(cli! { -V }, |()| Ok(())), 0);
+    /// ```
+    pub fn version(mut self, version: impl Into<String>) -> Self {
+        self.version = Some(version.into());
+        self
     }
 
     /// Add one top-level command.
@@ -49,10 +92,10 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
         self
     }
 
-    /// Fold the tree: the **top-level** command names (for the suggestion
+    /// Fold the tree: the **top-level** command registry (for the suggestion
     /// gap-closer) and the parser.
     ///
-    /// The name registry is *derived* here rather than accumulated at
+    /// The registry is *derived* here rather than accumulated at
     /// registration, so there is one list and no way for it to disagree with
     /// the tree. Deliberately top-level only (see ADR
     /// "suggestion-registry-is-top-level-only"): nested command names live in
@@ -63,13 +106,33 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     ///
     /// # Panics
     ///
-    /// Panics if no command was registered, or if a registered group is empty.
-    fn fold(self) -> (Vec<&'static str>, OptionParser<(G, Invocation<Ctx>)>) {
-        let App { globals, commands } = self;
-        let names: Vec<&'static str> = commands.iter().map(Command::name).collect();
+    /// Panics if no command was registered, if a registered group is empty, or
+    /// if two siblings share a name or alias.
+    fn fold(self) -> (Registry, OptionParser<(G, Invocation<Ctx>)>) {
+        let App {
+            globals,
+            commands,
+            about,
+            version,
+        } = self;
+        let registry = Registry {
+            known: commands.iter().flat_map(Command::spellings).collect(),
+            listed: commands
+                .iter()
+                .filter(|c| c.is_listed())
+                .map(Command::name)
+                .collect(),
+        };
         let tree = alternative(commands, &Mount::root())
             .expect("hicli::App has no commands; add at least one via .command/.commands");
-        (names, construct!(globals, tree).to_options())
+        let mut parser = construct!(globals, tree).to_options();
+        if let Some(about) = &about {
+            parser = parser.descr(about.as_str());
+        }
+        if let Some(version) = &version {
+            parser = parser.version(version.as_str());
+        }
+        (registry, parser)
     }
 
     /// The top-level `bpaf` parser yielding `(globals, selected invocation)`.
@@ -242,15 +305,30 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     {
         let args: Vec<String> = args.into_iter().map(Into::into).collect();
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let (names, parser) = self.fold();
+        let (registry, parser) = self.fold();
         match parser.run_inner(refs.as_slice()) {
             Ok((globals, invocation)) => match mk_ctx(globals) {
                 Ok(ctx) => report_outcome(invocation.run(&ctx)),
                 Err(e) => report_outcome(Err(e)),
             },
-            Err(failure) => report_failure(failure, &names, &args),
+            Err(failure) => report_failure(failure, &registry, &args),
         }
     }
+}
+
+/// The top-level spellings the suggestion gap-closer reads (ADR-002, ADR-008).
+///
+/// Two lists, because a spelling can be *recognised* without being
+/// *advertised*: an alias or a hidden command typed exactly is a match and
+/// needs no hint, but only a listed command's canonical name is ever
+/// suggested — a hint must not reveal what `--help` does not show.
+struct Registry {
+    /// Every spelling of every top-level command — names and aliases, hidden
+    /// or not. An exact match on any of these is never answered with a hint.
+    known: Vec<&'static str>,
+    /// The canonical names of the listed (non-hidden) top-level commands: the
+    /// only suggestion candidates.
+    listed: Vec<&'static str>,
 }
 
 /// `bpaf`'s completion request, at the only revision that is safe in-process.
@@ -301,10 +379,13 @@ pub fn exit_code_for(f: &ParseFailure) -> u8 {
 
 /// Print a parse failure to the right stream, appending a suggestion when
 /// `bpaf` produced none, and return the remapped exit code.
-fn report_failure(failure: ParseFailure, names: &[&str], args: &[String]) -> u8 {
+fn report_failure(failure: ParseFailure, registry: &Registry, args: &[String]) -> u8 {
     let code = exit_code_for(&failure);
     if matches!(failure, ParseFailure::Stderr(..)) {
-        eprintln!("{}", augment_stderr(failure.unwrap_stderr(), names, args));
+        eprintln!(
+            "{}",
+            augment_stderr(failure.unwrap_stderr(), registry, args)
+        );
     } else {
         // Verified against bpaf 0.9.27: `unwrap_stdout()` does not panic on
         // `ParseFailure::Completion` — it returns the completion payload — so
@@ -332,10 +413,10 @@ fn report_outcome(outcome: Result<Success, Failure>) -> u8 {
 
 /// The stderr text to print for a usage error: `msg`, plus a `did you mean`
 /// line when `bpaf` produced no suggestion of its own.
-fn augment_stderr(msg: String, names: &[&str], args: &[String]) -> String {
+fn augment_stderr(msg: String, registry: &Registry, args: &[String]) -> String {
     let mut msg = msg;
     if !msg.to_lowercase().contains("did you mean") {
-        if let Some(name) = suggest(names, args) {
+        if let Some(name) = suggest(registry, args) {
             msg.push_str(&format!("\ndid you mean `{name}`?"));
         }
     }
@@ -343,7 +424,11 @@ fn augment_stderr(msg: String, names: &[&str], args: &[String]) -> String {
 }
 
 /// The suggestion gap-closer: a Levenshtein pass (edit distance 1..=2) over the
-/// registered top-level command names, applied to the **command position only**.
+/// listed top-level command names, applied to the **command position only**.
+///
+/// A word that is any known spelling — an alias, a hidden command's name — is
+/// an exact match and gets no hint; only a listed command's canonical name is
+/// ever suggested.
 ///
 /// Scope (see ADR "suggestion-registry-is-top-level-only"): only the first argv
 /// word that is neither a flag nor a flag's value is considered. Nested commands
@@ -355,7 +440,7 @@ fn augment_stderr(msg: String, names: &[&str], args: &[String]) -> String {
 /// skipped. That trades a false negative (`app -v stauts` yields no hint) for
 /// never emitting a false positive on an option's value — the strictly safer
 /// direction for an error message.
-fn suggest(names: &[&str], args: &[String]) -> Option<String> {
+fn suggest(registry: &Registry, args: &[String]) -> Option<String> {
     let mut prev_was_flag = false;
     for tok in args {
         if tok == "--" {
@@ -372,11 +457,11 @@ fn suggest(names: &[&str], args: &[String]) -> Option<String> {
             continue;
         }
         // This is the command position.
-        if names.contains(&tok.as_str()) {
+        if registry.known.contains(&tok.as_str()) {
             return None;
         }
         let mut best: Option<(usize, &str)> = None;
-        for &name in names {
+        for &name in &registry.listed {
             let d = strsim::levenshtein(tok, name);
             if (1..=2).contains(&d) && best.is_none_or(|(bd, _)| d < bd) {
                 best = Some((d, name));
@@ -396,15 +481,52 @@ mod tests {
         args.iter().map(|s| s.to_string()).collect()
     }
 
+    /// A registry in which every name is listed and nothing else is known.
+    fn all(names: &[&'static str]) -> Registry {
+        Registry {
+            known: names.to_vec(),
+            listed: names.to_vec(),
+        }
+    }
+
+    /// The registry an app with these commands folds to.
+    fn registry_of(commands: Vec<Command<()>>) -> Registry {
+        App::new(bpaf::pure(())).commands(commands).fold().0
+    }
+
+    /// A do-nothing top-level command.
+    fn cmd(name: &'static str) -> Command<()> {
+        crate::command(name, "help", bpaf::pure(()), |(), _: &()| {})
+    }
+
+    #[test]
+    fn an_exact_alias_needs_no_suggestion() {
+        let r = registry_of(vec![cmd("status").alias("st"), cmd("sync")]);
+        assert_eq!(suggest(&r, &argv(&["st"])), None);
+        // … known, but never a candidate: only canonical names are offered.
+        assert_eq!(r.known, ["status", "st", "sync"]);
+        assert_eq!(r.listed, ["status", "sync"]);
+        assert_eq!(suggest(&r, &argv(&["sx"])), None);
+    }
+
+    #[test]
+    fn a_hidden_name_is_an_exact_match_and_never_a_suggestion() {
+        let r = registry_of(vec![cmd("status"), cmd("secret").hide()]);
+        assert_eq!(suggest(&r, &argv(&["secret"])), None);
+        assert_eq!(suggest(&r, &argv(&["secrt"])), None);
+        assert_eq!(r.known, ["status", "secret"]);
+        assert_eq!(r.listed, ["status"]);
+    }
+
     #[test]
     fn suggest_matches_the_command_position() {
         let names = ["event", "status", "config"];
         assert_eq!(
-            suggest(&names, &argv(&["stauts"])),
+            suggest(&all(&names), &argv(&["stauts"])),
             Some("status".to_string())
         );
         assert_eq!(
-            suggest(&names, &argv(&["evnt", "x"])),
+            suggest(&all(&names), &argv(&["evnt", "x"])),
             Some("event".to_string())
         );
     }
@@ -412,18 +534,21 @@ mod tests {
     #[test]
     fn suggest_ignores_tokens_after_a_recognised_command() {
         let names = ["event", "status", "config"];
-        assert_eq!(suggest(&names, &argv(&["status", "evnt"])), None);
-        assert_eq!(suggest(&names, &argv(&["event", "creat", "x"])), None);
+        assert_eq!(suggest(&all(&names), &argv(&["status", "evnt"])), None);
+        assert_eq!(suggest(&all(&names), &argv(&["event", "creat", "x"])), None);
     }
 
     #[test]
     fn suggest_skips_option_values() {
         let names = ["event", "status", "config"];
         // `evnt` is `--home`'s value, not the command position.
-        assert_eq!(suggest(&names, &argv(&["--home", "evnt", "status"])), None);
+        assert_eq!(
+            suggest(&all(&names), &argv(&["--home", "evnt", "status"])),
+            None
+        );
         // an inline value carries its own `=`, so the next word is the command.
         assert_eq!(
-            suggest(&names, &argv(&["--home=evnt", "stauts"])),
+            suggest(&all(&names), &argv(&["--home=evnt", "stauts"])),
             Some("status".to_string())
         );
     }
@@ -431,27 +556,27 @@ mod tests {
     #[test]
     fn suggest_stops_at_double_dash() {
         let names = ["event", "status", "config"];
-        assert_eq!(suggest(&names, &argv(&["--", "evnt"])), None);
+        assert_eq!(suggest(&all(&names), &argv(&["--", "evnt"])), None);
     }
 
     #[test]
     fn suggest_ignores_exact_flags_and_distant_words() {
         let names = ["event", "status"];
         // exact matches need no suggestion
-        assert_eq!(suggest(&names, &argv(&["status"])), None);
+        assert_eq!(suggest(&all(&names), &argv(&["status"])), None);
         // flags are not commands
-        assert_eq!(suggest(&names, &argv(&["--home"])), None);
+        assert_eq!(suggest(&all(&names), &argv(&["--home"])), None);
         // too far away (> 2 edits)
-        assert_eq!(suggest(&names, &argv(&["wildlydifferent"])), None);
+        assert_eq!(suggest(&all(&names), &argv(&["wildlydifferent"])), None);
         // nothing typed at all
-        assert_eq!(suggest(&names, &argv(&[])), None);
+        assert_eq!(suggest(&all(&names), &argv(&[])), None);
     }
 
     #[test]
     fn suggest_prefers_the_closest_name() {
         let names = ["config", "configure"];
         assert_eq!(
-            suggest(&names, &argv(&["confg"])),
+            suggest(&all(&names), &argv(&["confg"])),
             Some("config".to_string())
         );
     }
@@ -459,19 +584,29 @@ mod tests {
     #[test]
     fn suggest_breaks_ties_by_registration_order() {
         let names = ["aa", "ab"];
-        assert_eq!(suggest(&names, &argv(&["ac"])), Some("aa".to_string()));
+        assert_eq!(
+            suggest(&all(&names), &argv(&["ac"])),
+            Some("aa".to_string())
+        );
     }
 
     #[test]
     fn suggest_covers_registered_externals() {
         // externals push their name onto the same registry as leaves/groups.
         let names = ["event", "status", "foo"];
-        assert_eq!(suggest(&names, &argv(&["fooo"])), Some("foo".to_string()));
+        assert_eq!(
+            suggest(&all(&names), &argv(&["fooo"])),
+            Some("foo".to_string())
+        );
     }
 
     #[test]
     fn augment_stderr_appends_when_bpaf_was_silent() {
-        let out = augment_stderr("no such command".into(), &["status"], &argv(&["stauts"]));
+        let out = augment_stderr(
+            "no such command".into(),
+            &all(&["status"]),
+            &argv(&["stauts"]),
+        );
         assert!(
             out.ends_with("did you mean `status`?"),
             "expected an appended hint, got:\n{out}"
@@ -517,7 +652,7 @@ mod tests {
         // Capital `D`: detection is case-insensitive.
         let msg = "No such command: `stauts`. Did you mean `status`?".to_string();
         assert_eq!(
-            augment_stderr(msg.clone(), &["status"], &argv(&["stauts"])),
+            augment_stderr(msg.clone(), &all(&["status"]), &argv(&["stauts"])),
             msg
         );
     }

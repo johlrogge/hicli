@@ -12,7 +12,8 @@ use proc_macro2::Span;
 use quote::format_ident;
 use quote::ToTokens;
 use syn::ext::IdentExt;
-use syn::{Attribute, Error, Expr, ExprLit, Ident, Lit, Meta, Result};
+use syn::parse::ParseStream;
+use syn::{Attribute, Error, Expr, ExprLit, Ident, Lit, LitStr, Meta, Result, Token};
 
 /// The message for a `#[command]` with no doc comment, or a blank one.
 pub(crate) const COMMAND_NEEDS_DOC: &str =
@@ -116,33 +117,280 @@ fn doc_text(attr: &Attribute) -> Option<String> {
     }
 }
 
-/// Split the doc comment into the one-line help and the rest.
+/// The message for an examples heading with nothing under it.
+pub(crate) const EXAMPLES_EMPTY: &str = "this examples section is empty: put at least one \
+                                         example under the heading, or remove the heading";
+
+/// The three slots a doc comment fills (ADR-008).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DocParts {
+    /// The first line: the one-line help, and the heading of `--help`.
+    pub(crate) help: String,
+    /// The prose between the help line and the examples heading — `bpaf`'s
+    /// header, which reflows.
+    pub(crate) details: Option<String>,
+    /// The examples section, already laid out: `Examples:` and the body
+    /// indented by two — rendered verbatim after the options.
+    pub(crate) footer: Option<String>,
+}
+
+/// Is this line the heading that starts the examples footer?
+///
+/// Trimmed, exactly `# Examples` (rustdoc's convention) or `Examples:` (the
+/// terminal's). `## Examples` is a sub-heading of something else, not this
+/// slot.
+fn is_examples_heading(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed == "# Examples" || trimmed == "Examples:"
+}
+
+/// The number of leading spaces and tabs on `line`.
+fn indent_of(line: &str) -> usize {
+    line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+}
+
+/// `line` with its first `n` characters of indentation removed — fewer, if it
+/// has fewer.
+fn dedent(line: &str, n: usize) -> &str {
+    let cut = indent_of(line).min(n);
+    // Indentation is ASCII, so a character count is a byte count.
+    &line[cut..]
+}
+
+/// The smallest indentation among the non-blank `lines`, `0` if all are blank.
+fn min_indent<'a>(lines: impl IntoIterator<Item = &'a str>) -> usize {
+    lines
+        .into_iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(indent_of)
+        .min()
+        .unwrap_or(0)
+}
+
+/// Split the doc comment into the one-line help, the details and the examples
+/// footer.
 ///
 /// `attrs` is the item's whole attribute list, in source order: the doc
 /// attributes are picked out of it and everything else ignored, because the
 /// item is re-emitted with its attributes exactly as written.
 ///
-/// Each line is trimmed (a `///` comment's text starts with a space), leading
-/// blank lines are dropped, and the blank separator between the first line and
-/// the rest disappears with them. A comment that is missing *or* entirely blank
-/// fails with `missing`, spanned at `at` — the token the author has to put a
-/// doc comment on.
+/// **Help and details:** each line is trimmed (a `///` comment's text starts
+/// with a space), leading blank lines are dropped, and the blank separator
+/// between the first line and the rest disappears with them. A comment that is
+/// missing *or* entirely blank fails with `missing`, spanned at `at` — the
+/// token the author has to put a doc comment on.
+///
+/// **Footer:** the details stop at the first line after the help whose trimmed
+/// text is exactly `# Examples` or `Examples:`; everything after it is the
+/// examples body, read *without* trimming — see [`footer_of`].
 pub(crate) fn read_doc<T: ToTokens>(
     attrs: &[Attribute],
     at: &T,
     missing: &str,
-) -> Result<(String, Option<String>)> {
-    let lines = attrs
+) -> Result<DocParts> {
+    // One entry per line, each with the attribute it came from (for spans). A
+    // `#[doc = "a\nb"]` is several lines; `split` rather than `lines` so an
+    // empty `///` is still one (blank) line.
+    let lines: Vec<(&Attribute, String)> = attrs
         .iter()
-        .filter_map(doc_text)
-        .map(|l| l.trim().to_string());
-    let mut lines = lines.skip_while(String::is_empty);
-    let Some(help) = lines.next() else {
+        .filter_map(|a| doc_text(a).map(|t| (a, t)))
+        .flat_map(|(a, t)| {
+            t.split('\n')
+                .map(|l| (a, l.trim_end_matches('\r').to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    let Some(first) = lines.iter().position(|(_, l)| !l.trim().is_empty()) else {
         return Err(Error::new_spanned(at, missing));
     };
-    let rest: Vec<String> = lines.skip_while(String::is_empty).collect();
-    let details = rest.join("\n").trim_end().to_string();
-    Ok((help, (!details.is_empty()).then_some(details)))
+    let help = lines[first].1.trim().to_string();
+    let rest = &lines[first + 1..];
+
+    let heading = rest.iter().position(|(_, l)| is_examples_heading(l));
+    let prose = match heading {
+        Some(h) => &rest[..h],
+        None => rest,
+    };
+    let prose: Vec<&str> = prose
+        .iter()
+        .map(|(_, l)| l.trim())
+        .skip_while(|l| l.is_empty())
+        .collect();
+    let details = prose.join("\n").trim_end().to_string();
+
+    let footer = match heading {
+        Some(h) => {
+            // Raw lines: `footer_of` removes the body's own common indentation.
+            let body: Vec<&str> = rest[h + 1..].iter().map(|(_, l)| l.as_str()).collect();
+            match footer_of(&body) {
+                Some(f) => Some(f),
+                None => return Err(Error::new_spanned(rest[h].0, EXAMPLES_EMPTY)),
+            }
+        }
+        None => None,
+    };
+
+    Ok(DocParts {
+        help,
+        details: (!details.is_empty()).then_some(details),
+        footer,
+    })
+}
+
+/// Lay out an examples body as the footer `bpaf` will print verbatim, or
+/// `None` when there is nothing in it.
+///
+/// Code fences (any line whose trimmed text starts with ```` ``` ````) are
+/// dropped, so a ```` ```sh ```` block reads as plain lines; leading and
+/// trailing blank lines are dropped; the body's common indentation is removed
+/// and every non-blank line is indented by two instead; interior blank lines
+/// are kept. The heading is always `Examples:`, however it was spelled.
+fn footer_of(body: &[&str]) -> Option<String> {
+    let kept: Vec<&str> = body
+        .iter()
+        .copied()
+        .filter(|l| !l.trim_start().starts_with("```"))
+        .collect();
+    let start = kept.iter().position(|l| !l.trim().is_empty())?;
+    let end = kept.iter().rposition(|l| !l.trim().is_empty())? + 1;
+    let kept = &kept[start..end];
+    let common = min_indent(kept.iter().copied());
+    let laid_out: Vec<String> = kept
+        .iter()
+        .map(|l| {
+            if l.trim().is_empty() {
+                String::new()
+            } else {
+                format!("  {}", dedent(l, common).trim_end())
+            }
+        })
+        .collect();
+    Some(format!("Examples:\n{}", laid_out.join("\n")))
+}
+
+/// The registration keys `#[command]` and `#[group]` share: how a command is
+/// *spelled* and whether it is *listed* (ADR-008).
+#[derive(Default)]
+pub(crate) struct CommandMeta {
+    /// Every `alias = "…"`, in source order.
+    pub(crate) aliases: Vec<LitStr>,
+    /// Where `hide` was written, if it was.
+    pub(crate) hide: Option<Span>,
+}
+
+impl CommandMeta {
+    /// Read `key` (and its value, from `input`) if it is one of the shared
+    /// keys. `Ok(false)` means "not mine" — the caller's to read or reject.
+    fn read(&mut self, key: &Ident, input: ParseStream) -> Result<bool> {
+        if key == "alias" {
+            let _: Token![=] = input.parse()?;
+            let alias: LitStr = input.parse()?;
+            check_spelling(&alias, Spelling::Alias)?;
+            if self.aliases.iter().any(|a| a.value() == alias.value()) {
+                return Err(Error::new_spanned(
+                    &alias,
+                    format!("alias `{}` is given twice", alias.value()),
+                ));
+            }
+            self.aliases.push(alias);
+            Ok(true)
+        } else if key == "hide" {
+            if input.peek(Token![=]) {
+                return Err(Error::new_spanned(
+                    key,
+                    "`hide` takes no value: write `hide`",
+                ));
+            }
+            if self.hide.is_some() {
+                return Err(Error::new_spanned(key, "`hide` is given twice"));
+            }
+            self.hide = Some(key.span());
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Reject an alias that is the command's own `name`: it would answer to
+    /// the same word twice. `what` is `command` or `group`.
+    pub(crate) fn check_name(&self, name: &str, what: &str) -> Result<()> {
+        match self.aliases.iter().find(|a| a.value() == name) {
+            Some(a) => Err(Error::new_spanned(
+                a,
+                format!("alias `{name}` is this {what}'s own name: an alias is another name"),
+            )),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Which key a spelling was given under — what [`check_spelling`]'s messages
+/// call it.
+#[derive(Clone, Copy)]
+pub(crate) enum Spelling {
+    /// `name = "…"`.
+    Name,
+    /// `alias = "…"`.
+    Alias,
+}
+
+impl Spelling {
+    /// The key's noun, with its article: `a name`, `an alias`.
+    fn label(self) -> &'static str {
+        match self {
+            Spelling::Name => "a name",
+            Spelling::Alias => "an alias",
+        }
+    }
+}
+
+/// The checks one spelling — a `name` or an `alias` — passes on its own: it is
+/// a non-empty single word that does not look like a flag.
+pub(crate) fn check_spelling(lit: &LitStr, what: Spelling) -> Result<()> {
+    let value = lit.value();
+    let label = what.label();
+    let problem = if value.is_empty() {
+        Some(format!("{label} cannot be empty"))
+    } else if value.chars().any(char::is_whitespace) {
+        Some(format!("{label} is one word: it cannot contain whitespace"))
+    } else if value.starts_with('-') {
+        Some(format!(
+            "{label} is a command name, not a flag: it cannot start with `-`"
+        ))
+    } else {
+        None
+    };
+    match problem {
+        Some(p) => Err(Error::new_spanned(lit, p)),
+        None => Ok(()),
+    }
+}
+
+/// Parse an attribute's `key = value, key, …` list.
+///
+/// The shared keys (`alias`, `hide`) are read into the returned
+/// [`CommandMeta`]; every other key is offered to `own`, which reads it and
+/// says `true`, or says `false` and the key is rejected with `unknown`.
+pub(crate) fn parse_keys(
+    input: ParseStream,
+    unknown: &str,
+    mut own: impl FnMut(&Ident, ParseStream) -> Result<bool>,
+) -> Result<CommandMeta> {
+    let mut meta = CommandMeta::default();
+    while !input.is_empty() {
+        let key = input
+            .call(Ident::parse_any)
+            .map_err(|e| Error::new(e.span(), unknown))?;
+        if !(meta.read(&key, input)? || own(&key, input)?) {
+            return Err(Error::new_spanned(&key, unknown));
+        }
+        if input.is_empty() {
+            break;
+        }
+        let _: Token![,] = input.parse().map_err(|e| Error::new(e.span(), unknown))?;
+    }
+    Ok(meta)
 }
 
 /// `EventRef` -> `event_ref`: the name `#[derive(Bpaf)]` gives a type's parser
@@ -213,9 +461,20 @@ mod tests {
     }
 
     /// The doc-comment split, driven through a real function item.
-    fn doc_of(src: &str) -> (String, Option<String>) {
+    fn parts_of(src: &str) -> DocParts {
         let f: ItemFn = syn::parse_str(src).expect("parses");
         read_doc(&f.attrs, &f.sig, COMMAND_NEEDS_DOC).expect("has a doc comment")
+    }
+
+    /// Help and details only — the two slots that existed before the footer.
+    fn doc_of(src: &str) -> (String, Option<String>) {
+        let p = parts_of(src);
+        (p.help, p.details)
+    }
+
+    /// The footer of `src`'s doc comment.
+    fn footer_of_src(src: &str) -> Option<String> {
+        parts_of(src).footer
     }
 
     #[test]
@@ -241,6 +500,207 @@ mod tests {
             details.as_deref(),
             Some("The directory is created.\n\nTwice.")
         );
+    }
+
+    /// The body every examples test below is expected to produce.
+    const MDMA: &str =
+        "Examples:\n  mdma search --artist Bowie\n  mdma search --added -7 --genre jazz";
+
+    #[test]
+    fn a_heading_with_a_sh_fenced_body_is_the_footer() {
+        let p = parts_of(
+            "/// search the library\n\
+             ///\n\
+             /// # Examples\n\
+             ///\n\
+             /// ```sh\n\
+             /// mdma search --artist Bowie\n\
+             /// mdma search --added -7 --genre jazz\n\
+             /// ```\n\
+             fn search() {}",
+        );
+        assert_eq!(p.footer.as_deref(), Some(MDMA));
+        assert_eq!(p.details, None);
+    }
+
+    #[test]
+    fn a_terminal_style_heading_with_an_indented_body_is_the_footer() {
+        assert_eq!(
+            footer_of_src(
+                "/// search the library\n\
+                 ///\n\
+                 /// Examples:\n\
+                 ///     mdma search --artist Bowie\n\
+                 ///     mdma search --added -7 --genre jazz\n\
+                 fn search() {}",
+            )
+            .as_deref(),
+            Some(MDMA)
+        );
+    }
+
+    #[test]
+    fn the_body_is_dedented_then_indented_by_two_keeping_relative_indent() {
+        assert_eq!(
+            footer_of_src(
+                "/// search the library\n\
+                 /// # Examples\n\
+                 ///         mdma search \\\n\
+                 ///             --artist Bowie\n\
+                 fn search() {}",
+            )
+            .as_deref(),
+            Some("Examples:\n  mdma search \\\n      --artist Bowie")
+        );
+    }
+
+    #[test]
+    fn interior_blank_lines_are_kept_and_outer_ones_dropped() {
+        assert_eq!(
+            footer_of_src(
+                "/// search the library\n\
+                 /// # Examples\n\
+                 ///\n\
+                 ///\n\
+                 /// mdma search --artist Bowie\n\
+                 ///\n\
+                 /// mdma search --added -7 --genre jazz\n\
+                 ///\n\
+                 ///\n\
+                 fn search() {}",
+            )
+            .as_deref(),
+            Some(
+                "Examples:\n  mdma search --artist Bowie\n\n  mdma search --added -7 --genre jazz"
+            )
+        );
+    }
+
+    #[test]
+    fn a_heading_with_nothing_under_it_is_rejected() {
+        for src in [
+            "/// search the library\n/// # Examples\nfn search() {}",
+            "/// search the library\n/// Examples:\n///\n/// ```sh\n/// ```\nfn search() {}",
+        ] {
+            let f: ItemFn = syn::parse_str(src).expect("parses");
+            let e = read_doc(&f.attrs, &f.sig, COMMAND_NEEDS_DOC).expect_err("empty examples");
+            assert_eq!(e.to_string(), EXAMPLES_EMPTY);
+        }
+    }
+
+    #[test]
+    fn without_a_heading_there_is_no_footer_and_the_details_are_unchanged() {
+        let p = parts_of(
+            "/// search the library\n\
+             ///\n\
+             /// Searches.\n\
+             ///\n\
+             ///     mdma search --artist Bowie\n\
+             fn search() {}",
+        );
+        assert_eq!(p.footer, None);
+        assert_eq!(
+            p.details.as_deref(),
+            Some("Searches.\n\nmdma search --artist Bowie")
+        );
+    }
+
+    #[test]
+    fn the_details_stop_at_the_heading() {
+        let p = parts_of(
+            "/// search the library\n\
+             ///\n\
+             /// Searches by artist.\n\
+             ///\n\
+             /// # Examples\n\
+             ///\n\
+             /// ```sh\n\
+             /// mdma search --artist Bowie\n\
+             /// mdma search --added -7 --genre jazz\n\
+             /// ```\n\
+             fn search() {}",
+        );
+        assert_eq!(p.details.as_deref(), Some("Searches by artist."));
+        assert_eq!(p.footer.as_deref(), Some(MDMA));
+    }
+
+    #[test]
+    fn a_second_level_heading_is_not_the_examples_heading() {
+        let p = parts_of(
+            "/// search the library\n\
+             ///\n\
+             /// ## Examples\n\
+             ///\n\
+             /// mdma search --artist Bowie\n\
+             fn search() {}",
+        );
+        assert_eq!(p.footer, None);
+        assert_eq!(
+            p.details.as_deref(),
+            Some("## Examples\n\nmdma search --artist Bowie")
+        );
+    }
+
+    // --- the shared attribute keys --------------------------------------------
+
+    /// `parse_keys` over `src`, with no keys of the caller's own.
+    fn keys(src: &str) -> Result<CommandMeta> {
+        use syn::parse::Parser;
+        (|input: ParseStream| parse_keys(input, "unknown", |_, _| Ok(false))).parse_str(src)
+    }
+
+    /// The error `parse_keys` raises for `src`.
+    fn keys_rejection(src: &str) -> String {
+        match keys(src) {
+            Ok(_) => panic!("`{src}` was accepted"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn aliases_repeat_in_source_order_and_hide_is_a_bare_word() {
+        let m = keys("alias = \"ls\", hide, alias = \"l\"").expect("parses");
+        let aliases: Vec<String> = m.aliases.iter().map(LitStr::value).collect();
+        assert_eq!(aliases, ["ls", "l"]);
+        assert!(m.hide.is_some());
+        let m = keys("").expect("parses");
+        assert!(m.aliases.is_empty() && m.hide.is_none());
+    }
+
+    #[test]
+    fn each_bad_key_is_rejected() {
+        assert_eq!(keys_rejection("help = \"x\""), "unknown");
+        assert_eq!(keys_rejection("\"x\""), "unknown");
+        assert_eq!(keys_rejection("hide, hide"), "`hide` is given twice");
+        assert_eq!(
+            keys_rejection("hide = true"),
+            "`hide` takes no value: write `hide`"
+        );
+        assert_eq!(keys_rejection("alias = \"\""), "an alias cannot be empty");
+        assert_eq!(
+            keys_rejection("alias = \"l s\""),
+            "an alias is one word: it cannot contain whitespace"
+        );
+        assert_eq!(
+            keys_rejection("alias = \"-l\""),
+            "an alias is a command name, not a flag: it cannot start with `-`"
+        );
+        assert_eq!(
+            keys_rejection("alias = \"ls\", alias = \"ls\""),
+            "alias `ls` is given twice"
+        );
+    }
+
+    #[test]
+    fn an_alias_equal_to_the_name_is_rejected() {
+        let m = keys("alias = \"list\"").expect("parses");
+        assert_eq!(
+            m.check_name("list", "command")
+                .expect_err("same word")
+                .to_string(),
+            "alias `list` is this command's own name: an alias is another name"
+        );
+        assert!(m.check_name("show", "command").is_ok());
     }
 
     #[test]

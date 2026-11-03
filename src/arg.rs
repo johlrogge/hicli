@@ -101,6 +101,55 @@
 //! }
 //! ```
 //!
+//! # A value that starts with `-`
+//!
+//! `bpaf` splits the command line into flags and words **before** any parser
+//! runs, so in `--since -7` the `-7` is already a short flag by the time
+//! `long("since").argument(..)` looks for its value: a plain `argument` accepts
+//! `--since=-7` (the value is glued to the flag) but rejects `--since -7` as a
+//! usage error. (clap spells the fix `allow_hyphen_values`.) `hicli` ships no
+//! helper for it; the recipe is a hand-written [`Arg::parser`] over `bpaf`'s
+//! public API — the flag and an `any` item glued together with `adjacent`, the
+//! ordinary `argument` as the alternative for the `=` spelling, and the first
+//! branch hidden so `--help` lists the option once, as `--since=DAYS`:
+//!
+//! ```
+//! use hicli::bpaf::{any, construct, long, Parser};
+//! use hicli::Arg;
+//!
+//! /// A relative date, in days: `-7` is a week ago.
+//! pub struct Since(String);
+//!
+//! impl Arg for Since {
+//!     fn parser() -> impl Parser<Self> {
+//!         // `--since VALUE`: the flag, then *any* next item, flag-shaped or
+//!         // not — hidden, so `--help` shows only the branch below.
+//!         let flag = long("since").req_flag(());
+//!         let value = any::<String, _, _>("DAYS", Some);
+//!         let separate = construct!(flag, value).adjacent().map(|((), v)| v).hide();
+//!         // `--since=VALUE`: an ordinary argument already reads this one.
+//!         let joined = long("since").argument::<String>("DAYS");
+//!         construct!([separate, joined]).map(Since)
+//!     }
+//! }
+//!
+//! for args in [&["--since", "-7"][..], &["--since=-7"][..]] {
+//!     let s = <Since as Arg>::parser()
+//!         .to_options()
+//!         .run_inner(args)
+//!         .expect("parses");
+//!     assert_eq!(s.0, "-7");
+//! }
+//! ```
+//!
+//! # A doc comment on an argument struct is a help heading
+//!
+//! `bpaf` renders the `///` doc comment on a `#[derive(Bpaf)]` struct as a
+//! **group heading** above that struct's options in `--help` — so a struct
+//! documented `/// Filtering` lists its options under `Filtering`. Keep it to a
+//! single user-facing line (or leave it off), and put developer prose in `//`
+//! comments beside the type instead.
+//!
 //! # Completion never changes the order
 //!
 //! Adding completion to a type does not change whether it is a positional:

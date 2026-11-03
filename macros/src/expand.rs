@@ -14,7 +14,7 @@
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{Ident, Type};
+use syn::{Ident, LitStr, Type};
 
 use crate::parse::{CommandFn, Slot};
 use crate::shared::handle_doc;
@@ -25,6 +25,9 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
         name,
         help,
         details,
+        footer,
+        aliases,
+        hide,
         ident,
         handle,
         cfg_attrs,
@@ -51,7 +54,7 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
         Slot::Ctx => quote!(ctx),
     });
 
-    let details = details.map(|d| quote!(.details(#d)));
+    let metadata = metadata(details.as_deref(), footer.as_deref(), &aliases, hide);
     let handle_doc = handle_doc(&ident);
 
     quote! {
@@ -68,8 +71,29 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
                 #parser,
                 |#args_pat, #ctx_binding: & #ctx_ty| #ident(#(#call_args),*),
             )
-            #details
+            #metadata
         }
+    }
+}
+
+/// The builder calls after `hicli::command(…)` / `hicli::group(…)`, in their
+/// fixed order: `.details(..)`, `.footer(..)`, one `.alias(..)` per alias in
+/// source order, `.hide()`. Shared with `#[group]`'s handle, so the two
+/// spell the same doc comment and the same keys the same way.
+pub(crate) fn metadata(
+    details: Option<&str>,
+    footer: Option<&str>,
+    aliases: &[LitStr],
+    hide: bool,
+) -> TokenStream {
+    let details = details.map(|d| quote!(.details(#d)));
+    let footer = footer.map(|f| quote!(.footer(#f)));
+    let hide = hide.then(|| quote!(.hide()));
+    quote! {
+        #details
+        #footer
+        #(.alias(#aliases))*
+        #hide
     }
 }
 
@@ -131,16 +155,28 @@ mod tests {
         // visible in one place, and a change to any of it has to be written
         // down here first.
         let got = expansion(
-            "",
+            "alias = \"new\", hide, alias = \"mk\"",
             "/// create an event\n\
              ///\n\
              /// The event directory is created if it does not exist.\n\
+             ///\n\
+             /// # Examples\n\
+             ///\n\
+             /// ```sh\n\
+             /// demo create ./summer \"Summer Party\"\n\
+             /// ```\n\
              pub fn create(r: EventRef, t: Title, ctx: &Ctx) -> Outcome { work() }",
         );
         let want = quote! {
             #[doc = " create an event"]
             #[doc = ""]
             #[doc = " The event directory is created if it does not exist."]
+            #[doc = ""]
+            #[doc = " # Examples"]
+            #[doc = ""]
+            #[doc = " ```sh"]
+            #[doc = " demo create ./summer \"Summer Party\""]
+            #[doc = " ```"]
             pub fn create(r: EventRef, t: Title, ctx: &Ctx) -> Outcome { work() }
 
             #[doc = "`hicli` registration handle for [`create`]."]
@@ -158,6 +194,10 @@ mod tests {
                     |(a0, a1), ctx: &Ctx| create(a0, a1, ctx),
                 )
                 .details("The event directory is created if it does not exist.")
+                .footer("Examples:\n  demo create ./summer \"Summer Party\"")
+                .alias("new")
+                .alias("mk")
+                .hide()
             }
         }
         .to_string();
