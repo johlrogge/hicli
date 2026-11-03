@@ -1,0 +1,5 @@
+error: group `search` already has a default command, `library`: a group has at most one
+  --> tests/ui/group_two_defaults.rs:19:12
+   |
+19 |     pub fn web(_ctx: &Ctx) {}
+   |            ^^^

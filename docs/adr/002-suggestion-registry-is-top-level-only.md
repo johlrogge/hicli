@@ -15,6 +15,8 @@ already relied on, now harder to violate by construction.
 
 Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verbandi` → `hicli`, `#[verb]` → `#[command]`, `Verb` → `Invocation`, `VerbResult` → `Outcome`). The text below is kept exactly as written.
 
+Scope unchanged by [ADR-011](011-curried-commands-and-default-commands.md) (2026-11-03): suggestions inside curried groups remain out of scope, and a typo under a group's default command reads as the default's query.
+
 ## Decision
 
 `App::names` remains a flat list of **top-level** command names (leaves, mounted

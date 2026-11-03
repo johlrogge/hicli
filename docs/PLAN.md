@@ -119,6 +119,19 @@ pub fn group<Ctx: 'static>(name: &'static str, help: impl Into<String>,
                            children: Vec<Command<Ctx>>) -> Command<Ctx>;
 pub fn external<Ctx: 'static>(ext: ExternalCommand) -> Command<Ctx>;   // git-style plugin
 
+// Curried commands and default commands (ADR-011). `Node<O>` is the one node type;
+// `Command<Ctx> = Node<Invocation<Ctx>>`, `Curried<T, Ctx> = Node<Partial<T, Invocation<Ctx>>>`,
+// and `group` is generic over `O`. Source-compatible with 0.1.0.
+pub fn curried_command<T, Ctx, A, R>(name: &'static str, help: impl Into<String>,
+                                     parser: impl Parser<A> + 'static,
+                                     run: impl Fn(A, T, &Ctx) -> R + Clone + 'static)
+    -> Curried<T, Ctx>;                    // parses A; yields a function awaiting T
+pub fn group_args<T: 'static, O: 'static, P: Parser<T> + 'static>(
+    name: &'static str, help: impl Into<String>, arg: impl Fn() -> P + 'static,
+    fixed: Vec<Node<O>>, bound: Vec<Node<Partial<T, O>>>) -> Node<O>;
+                                           // `#[group(args = T)]`: parse a T after the name, hand it on
+impl<O> Node<O> { pub fn by_default(self) -> Self; }   // `#[command(default)]`: runs when no sibling is named
+
 /// Anything that denotes a `Command`: a `Command` itself, or a zero-argument
 /// callable returning one — a `#[command]`/`#[group]` handle. What
 /// lets `commands![create, event]` mix handles without the call site writing `()`.
@@ -274,6 +287,16 @@ and `app!`'s list are unchanged in shape: **a bare path is always a handle**
 (`event` → `__hicli_event()`, `a::b` → `a::__hicli_b()`); anything else is
 an expression through `IntoCommand::into_command`.
 
+**Object then verb, and a default (ADR-011).** `#[group(args = SourceName)]` parses one
+`SourceName` (its `Arg::parser`, completion included) after the group's name; its
+`#[command(curried)]` children curry over their first owned parameter and receive it, while
+unmarked children stay fixed siblings, matched first (`source list` beside `source NAME sync`).
+`#[group(curried = T)]` is a plain group after an enclosing value, all children curried.
+`#[command(default)]` runs when no sibling is named (`search jazz` beside `search
+fact-values-for genre`), answers to no word of its own, and has the group's path. Both are
+sugar over `curried_command`/`group_args`/`Node::by_default`; the function stays untouched. Known
+limits (bpaf 0.9.27) are in ADR-011.
+
 **Consumer footprint of the macros — verified at the ADR-004 spike (2026-09-16)
 and the ADR-005 spike (2026-09-17, see each ADR's "Consequences"):**
 
@@ -292,8 +315,9 @@ and the ADR-005 spike (2026-09-17, see each ADR's "Consequences"):**
   `construct!` in declaration order, an argument struct containing a positional
   must be declared *after* every struct that doesn't (switches/options first,
   positionals last — see the Risks section and `EventRef`/`ShareOpts` in
-  `docs/sketches/moniker.rs`). Getting this wrong is a `bpaf` runtime panic when
-  the app is built, not a compile error.
+  `docs/sketches/moniker.rs`). Getting this wrong is a `bpaf` runtime panic when `--help`
+  renders (in any build), not a compile error; hicli renders `--help` once at fold time in debug
+  builds so it surfaces on the first debug run or test (#11).
 - **`#[group]` requires a doc comment, and a blank one is a compile error too.**
   ADR-001's rule (no doc comment on a command) is enforced by rustc, the same way
   `#[command]` enforces it — including a doc comment consisting only of blank `///`
@@ -431,8 +455,18 @@ canonical names are suggested), the doc comment's **examples footer** (a trailin
 `App::about` / `App::version` on the composition root; **`completion_script(Shell, bin)`**
 (ADR-009) — the shell script a user installs to wire TAB to the app.
 
-**Deferred:** group-level arguments ("currying" — `#[group(args = T)]`, ADR-005's syntax slot moved
-from ADR-004's `event(EventRef): […]` — the primitives are shaped for it, but nothing is built);
+**Also in: curried commands, `args` groups and default commands (ADR-011)** —
+`#[command(curried)]` (curried over its first owned parameter; the handle returns
+`Curried<T, Ctx>`), `#[group(args = T)]` (parses one `T` after the group's name, curried
+children receive it, unmarked children are fixed siblings matched first),
+`#[group(curried = T)]` (a plain group after an enclosing value) and `#[command(default)]` (runs
+when no sibling is named); the runtime primitives `curried_command`, `group_args` and
+`Node::by_default` over one generic `Node<O>`.
+
+**Deferred:** nested `args` groups (they parse at runtime but have no constructor or macro form);
+a default in a curried group; a top-level default; a default that also answers to its own name
+(recipe: a second `#[command]` calling the same function); a dedicated `source NAME --help` page;
+typo suggestions inside curried groups (ADR-002's scope stands) (all ADR-011);
 `inventory`/`linkme` auto-registration (still rejected outright — discovery here is lexical and
 local, reading one module body or one file, not link-time collection); argument-level proc-macro
 sugar beyond `#[arg(complete = …)]` (a field-attribute dialect naming metavar/positional-vs-option
@@ -474,6 +508,16 @@ them, not built ahead of that evidence.
   `#[group(ctx = T)]`, an author's own `#[path]`, a context-free file group, run-level dispatch three
   levels down, a `#[cfg]`'d-out command, and the help/details split) — plus `macros`'s own unit tests
   for `crate::resolve` against an in-memory `Fs`.
+- **Curried commands and default commands (ADR-011):** `tests/curried.rs` (an `args` group's
+  value reaching `#[command(curried)]` children and `#[group(curried = T)]` groups, fixed
+  siblings winning their own word, aliases and hidden siblings reserved, usage with the
+  placeholder, `Commands for SOURCE-NAME:` help, sibling completion by prefix) and
+  `tests/default_command.rs` (the default running when no sibling is named, `Invocation::path`
+  being the group's, `--` giving a literal query, the section in `--help`), new `trybuild` cases
+  for each new rejection, and `tests/bpaf_contract.rs`, which pins bpaf's behaviour
+  byte-for-byte (including the completion layer's reliance on `construct!` order and eager
+  `ParseComp`) and is re-run on every bpaf upgrade; a future CI job should run
+  `cargo update -p bpaf && just test`, since `bpaf = "0.9.27"` is a caret requirement.
 - **Macro-expansion equivalence:** the tree `app!`/`#[group]`/`commands!` build and the same tree
   written by hand with `App::commands(vec![…])`/`hicli::group(…)` parse identical argv to
   identical `invocation.path()`s — proving the macros are sugar, not a second code path.
@@ -540,7 +584,8 @@ them, not built ahead of that evidence.
 - **bpaf's positionals-last rule becomes a `#[command]` parameter-order rule the macro cannot
   enforce.** Argument structs are composed with `construct!` in declaration order, so a struct
   containing a positional must be the last one in the signature that has one; getting this wrong
-  is a panic from `bpaf` when the parser is built, not a compile error from `#[command]` — it has no
+  is a panic from `bpaf` when `--help` renders (in any build; hicli renders it once at fold time in
+  debug builds so the first debug run or test hits it, #11), not a compile error from `#[command]` — it has no
   way to see inside `EventDir`/`ShareOpts` to know which is which. Mitigated by convention (declare
   switches/options first, positionals last) and by the example CLI + moniker's real argument
   structs exercising the rule, not by the macro catching it.

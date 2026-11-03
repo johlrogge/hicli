@@ -1,0 +1,5 @@
+error: a `curried` command receives its group's argument as its first owned parameter, and this function has none: add a parameter of the group's `args` type first
+  --> tests/ui/command_curried_nothing.rs:10:11
+   |
+10 | #[command(curried)]
+   |           ^^^^^^^

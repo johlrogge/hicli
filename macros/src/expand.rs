@@ -16,7 +16,7 @@ use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{Ident, LitStr, Type};
 
-use crate::parse::{CommandFn, Slot};
+use crate::parse::{CommandFn, CurriedParam, Slot};
 use crate::shared::handle_doc;
 
 /// Expand a validated [`CommandFn`] into the function and its handle.
@@ -31,6 +31,8 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
         ident,
         handle,
         cfg_attrs,
+        default,
+        curried,
         arg_tys,
         bindings,
         slots,
@@ -48,14 +50,48 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
     let (parser, args_pat) = parser_for(&arg_tys, &bindings);
 
     // The function is called with its arguments in the order it declared them,
-    // and the context wherever it put it.
+    // and the context wherever it put it — a curried parameter included, which
+    // is still a `Slot::Arg` under its own binding.
     let call_args = slots.iter().map(|s| match s {
         Slot::Arg(binding) => quote!(#binding),
         Slot::Ctx => quote!(ctx),
     });
 
-    let metadata = metadata(details.as_deref(), footer.as_deref(), &aliases, hide);
+    let metadata = metadata(
+        details.as_deref(),
+        footer.as_deref(),
+        &aliases,
+        hide,
+        default,
+    );
     let handle_doc = handle_doc(&ident);
+
+    // A plain command parses all of its arguments; a curried one receives the
+    // first from its group, between the parsed ones and the context.
+    let (ret, call) = match curried {
+        None => (
+            quote!(::hicli::Command<#ctx_ty>),
+            quote! {
+                ::hicli::command(
+                    #name,
+                    #help,
+                    #parser,
+                    |#args_pat, #ctx_binding: & #ctx_ty| #ident(#(#call_args),*),
+                )
+            },
+        ),
+        Some(CurriedParam { ty, binding }) => (
+            quote!(::hicli::Curried<#ty, #ctx_ty>),
+            quote! {
+                ::hicli::curried_command(
+                    #name,
+                    #help,
+                    #parser,
+                    |#args_pat, #binding: #ty, #ctx_binding: & #ctx_ty| #ident(#(#call_args),*),
+                )
+            },
+        ),
+    };
 
     quote! {
         #item
@@ -64,13 +100,8 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
         #[doc(hidden)]
         #[allow(unreachable_pub)]
         #(#cfg_attrs)*
-        pub fn #handle #generics () -> ::hicli::Command<#ctx_ty> {
-            ::hicli::command(
-                #name,
-                #help,
-                #parser,
-                |#args_pat, #ctx_binding: & #ctx_ty| #ident(#(#call_args),*),
-            )
+        pub fn #handle #generics () -> #ret {
+            #call
             #metadata
         }
     }
@@ -78,22 +109,26 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
 
 /// The builder calls after `hicli::command(…)` / `hicli::group(…)`, in their
 /// fixed order: `.details(..)`, `.footer(..)`, one `.alias(..)` per alias in
-/// source order, `.hide()`. Shared with `#[group]`'s handle, so the two
-/// spell the same doc comment and the same keys the same way.
+/// source order, `.hide()`, and — last — `.by_default()` for a `default`
+/// command. Shared with `#[group]`'s handle, so the two spell the same doc
+/// comment and the same keys the same way.
 pub(crate) fn metadata(
     details: Option<&str>,
     footer: Option<&str>,
     aliases: &[LitStr],
     hide: bool,
+    default: bool,
 ) -> TokenStream {
     let details = details.map(|d| quote!(.details(#d)));
     let footer = footer.map(|f| quote!(.footer(#f)));
     let hide = hide.then(|| quote!(.hide()));
+    let default = default.then(|| quote!(.by_default()));
     quote! {
         #details
         #footer
         #(.alias(#aliases))*
         #hide
+        #default
     }
 }
 
@@ -202,6 +237,144 @@ mod tests {
         }
         .to_string();
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn a_curried_arity_two_command_receives_its_first_parameter() {
+        // The reference expansion for `curried`: the same handle name, a
+        // `Curried<T, Ctx>` return, `curried_command`, and a parser of the
+        // *remaining* parameters only. The closure takes the parsed value, the
+        // curried one, then the context — and the function is still called in
+        // its declared order.
+        let got = expansion(
+            "curried",
+            "/// cancel a download\n\
+             pub fn cancel(s: SourceName, d: DownloadId, ctx: &Ctx) -> Outcome { work() }",
+        );
+        let want = quote! {
+            #[doc = " cancel a download"]
+            pub fn cancel(s: SourceName, d: DownloadId, ctx: &Ctx) -> Outcome { work() }
+
+            #[doc = "`hicli` registration handle for [`cancel`]."]
+            #[doc(hidden)]
+            #[allow(unreachable_pub)]
+            pub fn __hicli_cancel() -> ::hicli::Curried<SourceName, Ctx> {
+                ::hicli::curried_command(
+                    "cancel",
+                    "cancel a download",
+                    {
+                        let a1 = <DownloadId as ::hicli::Arg>::parser();
+                        ::hicli::bpaf::construct!(a1,)
+                    },
+                    |a1, a0: SourceName, ctx: &Ctx| cancel(a0, a1, ctx),
+                )
+            }
+        }
+        .to_string();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn a_curried_command_with_three_parameters_parses_the_last_two() {
+        let got = expansion(
+            "curried, alias = \"mv\"",
+            "/// move a download\n\
+             fn shift(s: SourceName, d: DownloadId, t: Target, ctx: &Ctx) {}",
+        );
+        assert!(
+            got.contains(
+                "let a1 = < DownloadId as :: hicli :: Arg > :: parser () ; \
+                 let a2 = < Target as :: hicli :: Arg > :: parser () ; \
+                 :: hicli :: bpaf :: construct ! (a1 , a2 ,)"
+            ),
+            "{got}"
+        );
+        assert!(
+            got.contains(
+                "| (a1 , a2) , a0 : SourceName , ctx : & Ctx | shift (a0 , a1 , a2 , ctx)"
+            ),
+            "{got}"
+        );
+        assert!(got.ends_with(". alias (\"mv\") }"), "{got}");
+    }
+
+    #[test]
+    fn a_curried_command_with_nothing_else_parses_nothing() {
+        // Arity 1: the curried parameter is the only one, so the parser is
+        // `pure(())` and the closure binds `()` for it.
+        let got = expansion(
+            "curried",
+            "/// sync a source\nfn sync(s: SourceName, ctx: &Ctx) {}",
+        );
+        let want = quote! {
+            #[doc = " sync a source"]
+            fn sync(s: SourceName, ctx: &Ctx) {}
+
+            #[doc = "`hicli` registration handle for [`sync`]."]
+            #[doc(hidden)]
+            #[allow(unreachable_pub)]
+            pub fn __hicli_sync() -> ::hicli::Curried<SourceName, Ctx> {
+                ::hicli::curried_command(
+                    "sync",
+                    "sync a source",
+                    ::hicli::bpaf::pure(()),
+                    |(), a0: SourceName, ctx: &Ctx| sync(a0, ctx),
+                )
+            }
+        }
+        .to_string();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn a_context_free_curried_command_is_generic_over_ctx() {
+        let got = expansion("curried", "/// show a source\nfn show(s: SourceName) {}");
+        assert!(
+            got.contains(
+                "pub fn __hicli_show < Ctx : 'static > () -> :: hicli :: Curried < SourceName , \
+                 Ctx >"
+            ),
+            "{got}"
+        );
+        assert!(
+            got.contains("| () , a0 : SourceName , _ctx : & Ctx | show (a0)"),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn a_curried_command_keeps_the_contexts_declared_position() {
+        let got = expansion(
+            "curried",
+            "/// cancel a download\nfn cancel(ctx: &Ctx, s: SourceName, d: DownloadId) {}",
+        );
+        assert!(
+            got.contains("| a1 , a0 : SourceName , ctx : & Ctx | cancel (ctx , a0 , a1)"),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn a_default_command_ends_in_by_default() {
+        let got = expansion("default", "/// search the library\nfn search(q: Query) {}");
+        assert!(
+            got.ends_with("| a0 , _ctx : & Ctx | search (a0) ,) . by_default () }"),
+            "{got}"
+        );
+        assert!(got.contains("-> :: hicli :: Command < Ctx >"), "{got}");
+    }
+
+    #[test]
+    fn by_default_comes_after_every_other_call() {
+        // `default` refuses `alias` and `hide` and a multi-line doc, so the
+        // order is pinned on `metadata` itself.
+        let aliases: Vec<LitStr> = vec![syn::parse_str("\"s\"").expect("a literal")];
+        let got = metadata(Some("d"), Some("f"), &aliases, true, true).to_string();
+        assert_eq!(
+            got,
+            ". details (\"d\") . footer (\"f\") . alias (\"s\") . hide () . by_default ()"
+        );
+        assert_eq!(metadata(None, None, &[], false, false).to_string(), "");
     }
 
     #[test]

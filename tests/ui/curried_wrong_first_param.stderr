@@ -1,0 +1,14 @@
+error[E0277]: this is not a command curried over `SourceName` (with context `Ctx`)
+  --> tests/ui/curried_wrong_first_param.rs:30:12
+   |
+30 |     pub fn cancel(_j: JobId, _ctx: &Ctx) {}
+   |            ^^^^^^ the trait `hicli::__CurriedOver<SourceName, Ctx>` is not implemented for `Node<Partial<JobId, Invocation<Ctx>>>`
+   |
+   = note: a #[command(curried)] in #[group(args = SourceName)] takes `SourceName` as its first owned parameter
+help: the trait `__CurriedOver<SourceName, Ctx>` is not implemented for `Node<Partial<JobId, Invocation<Ctx>>>`
+      but trait `__CurriedOver<JobId, Ctx>` is implemented for it
+  --> src/command.rs
+   |
+   | impl<T, Ctx> __CurriedOver<T, Ctx> for Curried<T, Ctx> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `JobId`, found `SourceName`

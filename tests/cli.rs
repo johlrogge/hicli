@@ -272,6 +272,14 @@ fn completion_lists_commands_and_the_external() {
     }
 }
 
+/// Regression: bpaf's revision-1 payload has no header line, so the first of
+/// several candidates is a candidate too — `App::complete` once dropped it.
+#[test]
+fn completion_at_the_top_level_offers_every_command() {
+    let app: App<(), Ctx> = app! { globals: pure(()), commands: [event, status] };
+    assert_eq!(app.complete(cli! { "" }), ["event", "status"]);
+}
+
 /// The same request, one layer down: `--bpaf-complete-rev=1` is the revision
 /// bpaf 0.9.28 emits in its generated shell scripts, and the result
 /// short-circuits as `ParseFailure::Completion`, whose payload

@@ -1,0 +1,5 @@
+error: group `source` takes `args = SourceName`, but none of its children receives it: mark the commands that take it #[command(curried)]
+  --> tests/ui/group_args_no_curried.rs:14:16
+   |
+14 | #[group(args = SourceName)]
+   |                ^^^^^^^^^^

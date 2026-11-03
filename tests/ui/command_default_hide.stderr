@@ -1,0 +1,5 @@
+error: `default` cannot be combined with `hide`: a default command is never listed, so there is nothing to hide
+ --> tests/ui/command_default_hide.rs:9:20
+  |
+9 | #[command(default, hide)]
+  |                    ^^^^

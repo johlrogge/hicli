@@ -98,7 +98,27 @@ impl CallSite {
 /// ///
 /// /// The event directory is created if it does not exist.
 /// #[command]
-/// pub fn create(dir: EventDir, name: EventName, ctx: &Ctx) -> Outcome { … }
+/// pub fn create(dir: EventDir, name: EventName, ctx: &Ctx) -> Outcome { /* … */ }
+/// ```
+///
+/// Its keys: `name = "…"`, `alias = "…"` (repeatable) and `hide` (ADR-008),
+/// and two bare words from ADR-011:
+///
+/// - `curried` — the **first owned parameter** is not parsed by the command:
+///   it is its group's argument (`#[group(args = T)]`), received already
+///   parsed. The handle returns a `hicli::Curried<T, Ctx>` instead of a
+///   `hicli::Command<Ctx>`, and the function is still called with its
+///   parameters in the order it declared them. Refused on a function with no
+///   owned parameter, and together with `default`.
+/// - `default` — the command runs when its group is invoked without naming a
+///   command; the handle ends in `.by_default()`. It has no name of its own to
+///   spell or hide, so `name`, `alias` and `hide` are refused with it, and its
+///   doc comment is one line (details and examples belong to the group).
+///
+/// ```ignore
+/// /// cancel a download
+/// #[command(curried)]
+/// pub fn cancel(source: SourceName, id: DownloadId, ctx: &Ctx) -> Outcome { /* … */ }
 /// ```
 ///
 /// The full contract — name, help, arguments, context, return type, the
@@ -147,7 +167,7 @@ pub fn arg(input: TokenStream) -> TokenStream {
 /// pub mod event {
 ///     /// create an event
 ///     #[command]
-///     pub fn create(dir: EventDir, ctx: &Ctx) -> Outcome { … }
+///     pub fn create(dir: EventDir, ctx: &Ctx) -> Outcome { /* … */ }
 /// }
 /// ```
 ///
@@ -158,6 +178,34 @@ pub fn arg(input: TokenStream) -> TokenStream {
 /// /// events and instances
 /// #[group]
 /// pub mod event;
+/// ```
+///
+/// Its keys: `ctx = <Type>`, `alias = "…"` (repeatable) and `hide`, and two
+/// from ADR-011:
+///
+/// - `args = T` — the group parses a `T` (through `T`'s `Arg` impl) in front
+///   of its `#[command(curried)]` and `#[group(curried = T)]` children, which
+///   receive it; its other children are fixed siblings that do not. At least
+///   one child must receive it, and no child may be `default`.
+/// - `curried = T` — the group sits inside an `args = T` (or another
+///   `curried = T`) group and hands the `T` on: every child must receive it,
+///   and the handle returns a `hicli::Curried<T, Ctx>`. Not combinable with
+///   `args` yet.
+///
+/// A plain group refuses a curried child, and has at most one
+/// `#[command(default)]` child.
+///
+/// ```ignore
+/// /// music sources
+/// #[group(args = SourceName)]
+/// pub mod source {
+///     /// list sources
+///     #[command]
+///     pub fn list(ctx: &Ctx) -> Outcome { /* … */ }
+///     /// sync a source
+///     #[command(curried)]
+///     pub fn sync(source: SourceName, ctx: &Ctx) -> Outcome { /* … */ }
+/// }
 /// ```
 ///
 /// The full contract — name, help, which items become children, how the

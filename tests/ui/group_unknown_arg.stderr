@@ -1,5 +1,5 @@
-error: #[group] takes `ctx = <Type>`, `alias = "..."` (repeatable) and `hide`
- --> tests/ui/group_unknown_arg.rs:9:9
-  |
-9 | #[group(name = "events")]
-  |         ^^^^
+error: #[group] takes `ctx = <Type>`, `args = <Type>`, `curried = <Type>`, `alias = "..."` (repeatable) and `hide`
+  --> tests/ui/group_unknown_arg.rs:10:9
+   |
+10 | #[group(name = "events")]
+   |         ^^^^

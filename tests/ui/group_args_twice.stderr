@@ -1,0 +1,5 @@
+error: `args` is given twice
+  --> tests/ui/group_args_twice.rs:17:28
+   |
+17 | #[group(args = SourceName, args = JobId)]
+   |                            ^^^^

@@ -1,0 +1,5 @@
+error: `args` and `curried` cannot be combined yet: a group that receives its parent's argument cannot take another of its own (deferred)
+  --> tests/ui/group_args_and_curried.rs:18:9
+   |
+18 | #[group(args = JobId, curried = SourceName)]
+   |         ^^^^

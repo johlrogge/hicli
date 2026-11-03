@@ -120,22 +120,24 @@ pub(crate) fn resolve(
 fn first_context(children: &[Child], outline: Option<&Outline>) -> Result<Option<Type>> {
     for child in children {
         match &child.kind {
-            ChildKind::Command { ctx: Some(ty) } => {
+            // A curried command's first owned parameter is not a reference,
+            // so its `&T` is read here like any other command's.
+            ChildKind::Command { ctx: Some(ty), .. } => {
                 check_liftable(ty, &child.ident)?;
                 return Ok(Some(ty.clone()));
             }
-            ChildKind::Command { ctx: None } => {}
+            ChildKind::Command { ctx: None, .. } => {}
             // A nested group's commands are this group's commands too, one
             // module further down — and the walk stops at the first one that
             // names a type, wherever it is.
-            ChildKind::Group { items } => {
+            ChildKind::Group { items, .. } => {
                 if let Some(ty) = first_context(&children_of(items), outline)? {
                     return Ok(Some(ty));
                 }
             }
             // The body is in another file. Read it if there is an outline to
             // read it with, and keep walking one file further down.
-            ChildKind::Outlined { path } => {
+            ChildKind::Outlined { path, .. } => {
                 let Some(outline) = outline else { continue };
                 let Some((items, deeper)) = outline.open(&child.ident, path.as_deref()) else {
                     continue;
@@ -196,7 +198,7 @@ fn relative(owner: &Ident, ty: &Type) -> String {
 ///
 /// Both sides of `::` are closed separately, so a leading one (`:: other::Ctx`)
 /// is closed too.
-fn render(ty: &Type) -> String {
+pub(crate) fn render(ty: &Type) -> String {
     ty.to_token_stream()
         .to_string()
         .replace(" ::", "::")
@@ -245,6 +247,19 @@ mod tests {
                      /// v\n#[command] fn version() {}
                      /// c\n#[command] fn create(t: Title, ctx: &Ctx) {}
                      /// r\n#[command] fn roster(ctx: &Later) {}
+                 }"
+            ),
+            Some("Ctx".to_string())
+        );
+    }
+
+    #[test]
+    fn a_curried_commands_context_is_read_past_its_curried_parameter() {
+        assert_eq!(
+            context_of(
+                None,
+                "mod source {
+                     /// s\n#[command(curried)] fn sync(s: SourceName, ctx: &Ctx) {}
                  }"
             ),
             Some("Ctx".to_string())

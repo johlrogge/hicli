@@ -277,6 +277,56 @@ Two runnable versions of the above — a nested group, a `guard`, an external su
 [`examples/files/`](examples/files/) (groups in files); try `just demo --help` and
 `just demo-files --help`.
 
+## Object then verb, and a default command
+
+Two shapes beyond leaves and groups (see
+[`docs/adr/011-curried-commands-and-default-commands.md`](docs/adr/011-curried-commands-and-default-commands.md)).
+
+**A group that parses a value after its name** — `app source bandcamp sync` beside
+`app source list`. The group parses one `SourceName`; commands marked `curried` take it as
+their first owned parameter, unmarked ones are fixed siblings that take none:
+
+```rust
+/// manage sources
+#[group(args = SourceName)]
+pub mod source {
+    use super::*;
+
+    /// list sources
+    #[command]
+    pub fn list(ctx: &Ctx) -> Outcome { … }
+
+    /// sync a source
+    #[command(curried)]
+    pub fn sync(s: SourceName, ctx: &Ctx) -> Outcome { … }
+}
+```
+
+`sync` is still the function you wrote. A child that receives a value of another type is a
+compile error. A word spelling a fixed sibling (name or alias) is that sibling, never the value.
+A plain group inside the value's reach is `#[group(curried = SourceName)]`. Usage shows
+`source SOURCE-NAME sync`; `source --help` lists them under `Commands for SOURCE-NAME:`.
+
+**A default command** runs when no sibling is named — `app search jazz` beside
+`app search fact-values-for genre`:
+
+```rust
+/// search by text
+#[command(default)]
+pub fn query(f: Filters, q: Query, ctx: &Ctx) -> Outcome { … }
+```
+
+It answers to no word of its own, its `Invocation::path` is the group's, and `search --
+fact-values-for` searches for that literal word. Its positionals must come last.
+
+Known limits (`bpaf` 0.9.27): `source <TAB>` with nothing typed also completes the curried
+commands (picking one leads to a confusing error); a one-match value completer hides a
+prefix-matching fixed sibling (`source l` → only `local`); the old name-last order
+`source sync bandcamp` gives a misleading "did you mean `resync`"; typo suggestions inside
+curried groups are lost when a fixed sibling exists; `source NAME --help` shows the group page;
+a misspelled sibling under a default reads as a query. A default cannot be at the top level or
+in a curried group.
+
 ## How to test it
 
 Testing is in-process and first-class: no subprocess, no `assert_cmd`, no golden
@@ -375,7 +425,9 @@ Thirteen things that will otherwise bite you, stated plainly:
 2. **Positional argument structs come last in a command's parameter list.** The
    parameters are composed with `bpaf`'s `construct!` in declaration order, and `bpaf`
    requires every positional to sit at the right-hand end. Declare switches and options
-   first, positionals last. It is a rule about the *parameter* order only — a `--flag`
+   first, positionals last. Getting it wrong makes `bpaf` panic when `--help` renders, in any
+   build; in debug builds hicli renders `--help` once when the app is assembled, so the first
+   debug run or test hits it. It is a rule about the *parameter* order only — a `--flag`
    is still accepted anywhere on the command line.
 
 3. **A bare path in `commands!` is always a handle**, never a value. `commands![event]`

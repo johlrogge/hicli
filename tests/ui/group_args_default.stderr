@@ -1,0 +1,5 @@
+error: `list` cannot be a default command: group `source` takes an argument, so it has no default command
+  --> tests/ui/group_args_default.rs:20:12
+   |
+20 |     pub fn list(_ctx: &Ctx) {}
+   |            ^^^^

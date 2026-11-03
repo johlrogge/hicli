@@ -11,6 +11,11 @@ a second list, its scope is unchanged) and ADR-005 (`#[command]` and `#[group]`
 gain keys, read by one shared rule). ADR-004's rejection of `help =` sugar and
 of a structure builder **stands**.
 
+Extended by [ADR-011](011-curried-commands-and-default-commands.md) (2026-11-03):
+`#[command]` gains the flag keys `curried` and `default`, and `#[group]` gains
+`args = T` and `curried = T`. Unlike `alias` and `hide`, these are about a
+command's *position in the tree*, not how it is typed or advertised.
+
 ## Decision
 
 ### 1. All help text lives in the doc comment, in three slots

@@ -1,5 +1,6 @@
-//! `#[group]` takes `ctx = <Type>`, `alias` and `hide`. A group's name is its
-//! module's ident — there is no `name = "…"` override.
+//! `#[group]` takes `ctx = <Type>`, `args = <Type>`, `curried = <Type>`, `alias`
+//! and `hide`. A group's name is its module's ident — there is no `name = "…"`
+//! override.
 
 use hicli::group;
 

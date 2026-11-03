@@ -1,5 +1,5 @@
-//! `#[command]` takes `name`, `alias` and `hide` — help is the doc comment,
-//! never an attribute key.
+//! `#[command]` takes `name`, `alias`, `hide`, `curried` and `default` — help is
+//! the doc comment, never an attribute key.
 
 use hicli::command;
 

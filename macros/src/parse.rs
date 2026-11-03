@@ -15,23 +15,98 @@ use crate::shared::{
 };
 
 /// The message for an argument `#[command]` does not take.
-const UNKNOWN_ARG: &str =
-    "#[command] takes `name = \"...\"`, `alias = \"...\"` (repeatable) and `hide`";
+const UNKNOWN_ARG: &str = "#[command] takes `name = \"...\"`, `alias = \"...\"` (repeatable), \
+                           `hide`, `curried` and `default`";
+
+/// The message for `curried` on a function with no owned parameter to curry.
+const CURRIED_NOTHING: &str = "a `curried` command receives its group's argument as its first \
+                               owned parameter, and this function has none: add a parameter of \
+                               the group's `args` type first";
+
+/// The message for `curried` and `default` on one command.
+const CURRIED_DEFAULT: &str = "`curried` and `default` cannot be combined: a group that hands its \
+                               commands an argument has no default command";
+
+/// The message for a `default` command whose doc comment says more than one
+/// line.
+const DEFAULT_DOC: &str = "a `default` command is shown on its group's help page, so its doc \
+                           comment is its one-line help only: move the details and examples to \
+                           the group's doc comment";
+
+/// The message for `default` together with a key that spells or hides the
+/// command's name: `name`, `alias` or `hide`, each with its own reason.
+fn default_with(key: &str) -> String {
+    if key == "hide" {
+        return "`default` cannot be combined with `hide`: a default command is never listed, so \
+                there is nothing to hide"
+            .to_string();
+    }
+    format!(
+        "`default` cannot be combined with `{key}`: a default command answers to no word, so it \
+         takes no name or alias"
+    )
+}
 
 /// What `#[command]` itself was given: `name = "..."`, `alias = "..."`
-/// (repeatable) and `hide`, each optional.
+/// (repeatable), `hide`, `curried` and `default`, each optional.
 #[derive(Default)]
 pub(crate) struct CommandArgs {
     /// An explicit command name, overriding the ident.
     name: Option<LitStr>,
     /// The aliases and the visibility, read by the rules `#[group]` shares.
     meta: CommandMeta,
+    /// Where `curried` was written, if it was: the first owned parameter is
+    /// the group's argument, not one of the command's own.
+    curried: Option<Ident>,
+    /// Where `default` was written, if it was: the command runs when its group
+    /// is invoked without naming a command.
+    default: Option<Ident>,
+}
+
+impl CommandArgs {
+    /// Whether `curried` was given — what a parent `#[group]` reads to sort
+    /// this child into the commands that receive its argument.
+    pub(crate) fn is_curried(&self) -> bool {
+        self.curried.is_some()
+    }
+
+    /// Whether `default` was given — what a parent `#[group]` reads to refuse
+    /// a second one, or one in a group that takes an argument.
+    pub(crate) fn is_default(&self) -> bool {
+        self.default.is_some()
+    }
+}
+
+/// Read a bare-word key (`curried`, `default`) into `slot`, refusing a value
+/// and a repeat.
+fn bare_key(slot: &mut Option<Ident>, key: &Ident, input: ParseStream) -> Result<()> {
+    if input.peek(Token![=]) {
+        return Err(Error::new_spanned(
+            key,
+            format!("`{key}` takes no value: write `{key}`"),
+        ));
+    }
+    if slot.is_some() {
+        return Err(Error::new_spanned(key, format!("`{key}` is given twice")));
+    }
+    *slot = Some(key.clone());
+    Ok(())
 }
 
 impl Parse for CommandArgs {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut name: Option<LitStr> = None;
+        let mut curried: Option<Ident> = None;
+        let mut default: Option<Ident> = None;
         let meta = parse_keys(input, UNKNOWN_ARG, |key, input| {
+            if key == "curried" {
+                bare_key(&mut curried, key, input)?;
+                return Ok(true);
+            }
+            if key == "default" {
+                bare_key(&mut default, key, input)?;
+                return Ok(true);
+            }
             if key != "name" {
                 return Ok(false);
             }
@@ -44,7 +119,37 @@ impl Parse for CommandArgs {
             name = Some(lit);
             Ok(true)
         })?;
-        Ok(CommandArgs { name, meta })
+        let args = CommandArgs {
+            name,
+            meta,
+            curried,
+            default,
+        };
+        args.check_combinations()?;
+        Ok(args)
+    }
+}
+
+impl CommandArgs {
+    /// Refuse the keys that cannot go together with `default`, each at the
+    /// key that conflicts with it.
+    fn check_combinations(&self) -> Result<()> {
+        let Some(default) = &self.default else {
+            return Ok(());
+        };
+        if self.curried.is_some() {
+            return Err(Error::new_spanned(default, CURRIED_DEFAULT));
+        }
+        if let Some(name) = &self.name {
+            return Err(Error::new_spanned(name, default_with("name")));
+        }
+        if let Some(alias) = self.meta.aliases.first() {
+            return Err(Error::new_spanned(alias, default_with("alias")));
+        }
+        if let Some(hide) = self.meta.hide {
+            return Err(Error::new(hide, default_with("hide")));
+        }
+        Ok(())
     }
 }
 
@@ -78,11 +183,17 @@ pub(crate) struct CommandFn {
     /// The `#[cfg]` / `#[cfg_attr]` attributes, *copied* onto the handle so it
     /// is configured out together with the function it registers.
     pub(crate) cfg_attrs: Vec<Attribute>,
-    /// The type of each owned parameter, **as written**, in declaration order.
-    /// Each is resolved through `Arg` at expansion time, spanned where the
-    /// author wrote it.
+    /// Whether `default` was given: the handle ends in `.by_default()`.
+    pub(crate) default: bool,
+    /// With `curried`, the first owned parameter — the group's argument, which
+    /// the command receives instead of parsing. It is *not* in `arg_tys` or
+    /// `bindings`.
+    pub(crate) curried: Option<CurriedParam>,
+    /// The type of each owned parameter the command parses itself, **as
+    /// written**, in declaration order. Each is resolved through `Arg` at
+    /// expansion time, spanned where the author wrote it.
     pub(crate) arg_tys: Vec<Type>,
-    /// The closure binding for each owned parameter, in declaration order.
+    /// The closure binding for each of those parameters, in declaration order.
     pub(crate) bindings: Vec<Ident>,
     /// The original parameter order, for the call into the function.
     pub(crate) slots: Vec<Slot>,
@@ -93,12 +204,35 @@ pub(crate) struct CommandFn {
     pub(crate) item: ItemFn,
 }
 
+/// The parameter a `curried` command receives from its group.
+pub(crate) struct CurriedParam {
+    /// Its type, as written — the `T` of the handle's `Curried<T, Ctx>`.
+    pub(crate) ty: Type,
+    /// Its closure binding; it keeps its declaration-order name (`a0`).
+    pub(crate) binding: Ident,
+}
+
 impl CommandFn {
     /// Read `item`, or explain why it cannot be a command.
     pub(crate) fn from_item(args: CommandArgs, item: ItemFn) -> Result<CommandFn> {
         check_signature(&item.sig)?;
-        let params = Params::read(&item.sig)?;
+        let mut params = Params::read(&item.sig)?;
+        let curried = match &args.curried {
+            None => None,
+            Some(key) if params.arg_tys.is_empty() => {
+                return Err(Error::new_spanned(key, CURRIED_NOTHING))
+            }
+            Some(_) => Some(CurriedParam {
+                ty: params.arg_tys.remove(0),
+                binding: params.bindings.remove(0),
+            }),
+        };
         let doc = read_doc(&item.attrs, &item.sig, COMMAND_NEEDS_DOC)?;
+        if let Some(key) = &args.default {
+            if doc.details.is_some() || doc.footer.is_some() {
+                return Err(Error::new_spanned(key, DEFAULT_DOC));
+            }
+        }
         let ident = item.sig.ident.clone();
         let name = match args.name {
             Some(n) => n.value(),
@@ -115,6 +249,8 @@ impl CommandFn {
             handle: handle_ident(&ident),
             cfg_attrs: cfg_attrs(&item.attrs),
             ident,
+            default: args.default.is_some(),
+            curried,
             arg_tys: params.arg_tys,
             bindings: params.bindings,
             slots: params.slots,
@@ -255,6 +391,7 @@ fn check_pattern(pat: &Pat) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quote::ToTokens;
 
     /// Read `src` as a command and report `(command name, handle ident)`.
     fn names_of(src: &str) -> (String, String) {
@@ -344,6 +481,107 @@ mod tests {
         assert_eq!(
             rejection("name = \"show\", alias = \"show\""),
             "alias `show` is this command's own name: an alias is another name"
+        );
+    }
+
+    /// The error `#[command(attr)]` raises on the function `src`.
+    fn rejection_on(attr: &str, src: &str) -> String {
+        match command_with(attr, src) {
+            Ok(_) => panic!("`{attr}` on `{src}` was accepted"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn curried_splits_off_the_first_owned_parameter() {
+        let c = command_with(
+            "curried",
+            "/// cancel a download\nfn cancel(ctx: &Ctx, s: SourceName, d: DownloadId) {}",
+        )
+        .expect("is a command");
+        let curried = c.curried.expect("is curried");
+        assert_eq!(curried.ty.to_token_stream().to_string(), "SourceName");
+        assert_eq!(curried.binding.to_string(), "a0");
+        // The rest keep their declaration-order names …
+        let rest: Vec<String> = c.bindings.iter().map(ToString::to_string).collect();
+        assert_eq!(rest, ["a1"]);
+        let tys: Vec<String> = c
+            .arg_tys
+            .iter()
+            .map(|t| t.to_token_stream().to_string())
+            .collect();
+        assert_eq!(tys, ["DownloadId"]);
+        // … and the call order is untouched.
+        assert_eq!(c.slots.len(), 3);
+        assert!(!c.default);
+    }
+
+    #[test]
+    fn without_curried_every_owned_parameter_is_parsed() {
+        let c = command_with("", "/// go\nfn go(s: SourceName, d: DownloadId) {}")
+            .expect("is a command");
+        assert!(c.curried.is_none());
+        assert_eq!(c.bindings.len(), 2);
+    }
+
+    #[test]
+    fn default_is_read() {
+        let c =
+            command_with("default", "/// search\nfn search(q: Query) {}").expect("is a command");
+        assert!(c.default);
+        let args: CommandArgs = syn::parse_str("default").expect("parses");
+        assert!(args.is_default() && !args.is_curried());
+        let args: CommandArgs = syn::parse_str("curried, alias = \"c\"").expect("parses");
+        assert!(args.is_curried() && !args.is_default());
+    }
+
+    #[test]
+    fn each_curried_and_default_rejection_is_raised() {
+        assert_eq!(rejection("curried, curried"), "`curried` is given twice");
+        assert_eq!(rejection("default, default"), "`default` is given twice");
+        assert_eq!(
+            rejection("curried = true"),
+            "`curried` takes no value: write `curried`"
+        );
+        assert_eq!(
+            rejection("default = true"),
+            "`default` takes no value: write `default`"
+        );
+        assert_eq!(rejection("curried, default"), CURRIED_DEFAULT);
+        assert_eq!(rejection("default, curried"), CURRIED_DEFAULT);
+        assert_eq!(
+            rejection("default, name = \"x\""),
+            "`default` cannot be combined with `name`: a default command answers to no word, so \
+             it takes no name or alias"
+        );
+        assert_eq!(
+            rejection("alias = \"x\", default"),
+            "`default` cannot be combined with `alias`: a default command answers to no word, so \
+             it takes no name or alias"
+        );
+        assert_eq!(
+            rejection("default, hide"),
+            "`default` cannot be combined with `hide`: a default command is never listed, so \
+             there is nothing to hide"
+        );
+        // `curried` on a function with nothing to curry — the context is
+        // not an owned parameter.
+        assert_eq!(rejection("curried"), CURRIED_NOTHING);
+        assert_eq!(
+            rejection_on("curried", "/// go\nfn go(ctx: &Ctx) {}"),
+            CURRIED_NOTHING
+        );
+        // A default command's doc comment is one line.
+        assert_eq!(
+            rejection_on("default", "/// search\n///\n/// More.\nfn search() {}"),
+            DEFAULT_DOC
+        );
+        assert_eq!(
+            rejection_on(
+                "default",
+                "/// search\n///\n/// # Examples\n///\n/// demo search\nfn search() {}"
+            ),
+            DEFAULT_DOC
         );
     }
 

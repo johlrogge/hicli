@@ -16,9 +16,9 @@ signature, visibility, body — adding only a hidden sibling handle
 comment, its arguments from its owned parameters, its context from its one `&T` parameter. A group
 is an annotated **module**, not a list: `#[group]` on an inline `mod event { … }` discovers every
 `#[command]`/`#[group]` item in its body, in source order — a child is a child because it is in the
-module, no registration line to keep in step. `group_mod!` is the same group for a **file** module
-(`group_mod! { pub mod event; }`), until Rust 1.99 lets `#[group]` go directly on
-`pub mod event;`. Commands compose into a tree by declaration (`app!`/`commands!`), **no central
+module, no registration line to keep in step. A **file** module is the same group spelled
+`#[group] pub mod event;` (ADR-010: `docs/adr/010-file-groups-are-an-attribute.md`; it replaced the
+pre-1.99 `group_mod!` shim, which no longer exists). Commands compose into a tree by declaration (`app!`/`commands!`), **no central
 hand-written dispatch `match`, and no consumer-implemented trait.** If a change reintroduces a
 growing central dispatcher, brings back a *trait* a consumer implements per command, reintroduces a
 list that restates the module's contents (the ADR-004 `group! { event: [create, roster] }`
@@ -45,10 +45,12 @@ calling out.
 - `src/invocation.rs` — `Invocation<Ctx>`, a **struct** (not a trait): a parsed command with its arguments
   already bound, carrying `name()`, `path()` and `run(self, &Ctx) -> Result<Success, Failure>`.
   Never built by a consumer directly — it's what a `Command`'s parser produces.
-- `src/command.rs` — `Command<Ctx>`, the *only* node type (a leaf, a group and an external are
-  one type, which is what makes `commands![…]` homogeneous), built via the free functions
-  `command`/`group`/`external`; `IntoCommand<Ctx>` (a `Command` or a zero-arg callable returning
-  one — a `#[command]`/`#[group]`/`group_mod!` handle).
+- `src/command.rs` — `Node<O>`, the *only* node type, generic over what it parses to (ADR-011):
+  `Command<Ctx> = Node<Invocation<Ctx>>` (a leaf, a group and an external are one type, which is
+  what makes `commands![…]` homogeneous) and `Curried<T, Ctx> = Node<Partial<T, Invocation<Ctx>>>`
+  (a command awaiting the value its `#[group(args = T)]` parses). Built via the free functions
+  `command`/`group`/`external` plus `curried_command`/`group_args`/`Node::by_default`; `IntoCommand<Ctx>` (a `Command` or a zero-arg callable returning
+  one — a `#[command]`/`#[group]` handle).
 - `src/app.rs` — `App<G, Ctx>` composition builder (`command`/`commands`/`run`), the
   `into_parser`/`parse`/`run_with_args`/`complete` test seams, `exit_code_for`, and the `strsim`
   suggestion gap-closer. `App::run` returns `std::process::ExitCode`; the test seams stay `u8`
@@ -66,7 +68,7 @@ calling out.
   read a doc comment's text and rewrite idents; a `macro_rules!` macro could not, which is why this
   module existed at all.
 - `macros/` — a separate, exact-pinned `hicli-macros` proc-macro crate, re-exported as
-  `hicli::{command, group, group_mod, commands, Arg}`. `proc_macro::TokenStream` appears only in
+  `hicli::{command, group, commands, Arg}`. `proc_macro::TokenStream` appears only in
   `macros/src/lib.rs`; everything else works in `proc_macro2` so it unit-tests outside a macro
   expansion:
   - `shared.rs` — the dash rule and doc-comment split `#[command]` and `#[group]` both use.
@@ -75,13 +77,14 @@ calling out.
     `<T as ::hicli::Arg>::parser()` and composes the locals with `construct!`, rather than
     synthesising a bare constructor call by name; `parse.rs` no longer derives a snake_case name
     from a parameter's type at all — that rule moved into `macros/src/arg.rs`.
-  - `discover.rs` — which items in a module body are a group's children (a `#[command]` fn, a
-    `#[group]` mod, or a `group_mod!` declaration), in source order.
+  - `discover.rs` — which items in a module body are a group's children (a `#[command]` fn, an
+    inline `#[group]` mod, or a `#[group] mod x;` declaration), in source order.
   - `ctx.rs` — a group's `Ctx`: `#[group(ctx = T)]`, else the first `&T` in a depth-first walk of
     the children (crossing file boundaries via `Outline`), else generic.
-  - `group.rs` — `#[group]`'s and `group_mod!`'s expansion: the module/declaration verbatim plus
-    one handle in the parent scope; routes the file form and the inline form through the same code
-    from the point the items are in hand.
+  - `group.rs` — `#[group]`'s expansion: the module/declaration plus one handle in the parent
+    scope; routes the file form and the inline form through the same code from the point the items
+    are in hand. The file form re-emits the declaration with a relative `#[path]` for rustc to load
+    — it never inlines the file's contents.
   - `fs.rs` — `trait Fs` + `RealFs` + an in-memory `Fs` for unit tests. `anchor` searches for the
     declaring file — the path itself if absolute, then under rustc's cwd (the workspace root
     under cargo), then `CARGO_MANIFEST_DIR` and each of its ancestors — because rust-analyzer's
@@ -102,8 +105,8 @@ calling out.
 - `examples/demo.rs`, `tests/cli.rs`, `tests/groups.rs`, `tests/group_files.rs` (+
   `tests/group_files/` fixtures), `tests/macros.rs`, `tests/arg_derive.rs`, `tests/ui/` (the
   trybuild suite) — living docs + the in-process test matrix + every compile-time rejection.
-  `examples/files/{main,event}.rs` (`[[example]] files`, `just demo-files`) exercises `group_mod!`
-  across two files; `examples/demo.rs` stays single-file and inline so both forms are living
+  `examples/files/{main,event}.rs` (`[[example]] files`, `just demo-files`) exercises
+  `#[group] pub mod event;` across two files; `examples/demo.rs` stays single-file and inline so both forms are living
   documentation.
 
 ## The consumer shape
@@ -132,9 +135,9 @@ pub mod event {
 ```
 discovers `create` (and any nested `#[group]`) by source order and emits `__hicli_event()`
 beside the module — a child is a child because it's in the module, no registration call. A **file**
-module uses `group_mod! { /// events and instances\n pub mod event; }` until Rust 1.99 allows
-`#[group] pub mod event;` directly; it reads and parses `event.rs` (resolved by the Reference's
-mod-rs/non-mod-rs rules) and emits the same shape of handle. `commands!`/`app!` assemble the tree —
+module is `/// events and instances` + `#[group] pub mod event;` (keys `ctx`/`alias`/`hide` on the
+attribute); `#[group]` reads and parses `event.rs` (resolved by the Reference's mod-rs/non-mod-rs
+rules) and emits the declaration plus the same shape of handle. `commands!`/`app!` assemble the tree —
 a bare path is always a handle (`create` → `__hicli_create()`); consumers add a direct
 `bpaf = "0.9"` dependency (`#[derive(Bpaf)]` expands to `::bpaf::…` paths that only resolve against
 a crate's own extern prelude — `use hicli::bpaf` does not help), so "consumers pin one `bpaf`
@@ -196,10 +199,13 @@ expands to `let a0 = <Id as ::hicli::Arg>::parser();` bound before `construct!`,
 - **`#[group]` discovers; it never takes a list.** A child is a child because it carries `#[command]`
   or `#[group]` and is in the module body, in source order. Reintroducing a list that restates
   membership (ADR-004's `event: [create, roster]`) is the exact regression ADR-005 removed.
-- **`group_mod!` reads the file; it never runs code to find one.** It resolves a `mod x;`
-  declaration to a path with the Reference's own rules, reads and `syn::parse_file`s it, and emits
-  `#[path = "…"]` so rustc reads exactly the bytes the macro read. It is top-level-only, and MSRV
-  is Rust 1.88 for `Span::local_file()`.
+- **A file `#[group]` reads the file; it never runs code to find one, and never inlines it.** It
+  resolves a `#[group] mod x;` declaration to a path with the Reference's own rules, reads and
+  `syn::parse_file`s it, and re-emits the declaration with a relative `#[path = "…"]` so rustc reads
+  exactly the bytes the macro read (spans, rust-analyzer and dep-info stay real). A file group must
+  be at its file's top level: `#[group] mod b;` inside an inline `#[group] mod` without its own
+  `#[path]` is a compile error. MSRV is Rust 1.99 (attribute macros on out-of-line modules;
+  `group_mod!` is gone, ADR-010).
 - **`proc_macro::TokenStream`/`proc_macro::Span` appear only in `macros/src/lib.rs`.** Every other
   module in `macros/` works in `proc_macro2`/`syn`, precisely so it can be unit-tested outside a
   macro expansion (`crate::resolve` against an in-memory `Fs` is the clearest example).
@@ -224,14 +230,14 @@ expands to `let a0 = <Id as ::hicli::Arg>::parser();` bound before `construct!`,
 
 **Subtractive design.** The value is a *smaller, clearer* way to build a CLI. `#[command]` itself was
 deferred until a real consumer's pain (moniker's ~330-line dispatch, five artefacts per command)
-justified the proc-macro dependency, and `#[group]`/`group_mod!`/`Arg`+`#[derive(Arg)]` were
+justified the proc-macro dependency, and `#[group]`/`Arg`+`#[derive(Arg)]` were
 earned the same way — the last one closing off completion, which was unreachable while a command's
-parsers were synthesised inside `#[command]`'s own expansion — that is the bar for adding more.
-Currently deferred: `#[group] pub mod x;` as the direct spelling (blocked on the toolchain pin
-reaching Rust 1.99.0, stable 2026-10-01 — `group_mod!` is the shim until then); group-level
-curried arguments ("currying" — `#[group(args = T)]`, ADR-005's syntax slot moved from ADR-004's
-`event(EventRef): […]`; the primitives are shaped for it but nothing is built);
-`inventory`/`linkme` auto-registration (rejected outright, not just deferred: link-time magic with
+parsers were synthesised inside `#[command]`'s own expansion. Group-level currying
+(`#[group(args = T)]`, `#[group(curried = T)]`, `#[command(curried)]`) and a group's
+`#[command(default)]` were earned by mdma-cli's migration (ADR-011) — that is the bar for adding more.
+Currently deferred: an inner `#![group]` (still E0658, rust-lang/rust#54726); nested `args`
+groups, a default command in a curried group or at the top level, and a dedicated
+`source NAME --help` page (ADR-011); `inventory`/`linkme` auto-registration (rejected outright, not just deferred: link-time magic with
 no explicit tree to read — discovery here is lexical and local, one module body or one file,
 readable by eye); and, per ADR-006, a field-composing `#[derive(Arg)]` for composite types (a
 composite hand-writes `Arg::parser()` instead — six lines), `#[arg(parser = …)]` for a renamed

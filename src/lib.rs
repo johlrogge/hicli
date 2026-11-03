@@ -127,6 +127,114 @@
 //! #[group]
 //! pub mod event;
 //! ```
+//!
+//! # Curried commands and a group's default command
+//!
+//! Two shapes a command tree needs beyond leaves and groups (ADR-011):
+//!
+//! - **A group that parses a value after its name** and hands it to its
+//!   commands — `mdma source bandcamp sync`, where `bandcamp` is parsed once by
+//!   `source` and `sync` receives it. Declared as `#[group(args = T)]`; the
+//!   commands that receive the value are `#[command(curried)]`.
+//! - **A group's default command** — `mdma search jazz` beside
+//!   `mdma search fact-values-for genre`: the command that runs when no
+//!   sibling is named. Declared as `#[command(default)]`.
+//!
+//! ```ignore
+//! /// manage sources
+//! #[group(args = SourceName)]
+//! pub mod source {
+//!     use super::*;
+//!
+//!     /// list sources — a *fixed* sibling: takes no source name
+//!     #[command]
+//!     pub fn list(ctx: &Ctx) -> Outcome { /* … */ }
+//!
+//!     /// sync a source — receives the group's `SourceName` as its first
+//!     /// owned parameter
+//!     #[command(curried)]
+//!     pub fn sync(name: SourceName, apply: Apply, ctx: &Ctx) -> Outcome { /* … */ }
+//!
+//!     /// jobs of a source — a group *inside* the curried slot: every child
+//!     /// is curried over the same `SourceName`
+//!     #[group(curried = SourceName)]
+//!     pub mod job {
+//!         use super::*;
+//!
+//!         /// cancel a job
+//!         #[command(curried)]
+//!         pub fn cancel(name: SourceName, id: JobId, ctx: &Ctx) -> Outcome { /* … */ }
+//!     }
+//! }
+//!
+//! /// search the library
+//! #[group]
+//! pub mod search {
+//!     use super::*;
+//!
+//!     /// list values for a fact type
+//!     #[command]
+//!     pub fn fact_values_for(t: FactType, ctx: &Ctx) -> Outcome { /* … */ }
+//!
+//!     /// search by text
+//!     #[command(default)]
+//!     pub fn query(f: Filters, q: Query, ctx: &Ctx) -> Outcome { /* … */ }
+//! }
+//! ```
+//!
+//! **`#[command(curried)]`** curries the function over its **first owned
+//! parameter**: that parameter is not parsed by the command, it is handed
+//! over by the enclosing group. The function is still the function you wrote —
+//! `source::sync(name, apply, &ctx)` is an ordinary call. Its registration is
+//! a [`Curried`] node ([`curried_command`]), which can only be mounted in a
+//! curried group: handing one to [`App::command`] is a compile error.
+//!
+//! **`#[group(args = T)]`** parses one `T` (through
+//! [`<T as Arg>::parser`](trait@Arg)) right after the group's name. Its
+//! `#[command(curried)]` children — and its `#[group(curried = T)]` children
+//! — receive it; its unmarked children are **fixed siblings**, which take no
+//! value and are **matched first**: a value spelled like a fixed sibling's
+//! name or alias is that sibling. The hand-written equivalent is
+//! [`group_args`].
+//!
+//! **`#[group(curried = T)]`** is a group that sits *after* an enclosing
+//! value: it parses nothing itself, and every child is curried over the same
+//! `T` (`source bandcamp job cancel 7`). It expands to [`group`](fn@group) over
+//! [`Curried`] children.
+//!
+//! **`#[command(default)]`** runs when no sibling is named, and **answers to
+//! no word** of its own: `search jazz` runs it with `jazz` as its first
+//! positional, and its [`Invocation::path`] is the group's (`["search"]`). A
+//! named sibling wins its own word; `search -- fact-values-for` searches for
+//! that word. Its arguments are listed in the group's `--help` under its
+//! one-line help. The usual ordering rule applies with full force: a default's
+//! **positionals must come last**, after every option — so a default with a
+//! positional is still a command that ends in its positional. Broken, it
+//! still parses, but rendering `--help` anywhere in the group panics with
+//! bpaf's "positional and command items must be placed in the right most
+//! position" — in any build; a debug build catches it early, when the tree is
+//! folded. A group holds at most one default; a default cannot be at the top level, cannot live in a
+//! curried group, and takes no alias, `hide`, details or footer — all panics
+//! when the tree is folded. The hand-written equivalent is
+//! [`Node::by_default`].
+//!
+//! What `--help` and completion show:
+//!
+//! - `source --help` lists the curried commands, with the value, under
+//!   `Commands for SOURCE-NAME:`, and the fixed siblings under
+//!   `Available commands:`; `source bandcamp sync --help` reads
+//!   `Usage: source SOURCE-NAME sync …`.
+//! - Completing a non-empty word where the value — or the default's first
+//!   positional — goes offers the sibling commands whose names start with it,
+//!   beside the value's own candidates (`source l` → `list`).
+//!
+//! Known limits: `source <TAB>`, with nothing typed, also offers the curried
+//! commands, which are not valid until a value is typed; when the value's
+//! completer has exactly one match for a typed word, a fixed sibling that
+//! also starts with it is not offered; a typo of a curried command after a value
+//! (`source bandcamp snyc`) gets no `did you mean`; `source bandcamp --help`
+//! shows the group's page; a typo of a named sibling in front of a default is
+//! silently the default's value.
 
 pub use bpaf;
 
@@ -179,10 +287,12 @@ pub use bpaf;
 /// |---|---|
 /// | the ident, `_` → `-` (`add_admin` → `add-admin`) | the command's name; override it with `#[command(name = "…")]` |
 /// | the doc comment's first line | the one-line `help` **and** the heading of `app <cmd> --help` |
-/// | the rest of the doc comment, up to an examples heading | [`Command::details`] — prose, reflowed by `bpaf` |
-/// | a trailing `# Examples` / `Examples:` section | [`Command::footer`] — printed verbatim after the options |
-/// | `#[command(alias = "…")]`, repeatable | [`Command::alias`] — another spelling; not listed, path stays canonical |
-/// | `#[command(hide)]` | [`Command::hide`] — left out of help, completion and suggestions; still parses |
+/// | the rest of the doc comment, up to an examples heading | [`Node::details`] — prose, reflowed by `bpaf` |
+/// | a trailing `# Examples` / `Examples:` section | [`Node::footer`] — printed verbatim after the options |
+/// | `#[command(alias = "…")]`, repeatable | [`Node::alias`] — another spelling; not listed, path stays canonical |
+/// | `#[command(hide)]` | [`Node::hide`] — left out of help, completion and suggestions; still parses |
+/// | `#[command(curried)]` | the **first owned parameter** is handed over by the enclosing `#[group(args = T)]` instead of parsed; see [Curried commands](crate#curried-commands-and-a-groups-default-command) |
+/// | `#[command(default)]` | [`Node::by_default`] — runs when no sibling is named, answers to no word; positionals last |
 /// | each **owned** parameter `p: T` | one argument type; its parser is `<T as Arg>::parser()`, composed in declaration order |
 /// | the single `&T` parameter | the context; `T` is the command's `Ctx`. Conventionally last, but first works too |
 /// | the return type | anything implementing [`IntoOutcome`]: `()`, [`Success`], [`Outcome`] or `Outcome<Success>` |
@@ -209,7 +319,7 @@ pub use bpaf;
 /// /// mdma search --added -7 --genre jazz
 /// /// ```
 /// #[command(alias = "s")]
-/// pub fn search(q: Query, ctx: &Ctx) -> Outcome { … }
+/// pub fn search(q: Query, ctx: &Ctx) -> Outcome { /* … */ }
 /// ````
 ///
 /// renders, at the end of `mdma search --help`, after the options:
@@ -266,7 +376,7 @@ pub use bpaf;
 /// The snake_case rule that used to live here — `EventRef` → `event_ref()` —
 /// is now [`#[derive(Arg)]`](derive@Arg)'s, which is the one place that calls
 /// the constructor `#[derive(Bpaf)]` writes. A type whose parser outgrows that
-/// writes [`Arg::parser`](trait@Arg::parser) by hand, and `#[command]` cannot
+/// writes [`Arg::parser`] by hand, and `#[command]` cannot
 /// tell the difference.
 ///
 /// # What it writes
@@ -365,8 +475,11 @@ pub use bpaf;
 /// - **a pattern parameter** (`Words(w): Words`) — the handle's closure calls
 ///   the function by naming its arguments; take `w: Words` and use `w.0`;
 /// - **an examples heading with nothing under it**;
-/// - **any attribute key but `name`, `alias` and `hide`** — help, details,
-///   footer and usage all live in the doc comment, never in a key;
+/// - **any attribute key but `name`, `alias`, `hide`, `curried` and
+///   `default`** — help, details, footer and usage all live in the doc
+///   comment, never in a key;
+/// - **`curried` and `default` together**, or `curried` on a function with no
+///   owned parameter to curry;
 /// - **`name` or `hide` given twice**;
 /// - **an alias that is empty, contains whitespace, starts with `-`, repeats
 ///   another alias, or equals the command's own name**.
@@ -429,10 +542,12 @@ pub use hicli_macros::command;
 /// |---|---|
 /// | the ident, `_` → `-` (`add_admin` → `add-admin`) | the group's name. There is no `name = "…"` override |
 /// | the doc comment's first line | the one-line `help` **and** the heading of `app <group> --help` |
-/// | the rest of the doc comment, up to an examples heading | [`Command::details`] |
-/// | a trailing `# Examples` / `Examples:` section | [`Command::footer`], exactly as for [`#[command]`](macro@command) |
-/// | `#[group(alias = "…")]`, repeatable | [`Command::alias`] — another spelling of the group |
-/// | `#[group(hide)]` | [`Command::hide`] — left out of its parent's help, completion and suggestions; still parses |
+/// | the rest of the doc comment, up to an examples heading | [`Node::details`] |
+/// | a trailing `# Examples` / `Examples:` section | [`Node::footer`], exactly as for [`#[command]`](macro@command) |
+/// | `#[group(alias = "…")]`, repeatable | [`Node::alias`] — another spelling of the group |
+/// | `#[group(hide)]` | [`Node::hide`] — left out of its parent's help, completion and suggestions; still parses |
+/// | `#[group(args = T)]` | parse one `T` after the group's name and hand it to the `#[command(curried)]` children; unmarked children are fixed siblings, matched first ([`group_args`]) |
+/// | `#[group(curried = T)]` | a group after an enclosing value: every child is curried over the same `T` |
 /// | every marked item in the body, **in source order** | the group's children |
 /// | the first `&T` among the children | the group's `Ctx` (see below) |
 ///
@@ -547,8 +662,9 @@ pub use hicli_macros::command;
 ///   refused where it is written. ([`group`](fn@group) still panics at fold
 ///   time for a hand-built one);
 /// - **`#[group]` on anything but a module**;
-/// - **any argument but `ctx = <Type>`, `alias = "…"` and `hide`**, and
-///   `ctx` or `hide` given twice;
+/// - **any argument but `ctx = <Type>`, `args = <Type>`, `curried = <Type>`,
+///   `alias = "…"` and `hide`**, and `ctx` or `hide` given twice; `args` and
+///   `curried` together;
 /// - **a bad alias** — by [`#[command]`](macro@command)'s rules, including one
 ///   equal to the group's own name;
 /// - **an examples heading with nothing under it**;
@@ -713,7 +829,12 @@ pub mod outcome;
 pub mod testing;
 
 pub use app::{exit_code_for, App};
-pub use command::{command, external, group, Command, IntoCommand};
+#[doc(hidden)]
+pub use command::__CurriedOver;
+pub use command::{
+    command, curried_command, external, group, group_args, Command, Curried, IntoCommand, Node,
+    Partial,
+};
 pub use completion::{completion_script, Shell, UnknownShell};
 pub use external::{ArgSchema, ArgSpec, ExternalCommand};
 pub use invocation::Invocation;
@@ -785,7 +906,7 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, Candidate};
 /// `bpaf` passes a completer's output through unfiltered: it filters its own
 /// flag names, not your candidates. `complete_ids` above is handed the value
 /// that already parsed and must drop everything that does not match it. The
-/// [`arg`](crate::arg) module docs spell out when it is called at all — for a
+/// [`arg`] module docs spell out when it is called at all — for a
 /// `String` on every keystroke, for a validated type never on the empty word.
 ///
 /// # A missing `#[derive(Bpaf)]` looks like this

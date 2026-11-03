@@ -13,6 +13,8 @@ library.
 
 Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verbandi` → `hicli`, `#[verb]` → `#[command]`, `Verb` → `Invocation`, `VerbResult` → `Outcome`). The text below is kept exactly as written.
 
+"Future work: group-level arguments ("currying")" realised by [ADR-011](011-curried-commands-and-default-commands.md) (2026-11-03): `#[group(args = T)]` and `#[command(curried)]`, built on a generic `Node<O>` rather than the `Mount` field sketched below.
+
 ## Decision
 
 ### 1. A subcommand is a function
