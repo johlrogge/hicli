@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ metadevLib, pkgs, ... }:
 {
   # hicli — CLI-enable your code. A crates.io-publishable framework for building
   # modular CLIs: one subcommand is a documented function (`#[command]`), a group
@@ -16,6 +16,15 @@
   # it is present for every shell and for the MCP servers launched from it.
   # (Takes effect on the next devenv shell / session restart.)
   env.METADEV_PROJECT = "hicli";
+
+  # hicli is a plain two-member cargo workspace, not a Polylith one: no
+  # cargo-polylith, polylith agent or polylith MCP tools.
+  metadev.polylith.enable = false;
+
+  # Project-specific skill; the source lives outside the generated .claude/.
+  claude.code.skills.architect = metadevLib.skillFromDir ./claude/skills/architect {
+    description = "hicli project context for the architect — the function-first Command/Invocation model, crate layout, design contracts, and delegation workflow.";
+  };
 
   # Stable toolchain only — hicli targets crates.io and stable-Rust
   # consumers (moniker, mdma-cli, ctx). No nightly features.

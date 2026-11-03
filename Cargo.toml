@@ -24,6 +24,7 @@ categories = ["command-line-interface"]
 # part of the published crate.
 exclude = [
   ".claude/",
+  "claude/",
   ".mcp.json",
   "CLAUDE.md",
   "devenv.*",

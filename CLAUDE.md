@@ -95,7 +95,7 @@ Everything else goes through the workflow.
 
 **Always prefer MCP tools over Bash.** This project inherits MCP servers from
 metadev (`git-read`, `git-write`, `gh-issues`, `gh-ci`, `gh-repo`, `rust-codebase`,
-`just`, `devenv`, `cargo-polylith`, `adr`, `ssh`, `mcp-test`) — plus any
+`just`, `devenv`, `adr`, `ssh`, `mcp-test`) — plus any
 project-specific servers declared in its `devenv.nix`. Use them first.
 
 When no MCP covers the operation:
@@ -111,7 +111,7 @@ When an MCP tool exists but misbehaves:
 ## Agents & Skills
 
 - **architect** — reviews/designs Rust architecture; loads
-  `.claude/skills/architect/SKILL.md` (project context: the command model, crate layout,
+  `claude/skills/architect/SKILL.md`, declared in `devenv.nix` (project context: the command model, crate layout,
   design contracts, delegation workflow). The underlying Rust reference docs live in
   `.claude/skills/rust-architect/references/` (async/tokio, error handling, lifetimes,
   patterns, testing, tooling, type-driven design, polylith, ECS, embedded) — load

@@ -1,8 +1,3 @@
----
-name: architect
-description: hicli project context for the architect — the function-first Command/Invocation model, crate layout, design contracts, and delegation workflow.
----
-
 # hicli — architect context
 
 `hicli` is a standalone, crates.io-publishable Rust **library crate** (not Polylith,
