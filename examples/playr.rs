@@ -20,7 +20,6 @@ use std::process::ExitCode;
 use std::str::FromStr;
 
 use bpaf::Bpaf;
-use color_eyre::eyre::WrapErr;
 use hicli::bpaf::{any, construct, long, Parser};
 use hicli::{app, command, group, App, Arg, Candidate, Failure, Outcome};
 
@@ -144,7 +143,7 @@ impl FromStr for DaysBack {
 
 #[derive(Debug, Clone, Bpaf, Arg)]
 pub struct Output(
-    /// An audio output device, as listed by `playr playback outputs`
+    /// An audio output device
     #[bpaf(positional("NAME"))]
     pub Name,
 );
@@ -374,6 +373,9 @@ mod source {
         println!("{}: checking {} (apply: {})", ctx.node, s.0, apply.0);
     }
 }
+
+// Imported here, beside its only user, so the README's excerpt compiles as shown.
+use color_eyre::eyre::WrapErr;
 
 /// Upload an audio file to the library
 #[command]

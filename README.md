@@ -50,7 +50,7 @@ pub struct Ctx {
 
 #[derive(Debug, Clone, Bpaf, Arg)]
 pub struct Output(
-    /// An audio output device, as listed by `playr playback outputs`
+    /// An audio output device
     #[bpaf(positional("NAME"))]
     pub Name,
 );
@@ -142,9 +142,9 @@ $ echo $?
 What each piece does:
 
 - **`#[command]` on a function makes it a subcommand.** The name comes from the
-  function name, with `_` turned into `-` (`set_output` becomes `set-output`). The
-  first line of the doc comment is its help. The function itself is unchanged:
-  `playback::stop(&ctx)` still works.
+  function name, with `_` turned into `-` (`set_output` becomes `set-output`), unless
+  you write `#[command(name = "…")]`. The first line of the doc comment is its help.
+  The function itself is unchanged: `playback::stop(&ctx)` still works.
 - **`#[group]` on a module makes it a group.** Its commands are the `#[command]`
   functions and `#[group]` modules inside it, in source order. There is no list to
   keep in sync. A command or group without a doc comment is a compile error.
@@ -155,13 +155,16 @@ What each piece does:
   ([ADR-006](docs/adr/006-an-argument-is-a-type.md)). Inside it is the value's own
   type, here a `Name`.
 - **Global options are a `Bpaf` struct.** They are accepted before or after the
-  subcommand (`playr playback stop --node pi.local`). `env(..)` makes an environment
-  variable the fallback, and the doc comment on the struct becomes the `Global options`
-  heading.
+  subcommand (`playr playback stop --node pi.local`), except an external subcommand,
+  which needs them before its name (see the rules below). `env(..)` makes an
+  environment variable the fallback, and the doc comment on the struct becomes the
+  `Global options` heading.
+- **Never put a secret in a `Globals` field, not even with `env(..)`.** When the
+  variable is set, `--help` prints its value: `PLAYR_NODE=x playr --help` shows
+  `[env:PLAYR_NODE = "x"]`.
 - **The context `&Ctx`** is built once from the globals, by the closure you pass to
   `run`, and every command that takes `&Ctx` receives it. Put connections and
-  configuration in it. Read secrets from the environment here, not through a global
-  flag that `--help` would show.
+  configuration in it. Read secrets from the environment in that closure.
 - **Exit codes:** `0` on success, `1` for a runtime failure, `2` for a usage error.
   `run` returns the `ExitCode`. It never calls `process::exit`.
 
@@ -206,6 +209,10 @@ $ playr --node pi.local:http ping
 couldn't parse `pi.local:http`: `http` is not a port number
 ```
 
+Known gap: the message names the value and the reason, not the option or positional
+it was given to. With several values of the same type, the user has to work out
+which one failed ([#26](https://github.com/johlrogge/hicli/issues/26)).
+
 A value with no rules, like the free-text search query below, can stay a `String`
 inside its newtype. Paths are `PathBuf`, and choices are enums (see
 [Choice values](#choice-values)).
@@ -245,8 +252,9 @@ pub struct Query(
 
 A command's parameters are parsed in the order they are declared. **Declare the
 types that contain positionals last.** bpaf requires this, and a debug build checks it
-the first time it runs. The rule is only about parameter order: on the command line,
-flags can go anywhere.
+the first time it runs. A release build doesn't check it up front: the same mistake
+panics when `--help` is rendered. The rule is only about parameter order: on the
+command line, flags can go anywhere.
 
 Put a doc comment on the field, not on the newtype. bpaf turns a doc comment on a
 struct into a section heading (that is how `Global options` appears above). On a
@@ -398,8 +406,9 @@ $ playr library archive empty --yes
 localhost: archive emptied
 ```
 
-Limits: a group can have only one default command, the top level can't have one,
-and a default can't have an alias. See
+Limits: one default per group; none at the top level or in an `args`/`curried`
+group; a default takes no `name`, `alias` or `hide`, and its doc comment is one
+line (it has no help page of its own). See
 [ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
 
 ### Object, then verb: `source <name> check-updates`
@@ -456,18 +465,25 @@ Available commands:
 Commands without the `curried` mark, like `list`, are matched first, so a source
 can't be named `list`. A curried command whose first parameter has a different type
 is a compile error. A nested group that also receives the value is
-`#[group(curried = SourceName)]`. For the known limits, such as `source NAME --help`
-showing the group's page, see
+`#[group(curried = SourceName)]`. One known limit is surprising: `source <TAB>` with
+nothing typed also offers the curried command names, which are not valid until a
+source is typed. Another: a source with no command, `source bandcamp`, fails with
+``expected `COMMAND ...`, got `bandcamp` ``, which reads as if the source name were
+wrong ([#27](https://github.com/johlrogge/hicli/issues/27)). For the others, such as
+`source NAME --help` showing the group's page, see
 [ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
 
 ### Errors and `?`
 
 A command can return whatever it already returns: `()`, `Outcome`, `io::Result<()>`,
-`anyhow::Result<()>`, `color_eyre::Result<()>`, `Result<(), Box<dyn Error>>`. Any
-error becomes a runtime failure (exit 1). The message is the whole error chain,
-outermost first:
+`anyhow::Result<()>`, `color_eyre::Result<()>`, `Result<(), Box<dyn Error>>`.
+`Box<dyn Error + Send + Sync>` is not accepted (the standard library can't convert
+it); return `Box<dyn Error>`, or `anyhow`/`eyre`. Any error becomes a runtime failure
+(exit 1). The message is the whole error chain, outermost first:
 
 ```rust
+use color_eyre::eyre::WrapErr;
+
 /// Upload an audio file to the library
 #[command]
 fn upload(file: AudioFile, ctx: &Ctx) -> color_eyre::Result<()> {
@@ -575,9 +591,10 @@ Examples:
   playr search --artist CBL | playr sort bpm --descending
 ```
 
-`sort` takes no `&Ctx`, so it works with any context. Use `#[command(alias = "ls")]`
-to add another name and `#[command(hide)]` to keep a command out of help and
-completion. The text above the top-level usage line and `--version` are set on the
+`sort` takes no `&Ctx`, so it is generic over the context and works in any app. Use
+`#[command(alias = "ls")]` to add another name and `#[command(hide)]` to keep a
+command out of help and completion; `#[group(alias = "…")]` and `#[group(hide)]` do
+the same for a group. The text above the top-level usage line and `--version` are set on the
 app:
 
 ```rust
@@ -697,27 +714,59 @@ mod tests {
 - `cli! { … }` turns the words you would type into an argv, and `cli_test!` writes
   one `#[test]` per line. **Quote words with hyphens** (`"set-output"`, `"--dry-run"`).
   Without quotes, Rust splits `set-output` into three tokens.
-- `App::parse` returns the selected command and the parsed globals, or the error that
-  would be printed. `App::run_with_args` runs everything and returns the exit code
+- `App::parse` returns the parsed globals and the selected command, in that order, or
+  the error that would be printed. `App::run_with_args` runs everything and returns the exit code
   that `main` would. `App::complete` returns what the shell would offer.
 - Commands are ordinary functions, so you can call them directly.
+- If you do snapshot help pages, note that the usage line of a command without
+  arguments ends in a space (`Usage: playback stop `). Editors and linters that strip
+  trailing whitespace will break such a snapshot
+  ([#28](https://github.com/johlrogge/hicli/issues/28)).
 
-## Rules worth knowing
+## Rules and papercuts
 
-1. **Add `bpaf = "0.9"` to your own dependencies.** `#[derive(Bpaf)]` generates
+1. **MSRV is Rust 1.99.** `#[group] pub mod x;` needs attribute macros on file-module
+   declarations, stable since 1.99.
+2. **Add `bpaf = "0.9"` to your own dependencies.** `#[derive(Bpaf)]` generates
    `::bpaf::` paths. Cargo still builds a single copy of bpaf.
-2. **Declare positional parameters last** (see above).
-3. **There are no `Arg` impls for primitives.** Give each value a newtype, with the
+3. **Declare positional parameters last** (see above).
+4. **There are no `Arg` impls for primitives.** Give each value a newtype, with the
    value's own type inside.
-4. **Completers filter their own candidates, and they only see values that parsed.** A
+5. **Completers filter their own candidates, and they only see values that parsed.** A
    `String` completes from the first keystroke. A value checked by `FromStr`, such
    as a `Name`, a number or a choice, doesn't complete until the partial word parses.
    Choose rules that every prefix of a valid value also passes: `b` is a valid
    `Name`, so `source b<TAB>` offers `bandcamp` and `beatport`. An empty word is not
    a `Name`, so `source <TAB>` offers only the commands.
-5. **`Globals` doesn't derive `Arg`.** It is parsed once at the top level.
-6. **A `#[group] pub mod x;` that lives in its own file must be declared at the top
-   level of a file**, not inside an inline module.
+6. **`#[arg(complete = …)]` goes only on a single-field type.** On a multi-field
+   struct or an enum it is a compile error.
+7. **`Globals` doesn't derive `Arg`.** It is parsed once at the top level.
+8. **A `#[group] pub mod x;` that lives in its own file must be declared at the top
+   level of a file**, not inside an inline module. hicli puts `#[path = "x.rs"]` on
+   it, and rustc then looks up a plain `mod helper;` inside `x.rs` next to `x.rs`,
+   not under `x/` (E0583). Until that is fixed, write
+   `#[path = "x/helper.rs"] mod helper;`
+   ([#25](https://github.com/johlrogge/hicli/issues/25)). A nested `#[group] mod` is not
+   affected.
+9. **The attribute keys:**
+   - `#[command(name = "…", alias = "…", hide)]`, plus `default` and `curried` (above).
+   - `#[group(alias = "…", hide)]`, plus `args` and `curried` (above). A group has no
+     `name`: it is the module's.
+   - `#[group(ctx = T)]` names a group's context. Without it, the group takes the
+     first `&T` among its commands, and a command with no `&T` is generic over `Ctx`.
+10. **A bare name in `commands!` names a handle.** A local `Command` value must be
+    parenthesised, `commands![(c)]`. A macro of your own that forwards a list to
+    `app!` or `commands!` should match it as `$($c:tt)*`, not `$c:expr`.
+11. **External subcommands** (`hicli::external(ExternalCommand::new(…))`):
+    - Inside a group, write the group's handle by hand,
+      `#[doc(hidden)] pub fn __hicli_<name>() -> Command<Ctx>`, returning
+      `hicli::group(…)`. Discovery finds items, not values, so an external can't be a
+      discovered child.
+    - Globals go before the external's name. Everything after the name is forwarded
+      to the binary verbatim.
+    - A `--` right after the external's name is eaten by bpaf; the binary only sees
+      the words after it.
+    - See `ExternalCommand` on [docs.rs](https://docs.rs/hicli) for the rest.
 
 ## Upgrading from 0.1
 
@@ -727,7 +776,7 @@ Most code builds unchanged. Two things can break:
   hicli now converts every error type that implements `std::error::Error`, and keeps
   the whole chain.
 - **E0282, type annotations needed:** a closure passed by hand to `hicli::command`
-  that returns `Ok(())` needs `-> Outcome` written out. `#[command]` functions are
+  or `hicli::curried_command` that returns `Ok(())` needs `-> Outcome` written out. `#[command]` functions are
   not affected.
 
 The full list is in [`CHANGELOG.md`](CHANGELOG.md#breaking--upgrading-from-01).
@@ -741,10 +790,11 @@ The full list is in [`CHANGELOG.md`](CHANGELOG.md#breaking--upgrading-from-01).
   [`examples/files/`](examples/files/) (one file per group), `just demo --help`.
 - **External subcommands**, git style: mount a separate binary as a command by
   absolute path. It still appears in help and completion, and hicli never scans
-  `$PATH`. See `ExternalCommand` on docs.rs.
-- **Writing a command by hand:** `#[command]` and `#[group]` expand to calls to the
-  public functions `hicli::command`, `hicli::group` and `hicli::curried_command`.
-  Anything the macros generate, you can also write yourself.
+  `$PATH`. See the rules above and `ExternalCommand` on docs.rs.
+- **Writing a command by hand:** `#[command]` and `#[group]` expand to calls to
+  public functions such as `hicli::command`, `hicli::group`,
+  `hicli::curried_command`, `hicli::group_args` and `Node::by_default`. Anything the
+  macros generate, you can also write yourself.
 - **Coming from clap:** the help layout is bpaf's, not clap's. Globals are parsed once
   and can't be overridden per subcommand. Argument spelling uses bpaf's attributes.
   `--help` exits 0 and usage errors exit 2.

@@ -29,7 +29,7 @@ pub struct Ctx {
 
 #[derive(Debug, Clone, Bpaf, Arg)]
 pub struct Output(
-    /// An audio output device, as listed by `playr playback outputs`
+    /// An audio output device
     #[bpaf(positional("NAME"))]
     pub Name,
 );
@@ -141,5 +141,60 @@ impl fmt::Display for Node {
             Some(port) => write!(f, "{}:{port}", self.host),
             None => f.write_str(&self.host),
         }
+    }
+}
+
+// The README's Quick start pastes this file's `--help`; this test is what keeps
+// the pasted text true.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hicli::cli;
+
+    const TOP_HELP: &str = "\
+Usage: [--node=HOST] COMMAND ...
+
+Global options
+        --node=HOST  The node to talk to
+                     [env:PLAYR_NODE: N/A]
+
+Available options:
+    -h, --help       Prints help information
+
+Available commands:
+    ping             Check that the node answers
+    playback         Playback control
+";
+
+    const PLAYBACK_HELP: &str = "\
+Playback control
+
+Usage: playback COMMAND ...
+
+Available options:
+    -h, --help  Prints help information
+
+Available commands:
+    start       Start playback from the queue
+    stop        Stop playback
+    set-output  Select an audio output device
+";
+
+    // The only test in this binary, so nothing else reads the environment while
+    // it is changed: with `PLAYR_NODE` set, `--help` prints its value instead of
+    // `N/A`, and the README shows the unset case.
+    #[test]
+    fn help_matches_the_readme() {
+        std::env::remove_var("PLAYR_NODE");
+        let top = app()
+            .parse(cli! { --help })
+            .err()
+            .expect("--help short-circuits");
+        assert_eq!(top.unwrap_stdout(), TOP_HELP);
+        let playback = app()
+            .parse(cli! { playback --help })
+            .err()
+            .expect("--help short-circuits");
+        assert_eq!(playback.unwrap_stdout(), PLAYBACK_HELP);
     }
 }
