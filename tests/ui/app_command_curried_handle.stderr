@@ -6,7 +6,7 @@ error[E0277]: the trait bound `Node<Partial<SourceName, Invocation<Ctx>>>: IntoC
    |                                              |
    |                                              required by a bound introduced by this call
    |
-   = note: a #[command(curried)] function belongs in a #[group(args = T)]
+   = note: if this is a #[command(curried)] handle, it belongs in a #[group(args = T)]
 help: the trait `IntoCommand<_>` is not implemented for `Node<Partial<SourceName, Invocation<Ctx>>>`
       but it is implemented for `Node<Invocation<_>>`
   --> src/command.rs

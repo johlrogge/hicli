@@ -14,6 +14,8 @@
 //! cargo run --example demo -- event audience --help
 //! cargo run --example demo -- event audience define ./dir Friends --seal-roster
 //! cargo run --example demo -- id create
+//! cargo run --example demo -- id show x   # `?` on a ParseIntError -> runtime, exit 1:
+//!                                         #   "invalid digit found in string"
 //! cargo run --example demo -- source --help    # fixed `list`, curried `sync`/`show`
 //! cargo run --example demo -- source list
 //! cargo run --example demo -- source bandcamp sync
@@ -241,6 +243,14 @@ mod event {
 // The `id` group — a second module, and a second `create`
 // ---------------------------------------------------------------------------
 
+/// An identity's number, as typed.
+#[derive(Debug, Clone, Bpaf, Arg)]
+struct IdNumber(
+    /// the identity's number
+    #[bpaf(positional("NUMBER"))]
+    String,
+);
+
 /// identity
 #[group]
 mod id {
@@ -254,6 +264,19 @@ mod id {
     pub fn create(ctx: &Ctx) -> Outcome<Success> {
         println!("[home={}] created an identity", ctx.home);
         Ok(Success::OK)
+    }
+
+    // Any error converts into a runtime failure (exit 1), so a command may
+    // return the `Result` it would have returned anyway and use `?` with no
+    // `map_err`: `demo id show x` prints "invalid digit found in string".
+    // (A check that belongs to the *argument* is better as a bpaf `guard` or
+    // `parse` on `IdNumber`, which fails as usage, exit 2.)
+    /// show an identity
+    #[command]
+    pub fn show(n: IdNumber, ctx: &Ctx) -> Result<(), std::num::ParseIntError> {
+        let n: u32 = n.0.parse()?;
+        println!("[home={}] identity #{n}", ctx.home);
+        Ok(())
     }
 }
 

@@ -216,10 +216,10 @@
 //! still parses, but rendering `--help` anywhere in the group panics with
 //! bpaf's "positional and command items must be placed in the right most
 //! position" — in any build; a debug build catches it early, when the tree is
-//! folded. A group holds at most one default; a default cannot be at the top level, cannot live in a
-//! curried group, and takes no alias, `hide`, details or footer — all panics
-//! when the tree is folded. The hand-written equivalent is
-//! [`Node::by_default`].
+//! folded. A group holds at most one default; a default cannot be at the top
+//! level, cannot live in a curried group, and takes no alias, `hide`, details
+//! or footer — all panics when the tree is folded. The hand-written
+//! equivalent is [`Node::by_default`].
 //!
 //! What `--help` and completion show:
 //!
@@ -234,10 +234,10 @@
 //! Known limits: `source <TAB>`, with nothing typed, also offers the curried
 //! commands, which are not valid until a value is typed; when the value's
 //! completer has exactly one match for a typed word, a fixed sibling that
-//! also starts with it is not offered; a typo of a curried command after a value
-//! (`source bandcamp snyc`) gets no `did you mean`; `source bandcamp --help`
-//! shows the group's page; a typo of a named sibling in front of a default is
-//! silently the default's value.
+//! also starts with it is not offered; a typo of a curried command after a
+//! value (`source bandcamp snyc`) gets no `did you mean` when the group has a
+//! fixed sibling; `source bandcamp --help` shows the group's page; a typo of a
+//! named sibling in front of a default is silently the default's value.
 
 pub use bpaf;
 

@@ -33,7 +33,7 @@ The workspace publishes **two** crates, and they move as one:
   `commands!` and `#[derive(Arg)]`, re-exported as `hicli::command`,
   `hicli::group`, `hicli::commands` and `hicli::Arg`
 - `hicli` — the runtime crate, which depends on it as
-  `hicli-macros = { version = "=0.1.0", path = "macros" }`
+  `hicli-macros = { version = "=X.Y.Z", path = "macros" }`
 
 Rules:
 

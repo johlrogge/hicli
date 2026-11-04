@@ -143,6 +143,11 @@ They are dev-dependencies only, for `tests/errors.rs`.
   infers `E = Failure`. Write `|args: A, ctx: &Ctx| -> Outcome { …; Ok(()) }`.
   `#[command]` fns are unaffected, since their return type is written. This is
   documented on both functions.
+- **Breaking in 0.2.0 for a hand-written `impl From<MyError> for Failure`.**
+  Where `MyError: std::error::Error`, such an impl now conflicts with the
+  blanket in §1 (E0119). Delete it: the blanket does the same job and renders
+  the whole source chain. For a hand-chosen message, use
+  `.map_err(Failure::runtime)`; for exit code `2`, return `Failure::usage(..)`.
 - **`Box<dyn Error + Send + Sync>` is not accepted.** Return `Box<dyn Error>`,
   `anyhow::Error` or `eyre::Report` instead, or map the error with
   `Failure::runtime`. This is documented on `IntoOutcome`.

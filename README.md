@@ -9,9 +9,10 @@ hi-cli*: a high-fidelity command-line interface rendered from the code you
 already have.
 
 > **Status:** v1 is implemented and covered by an in-process test suite. The source is
-> public at [github.com/johlrogge/hicli](https://github.com/johlrogge/hicli). 0.1.0 is
-> the first release, published to crates.io as `hicli` and `hicli-macros`. Before
-> 1.0, a minor version may carry breaking changes.
+> public at [github.com/johlrogge/hicli](https://github.com/johlrogge/hicli). 0.2.0 is
+> the current release, published to crates.io as `hicli` and `hicli-macros`. Before
+> 1.0, a minor version may carry breaking changes. Upgrading from 0.1: see
+> [`CHANGELOG.md`](CHANGELOG.md).
 
 ## The idea
 
@@ -43,7 +44,7 @@ for the full API and the `bpaf` capability analysis that grounds it.
 ```toml
 # Cargo.toml
 [dependencies]
-hicli = "0.1"
+hicli = "0.2"
 bpaf = "0.9"    # for `#[derive(Bpaf)]` on your own argument structs — see "Rules" below
 ```
 
@@ -275,7 +276,8 @@ That is the whole thing: `app event create ./ev "Summer Party"`, `app wallet car
 
   A `Failure::usage(..)` (exit 2) is only reachable by returning `Outcome`;
   hicli never downcasts an error back into a code. A closure handed to
-  `hicli::command` by hand that returns `Ok(())` spells `-> Outcome`. See
+  `hicli::command` or `hicli::curried_command` by hand that returns `Ok(())`
+  spells `-> Outcome`. See
   [`docs/adr/012-command-errors-convert-through-into-failure.md`](docs/adr/012-command-errors-convert-through-into-failure.md).
 
 The app itself, not a command, carries two more things, set on the composition root:
@@ -352,8 +354,9 @@ fact-values-for` searches for that literal word. Its positionals must come last.
 Known limits (`bpaf` 0.9.27): `source <TAB>` with nothing typed also completes the curried
 commands (picking one leads to a confusing error); a one-match value completer hides a
 prefix-matching fixed sibling (`source l` → only `local`); the old name-last order
-`source sync bandcamp` gives a misleading "did you mean `resync`"; typo suggestions inside
-curried groups are lost when a fixed sibling exists; `source NAME --help` shows the group page;
+`source sync bandcamp` gives a misleading "did you mean `resync`"; a typo of a curried command
+after a value (`source bandcamp snyc`) gets no `did you mean` when the group has a fixed sibling;
+`source NAME --help` shows the group page;
 a misspelled sibling under a default reads as a query. A default cannot be at the top level or
 in a curried group.
 

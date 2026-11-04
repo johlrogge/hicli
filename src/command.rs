@@ -862,7 +862,7 @@ fn external_parser<Ctx: 'static>(
 /// A [`Curried`] command is deliberately *not* `IntoCommand`: it needs a
 /// curried group's value to run.
 #[diagnostic::on_unimplemented(
-    note = "a #[command(curried)] function belongs in a #[group(args = T)]"
+    note = "if this is a #[command(curried)] handle, it belongs in a #[group(args = T)]"
 )]
 pub trait IntoCommand<Ctx> {
     /// Turn `self` into the command it denotes.

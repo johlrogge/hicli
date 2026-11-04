@@ -9,21 +9,23 @@ remaining question is whether that model survives contact with a real CLI:
 replace moniker's `Cli`/enums/`dispatch()` match, keep `bases/cli` parser-free,
 and prove exit-code and `.feature` journey parity. `docs/sketches/moniker.rs`
 sketches the target shape. Group-level curried arguments (ADR-005's "Future
-work", `#[group(args = T)]`) are now earned by mdma-cli (#1) and scheduled for
+work", `#[group(args = T)]`) were earned by mdma-cli (#1) and shipped in
 0.2.0, see "Releases for mdma-cli" below. Full design is in
 `docs/PLAN.md`.
 
 ## Releases for mdma-cli
 
 The mdma-cli evaluation (2026-11-03) filed issues #1–#18 against hicli as a clap
-replacement. The essentials are split across two releases:
+replacement. The essentials are split across three releases:
 
 - **0.1.0:** help metadata and examples (#2, #9: ADR-008), completion scripts
   (#12: ADR-009), values starting with `-` (#5: documented recipe), and the
   release itself (#3).
 - **0.2.0:** group-level arguments (#1) and a group's default command (#4),
-  designed together (they reshape the group node), plus `?` on application
-  errors (#6, done: ADR-012) and `mk_ctx` seeing the selected command (#7).
+  designed together (ADR-011: they reshape the group node), plus `?` on
+  application errors (#6, ADR-012).
+- **0.3.0:** `mk_ctx` seeing the selected command (#7), pending mdma-cli's
+  review of the proposed answer: a lazy context (`ctx.node()?`) and no new API.
 - **Unscheduled:** choice enums (#8), owned command names (#10), the
   positionals-last check (#11), globals-aware completion (#13), and the
   nice-to-haves #14–#18.
@@ -46,6 +48,16 @@ replacement. The essentials are split across two releases:
 ## Done
 
 <!-- Completed milestones -->
+
+- `?` on application errors (ADR-012, 2026-11-04, #6): a command returns its
+  own `Result<_, E>` for any `E: Into<Failure>` (std errors, anyhow, eyre,
+  `String`), the source chain rendered `outer: mid: root`
+- Curried groups and a group's default command (ADR-011, 2026-11-04, #1, #4):
+  `#[group(args = T)]`, `#[group(curried = T)]`, `#[command(curried)]`,
+  `#[command(default)]`
+- 0.1.0 released and published to crates.io (2026-11-03): help metadata and
+  examples footer (ADR-008), completion scripts (ADR-009), file groups
+  (ADR-010)
 
 - File groups are `#[group] pub mod x;` (ADR-010, 2026-11-03): `group_mod!`
   removed before 0.1.0, MSRV 1.99

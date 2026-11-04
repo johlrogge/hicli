@@ -102,16 +102,20 @@ impl<Ctx> Invocation<Ctx> {
     pub fn run(self, ctx: &Ctx) -> Result<Success, Failure>;
 }
 
-/// One node of the command tree — a leaf, a group, or an external. A leaf and
-/// a group are the same type, which is what makes a parent's children a plain
-/// `Vec<Command<Ctx>>` and `commands![…]` homogeneous.
-pub struct Command<Ctx> { /* name, help, details, leaf|group|external */ }
-impl<Ctx> Command<Ctx> {
-    pub fn details(self, d: impl Into<String>) -> Self;   // bpaf header: reflowed prose
-    pub fn footer(self, f: impl Into<String>) -> Self;    // after the options, verbatim (ADR-008)
-    pub fn alias(self, a: &'static str) -> Self;          // repeatable; unlisted; path stays canonical
-    pub fn hide(self) -> Self;                            // out of help/completion/suggestions; parses
+/// One node of the command tree — a leaf, a group, a curried group, a group's
+/// default, or an external. `O` is what parsing the node yields. A leaf and a
+/// group are the same type, which is what makes a parent's children a plain
+/// `Vec<Node<O>>` and `commands![…]` homogeneous.
+pub struct Node<O> { /* name, help, details, footer, aliases, listing, leaf|default|group|curried */ }
+/// What an `App` mounts: a node yielding an `Invocation`.
+pub type Command<Ctx> = Node<Invocation<Ctx>>;
+impl<O> Node<O> {
+    pub fn details(self, details: impl Into<String>) -> Self; // bpaf header: reflowed prose
+    pub fn footer(self, footer: impl Into<String>) -> Self;   // after the options, verbatim (ADR-008)
+    pub fn alias(self, alias: &'static str) -> Self;          // repeatable; unlisted; path stays canonical
+    pub fn hide(self) -> Self;                                // out of help/completion/suggestions; parses
     pub fn name(&self) -> &'static str;
+    pub fn by_default(self) -> Self;  // `#[command(default)]`: runs when no sibling is named (ADR-011)
 }
 // `help` is mandatory (ADR-001): the parent's one-line command entry AND the
 // heading of `<cmd> --help`.
@@ -119,13 +123,14 @@ pub fn command<Ctx, A, R>(name: &'static str, help: impl Into<String>,
                           parser: impl Parser<A> + 'static,
                           run: impl Fn(A, &Ctx) -> R + Clone + 'static) -> Command<Ctx>
     where A: 'static, R: IntoOutcome, Ctx: 'static;
-pub fn group<Ctx: 'static>(name: &'static str, help: impl Into<String>,
-                           children: Vec<Command<Ctx>>) -> Command<Ctx>;
+pub fn group<O: 'static>(name: &'static str, help: impl Into<String>,
+                         children: Vec<Node<O>>) -> Node<O>;
 pub fn external<Ctx: 'static>(ext: ExternalCommand) -> Command<Ctx>;   // git-style plugin
 
 // Curried commands and default commands (ADR-011). `Node<O>` is the one node type;
 // `Command<Ctx> = Node<Invocation<Ctx>>`, `Curried<T, Ctx> = Node<Partial<T, Invocation<Ctx>>>`,
-// and `group` is generic over `O`. Source-compatible with 0.1.0.
+// and `group` is generic over `O`. Source-compatible with 0.1.0, except that a turbofish
+// `group::<Ctx>(…)` must be dropped or written `group::<Invocation<Ctx>>(…)`.
 pub fn curried_command<T, Ctx, A, R>(name: &'static str, help: impl Into<String>,
                                      parser: impl Parser<A> + 'static,
                                      run: impl Fn(A, T, &Ctx) -> R + Clone + 'static)
@@ -134,7 +139,6 @@ pub fn group_args<T: 'static, O: 'static, P: Parser<T> + 'static>(
     name: &'static str, help: impl Into<String>, arg: impl Fn() -> P + 'static,
     fixed: Vec<Node<O>>, bound: Vec<Node<Partial<T, O>>>) -> Node<O>;
                                            // `#[group(args = T)]`: parse a T after the name, hand it on
-impl<O> Node<O> { pub fn by_default(self) -> Self; }   // `#[command(default)]`: runs when no sibling is named
 
 /// Anything that denotes a `Command`: a `Command` itself, or a zero-argument
 /// callable returning one — a `#[command]`/`#[group]` handle. What
@@ -540,9 +544,11 @@ them, not built ahead of that evidence.
   written by hand with `App::commands(vec![…])`/`hicli::group(…)` parse identical argv to
   identical `invocation.path()`s — proving the macros are sugar, not a second code path.
 - **`hicli-macros` publishes first.** `#[command]` lives in a separate, exact-pinned crate
-  (`hicli-macros = { version = "=0.1.0", path = "macros" }`); `cargo publish --dry-run` for
-  `hicli` cannot succeed until `hicli-macros` is on crates.io, so the release order is fixed
-  by the dependency graph, not just documented in `RELEASING.md`.
+  (`hicli-macros = { version = "=X.Y.Z", path = "macros" }`), so the release order is fixed
+  by the dependency graph, not just documented in `RELEASING.md`. Before a release,
+  `cargo publish --dry-run --workspace` (`just publish-dry`) packages both crates in that
+  order and verifies `hicli` against the *locally* packaged macro crate; the real publish
+  waits for `hicli-macros` to reach the crates.io index before `hicli` goes up.
 - **External subcommands, in-process:** an `ExternalCommand` registered at a path that *cannot
   exist* is listed in `--help`, selected by name and dispatched to an `Invocation` — proving nothing is ever
   spawned outside `ExternalRun::run`. Unit tests assert the captured `rest` verbatim (flag-like args

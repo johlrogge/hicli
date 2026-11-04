@@ -1,0 +1,60 @@
+# Changelog
+
+All notable changes to `hicli` and `hicli-macros` are documented here. The two
+crates are released together, at the same version.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Before 1.0, a minor version may carry breaking changes; they are listed under
+"Breaking" with what to change.
+
+## [0.2.0] — 2026-11-04
+
+### Added
+
+- **Curried groups** (ADR-011, #1): `#[group(args = T)]` parses one `T` after the
+  group's name and hands it to its `#[command(curried)]` children (curried over their
+  first owned parameter). `#[group(curried = T)]` is a group nested after that value.
+  Unmarked children are fixed siblings and are matched first. Hand-written forms:
+  `hicli::group_args`, `hicli::curried_command`, `hicli::Curried`.
+- **A group's default command** (ADR-011, #4): `#[command(default)]` /
+  `Node::by_default` runs when no sibling is named. It answers to no word of its own,
+  and its `Invocation::path` is the group's.
+- **`?` on any error** (ADR-012, #6): a command may return `io::Result<()>`,
+  `anyhow::Result<()>`, `color_eyre::Result<()>`, `Result<(), Box<dyn Error>>`,
+  `Result<(), String>`, … as written. Any error becomes `Failure::Runtime` (exit 1),
+  rendered as its source chain `outer: mid: root`. `?` also works inside
+  `Outcome`-returning commands, and inside `mk_ctx`, which still returns
+  `Result<Ctx, Failure>`.
+- Fixed: `App::complete` dropped the first candidate; debug builds now catch a
+  positional declared before an options struct at fold time (it panicked on `--help`).
+
+### Breaking — upgrading from 0.1
+
+1. A hand-built closure passed to `hicli::command`/`curried_command` that only returns
+   `Ok(())` needs `-> Outcome` spelled (E0282 otherwise). `#[command]` functions are
+   unaffected.
+2. Delete any `impl From<YourError> for hicli::Failure` where
+   `YourError: std::error::Error`. It now conflicts (E0119) with hicli's blanket
+   conversion, which does the same job and renders the full chain. For a hand-chosen
+   message use `.map_err(Failure::runtime)`; for exit code 2 return
+   `Failure::usage(..)`; errors are never downcast to a code.
+3. `Command<Ctx>` is now an alias for `Node<Invocation<Ctx>>`, and `hicli::group` is
+   generic over the node's output (`group<O>`). A turbofish `hicli::group::<Ctx>(…)`
+   must be dropped or written `group::<Invocation<Ctx>>(…)`.
+4. `Result<(), Box<dyn Error + Send + Sync>>` is not an accepted return type. Return
+   `Box<dyn Error>`, `anyhow::Error` or `eyre::Report`, or map with `Failure::runtime`.
+5. MSRV unchanged at 1.99; `hicli` and `hicli-macros` must be the same version (exact
+   pin).
+
+### May change in 0.3
+
+- The signature of the low-level `hicli::group_args` (`#[group(args = T)]` is the
+  documented path).
+
+## [0.1.0] — 2026-11-03
+
+First release: help metadata and the doc comment's `# Examples` footer (ADR-008),
+completion scripts (ADR-009) and groups in files (ADR-010).
+
+[0.2.0]: https://github.com/johlrogge/hicli/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/johlrogge/hicli/releases/tag/v0.1.0
