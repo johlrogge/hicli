@@ -51,6 +51,8 @@ trybuild = "1"
 # prove it end to end (`tests/errors.rs`).
 anyhow = "1"
 eyre = "0.6"
+# `examples/playr.rs` shows a command returning `color_eyre::Result` (README).
+color-eyre = "0.6"
 
 [lints]
 workspace = true
@@ -65,3 +67,15 @@ path = "examples/demo.rs"
 [[example]]
 name = "files"
 path = "examples/files/main.rs"
+
+# The README's running example, and its Quick start. `test = true` so
+# `cargo test --workspace` runs the tests inside them.
+[[example]]
+name = "playr"
+path = "examples/playr.rs"
+test = true
+
+[[example]]
+name = "playr_minimal"
+path = "examples/playr_minimal.rs"
+test = true
