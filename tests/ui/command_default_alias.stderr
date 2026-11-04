@@ -1,0 +1,5 @@
+error: `default` cannot be combined with `alias`: a default command answers to no word, so it takes no name or alias
+ --> tests/ui/command_default_alias.rs:9:28
+  |
+9 | #[command(default, alias = "find")]
+  |                            ^^^^^^

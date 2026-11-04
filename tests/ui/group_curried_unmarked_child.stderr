@@ -1,0 +1,5 @@
+error: `list` is in group `jobs`, which hands every child a `SourceName`: mark it #[command(curried)] and take the `SourceName` as its first parameter
+  --> tests/ui/group_curried_unmarked_child.rs:29:16
+   |
+29 |         pub fn list(_ctx: &Ctx) {}
+   |                ^^^^

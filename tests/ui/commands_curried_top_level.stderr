@@ -1,0 +1,9 @@
+error[E0308]: mismatched types
+  --> tests/ui/commands_curried_top_level.rs:18:32
+   |
+18 |     let _: Vec<Command<Ctx>> = commands![sync];
+   |                                ^^^^^^^^^^^^^^^ expected `Node<Invocation<Ctx>>`, found `Node<Partial<SourceName, _>>`
+   |
+   = note: expected struct `Node<Invocation<Ctx>>`
+              found struct `Node<Partial<SourceName, Invocation<Ctx>>>`
+   = note: this error originates in the macro `commands` (in Nightly builds, run with -Z macro-backtrace for more info)

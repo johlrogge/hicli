@@ -17,8 +17,11 @@
 //! paths, and the failure mode of guessing wrong is a missing-function error
 //! naming `__hicli_x`, not silence.
 
-use syn::{Attribute, FnArg, Ident, Item, Signature, Type};
+use syn::parse::Parse;
+use syn::{Attribute, FnArg, Ident, Item, Meta, Signature, Type};
 
+use crate::group::GroupArgs;
+use crate::parse::CommandArgs;
 use crate::shared::{cfg_attrs, marks, path_attr};
 
 /// One discovered child of a group.
@@ -42,12 +45,22 @@ pub(crate) enum ChildKind {
     Command {
         /// The context type the command names, if any.
         ctx: Option<Type>,
+        /// Whether it is `#[command(curried)]`: it receives its group's
+        /// argument.
+        curried: bool,
+        /// Whether it is `#[command(default)]`.
+        default: bool,
     },
     /// A nested `#[group]` module, with its body — which the context walk
     /// recurses into.
     Group {
         /// The nested module's items.
         items: Vec<Item>,
+        /// Whether it is `#[group(args = T)]`: it takes an argument of its own.
+        args: bool,
+        /// Whether it is `#[group(curried = T)]`: it receives its group's
+        /// argument.
+        curried: bool,
     },
     /// A `#[group] mod x;`: the body is in another file.
     ///
@@ -58,7 +71,36 @@ pub(crate) enum ChildKind {
     Outlined {
         /// The author's own `#[path = "…"]`, if they wrote one.
         path: Option<String>,
+        /// Whether it is `#[group(args = T)]`.
+        args: bool,
+        /// Whether it is `#[group(curried = T)]`.
+        curried: bool,
     },
+}
+
+impl ChildKind {
+    /// Does this child receive its group's argument — a `#[command(curried)]`
+    /// or a `#[group(curried = T)]`?
+    pub(crate) fn is_curried(&self) -> bool {
+        match self {
+            ChildKind::Command { curried, .. }
+            | ChildKind::Group { curried, .. }
+            | ChildKind::Outlined { curried, .. } => *curried,
+        }
+    }
+
+    /// Is this child a `#[command(default)]`?
+    pub(crate) fn is_default(&self) -> bool {
+        matches!(self, ChildKind::Command { default: true, .. })
+    }
+
+    /// Is this child a `#[group(args = T)]`?
+    pub(crate) fn takes_args(&self) -> bool {
+        match self {
+            ChildKind::Command { .. } => false,
+            ChildKind::Group { args, .. } | ChildKind::Outlined { args, .. } => *args,
+        }
+    }
 }
 
 /// Every child of a module body, in source order.
@@ -66,25 +108,38 @@ pub(crate) fn children_of(items: &[Item]) -> Vec<Child> {
     let mut children = Vec::new();
     for item in items {
         match item {
-            Item::Fn(f) if marked(&f.attrs, "command") => children.push(Child {
-                ident: f.sig.ident.clone(),
-                cfgs: cfg_attrs(&f.attrs),
-                kind: ChildKind::Command {
-                    ctx: context_of(&f.sig),
-                },
-            }),
-            Item::Mod(m) if marked(&m.attrs, "group") => children.push(Child {
-                ident: m.ident.clone(),
-                cfgs: cfg_attrs(&m.attrs),
-                kind: match &m.content {
-                    Some((_, items)) => ChildKind::Group {
-                        items: items.clone(),
+            Item::Fn(f) if marked(&f.attrs, "command") => {
+                let args: CommandArgs = mark_args(&f.attrs, "command");
+                children.push(Child {
+                    ident: f.sig.ident.clone(),
+                    cfgs: cfg_attrs(&f.attrs),
+                    kind: ChildKind::Command {
+                        ctx: context_of(&f.sig),
+                        curried: args.is_curried(),
+                        default: args.is_default(),
                     },
-                    None => ChildKind::Outlined {
-                        path: path_attr(&m.attrs),
+                });
+            }
+            Item::Mod(m) if marked(&m.attrs, "group") => {
+                let g: GroupArgs = mark_args(&m.attrs, "group");
+                let (args, curried) = (g.takes_args(), g.is_curried());
+                children.push(Child {
+                    ident: m.ident.clone(),
+                    cfgs: cfg_attrs(&m.attrs),
+                    kind: match &m.content {
+                        Some((_, items)) => ChildKind::Group {
+                            items: items.clone(),
+                            args,
+                            curried,
+                        },
+                        None => ChildKind::Outlined {
+                            path: path_attr(&m.attrs),
+                            args,
+                            curried,
+                        },
                     },
-                },
-            }),
+                });
+            }
             _ => {}
         }
     }
@@ -94,6 +149,22 @@ pub(crate) fn children_of(items: &[Item]) -> Vec<Child> {
 /// Does any of `attrs` end in `name`?
 fn marked(attrs: &[Attribute], name: &str) -> bool {
     attrs.iter().any(|a| marks(a, name))
+}
+
+/// The arguments of the attribute marking a child, read **leniently**.
+///
+/// A bare `#[command]` has none. Arguments that do not parse read as none
+/// too: the child's own attribute reports them, with the span to say it at, when
+/// it expands — saying it twice, once from a parent that only wanted to know
+/// which keys were there, helps nobody.
+fn mark_args<T: Parse + Default>(attrs: &[Attribute], name: &str) -> T {
+    let Some(attr) = attrs.iter().find(|a| marks(a, name)) else {
+        return T::default();
+    };
+    match &attr.meta {
+        Meta::List(list) => syn::parse2(list.tokens.clone()).unwrap_or_default(),
+        Meta::Path(_) | Meta::NameValue(_) => T::default(),
+    }
 }
 
 /// The type of a signature's first `&T` parameter, if it has one.
@@ -196,7 +267,7 @@ mod tests {
                  /// audience\n#[group] pub mod audience { /// d\n#[command] fn define(c: &Ctx) {} }
              }",
         );
-        let ChildKind::Group { items } = &cs[0].kind else {
+        let ChildKind::Group { items, .. } = &cs[0].kind else {
             panic!("`audience` is a group child");
         };
         assert_eq!(
@@ -211,7 +282,63 @@ mod tests {
     #[test]
     fn a_file_module_has_no_body_to_recurse_into() {
         let cs = children("mod event { /// audience\n#[group] pub mod audience; }");
-        assert!(matches!(cs[0].kind, ChildKind::Outlined { path: None }));
+        assert!(matches!(cs[0].kind, ChildKind::Outlined { path: None, .. }));
+    }
+
+    #[test]
+    fn a_commands_curried_and_default_keys_are_read() {
+        let cs = children(
+            "mod source {
+                 /// s\n#[command(curried)] pub fn sync(s: SourceName, ctx: &Ctx) {}
+                 /// c\n#[hicli::command(alias = \"x\", curried)] pub fn cancel(s: SourceName) {}
+                 /// l\n#[command(default)] pub fn list(ctx: &Ctx) {}
+                 /// p\n#[command] pub fn plain(ctx: &Ctx) {}
+             }",
+        );
+        let flags: Vec<(bool, bool)> = cs
+            .iter()
+            .map(|c| (c.kind.is_curried(), c.kind.is_default()))
+            .collect();
+        assert_eq!(
+            flags,
+            [(true, false), (true, false), (false, true), (false, false)]
+        );
+    }
+
+    #[test]
+    fn a_groups_args_and_curried_keys_are_read_in_both_forms() {
+        let cs = children(
+            "mod top {
+                 /// a\n#[group(args = SourceName)] pub mod source { /// l\n#[command] fn l() {} }
+                 /// b\n#[group(curried = SourceName, ctx = Ctx)] pub mod jobs;
+                 /// c\n#[group] pub mod plain;
+             }",
+        );
+        let flags: Vec<(bool, bool)> = cs
+            .iter()
+            .map(|c| (c.kind.takes_args(), c.kind.is_curried()))
+            .collect();
+        assert_eq!(flags, [(true, false), (false, true), (false, false)]);
+        assert!(matches!(cs[0].kind, ChildKind::Group { .. }));
+        assert!(matches!(cs[1].kind, ChildKind::Outlined { .. }));
+    }
+
+    #[test]
+    fn arguments_that_do_not_parse_read_as_unmarked() {
+        // The child's own attribute reports these; discovery only sees a
+        // plain child.
+        let cs = children(
+            "mod top {
+                 /// s\n#[command(curried, bogus)] pub fn sync(s: SourceName) {}
+                 /// d\n#[command(curried, default)] pub fn both(s: SourceName) {}
+                 /// g\n#[group(default)] pub mod g { /// l\n#[command] fn l() {} }
+             }",
+        );
+        for c in &cs {
+            assert!(!c.kind.is_curried(), "`{}` read as curried", c.ident);
+            assert!(!c.kind.is_default(), "`{}` read as default", c.ident);
+            assert!(!c.kind.takes_args(), "`{}` read as taking args", c.ident);
+        }
     }
 
     #[test]
@@ -223,7 +350,7 @@ mod tests {
                  /// audience\n#[group] #[path = \"other/a.rs\"] pub mod audience;
              }",
         );
-        let ChildKind::Outlined { path } = &cs[0].kind else {
+        let ChildKind::Outlined { path, .. } = &cs[0].kind else {
             panic!("`audience` is an outlined child");
         };
         assert_eq!(path.as_deref(), Some("other/a.rs"));
@@ -267,10 +394,10 @@ mod tests {
                  /// version\n#[command] pub fn version() {}
              }",
         );
-        let ChildKind::Command { ctx: Some(ty) } = &cs[0].kind else {
+        let ChildKind::Command { ctx: Some(ty), .. } = &cs[0].kind else {
             panic!("`create` names a context");
         };
         assert_eq!(ty.to_token_stream().to_string(), "crate :: Ctx");
-        assert!(matches!(cs[1].kind, ChildKind::Command { ctx: None }));
+        assert!(matches!(cs[1].kind, ChildKind::Command { ctx: None, .. }));
     }
 }

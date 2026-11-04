@@ -1,0 +1,26 @@
+error[E0277]: `Result<String, Failure>` is not a command return type hicli accepts
+ --> tests/ui/return_result_of_a_value.rs:9:1
+  |
+9 | #[command]
+  | ^^^^^^^^^^ a `#[command]` must return `()`, `Success`, `Result<(), E>` or `Result<Success, E>`
+  |
+  = help: the trait `IntoOutcome` is not implemented for `Result<String, Failure>`
+  = note: the four accepted shapes are `()`, `Success`, `Result<(), E>` and `Result<Success, E>`, where `E: Into<Failure>`
+  = note: `E` may be `Failure` (i.e. `hicli::Outcome`), any `std::error::Error + 'static`, `anyhow::Error`, `eyre::Report`, `Box<dyn Error>`, `String` or `&str`
+help: the following other types implement trait `IntoOutcome`
+ --> src/outcome.rs
+  |
+  | impl<E: Into<Failure>> IntoOutcome for Result<(), E> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Result<(), E>`
+...
+  | impl<E: Into<Failure>> IntoOutcome for Result<Success, E> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Result<Success, E>`
+note: required by a bound in `command`
+ --> src/command.rs
+  |
+  | pub fn command<Ctx, A, R>(
+  |        ------- required by a bound in this function
+...
+  |     R: IntoOutcome,
+  |        ^^^^^^^^^^^ required by this bound in `command`
+  = note: this error originates in the attribute macro `command` (in Nightly builds, run with -Z macro-backtrace for more info)

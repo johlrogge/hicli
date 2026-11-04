@@ -1,0 +1,5 @@
+error: `sync` is curried, but group `source` has no argument to hand it: declare one with #[group(args = <Type>)]
+  --> tests/ui/curried_in_plain_group.rs:24:12
+   |
+24 |     pub fn sync(_s: SourceName, _ctx: &Ctx) {}
+   |            ^^^^

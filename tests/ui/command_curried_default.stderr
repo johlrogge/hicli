@@ -1,0 +1,5 @@
+error: `curried` and `default` cannot be combined: a group that hands its commands an argument has no default command
+  --> tests/ui/command_curried_default.rs:14:20
+   |
+14 | #[command(curried, default)]
+   |                    ^^^^^^^

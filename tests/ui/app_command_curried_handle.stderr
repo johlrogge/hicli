@@ -1,0 +1,22 @@
+error[E0277]: the trait bound `Node<Partial<SourceName, Invocation<Ctx>>>: IntoCommand<_>` is not satisfied
+  --> tests/ui/app_command_curried_handle.rs:25:54
+   |
+25 |     let _: App<(), Ctx> = App::new(pure(())).command(__hicli_sync());
+   |                                              ------- ^^^^^^^^^^^^^^ the trait `FnOnce()` is not implemented for `Node<Partial<SourceName, Invocation<Ctx>>>`
+   |                                              |
+   |                                              required by a bound introduced by this call
+   |
+   = note: if this is a #[command(curried)] handle, it belongs in a #[group(args = T)]
+help: the trait `IntoCommand<_>` is not implemented for `Node<Partial<SourceName, Invocation<Ctx>>>`
+      but it is implemented for `Node<Invocation<_>>`
+  --> src/command.rs
+   |
+   | impl<Ctx> IntoCommand<Ctx> for Command<Ctx> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `Invocation<_>`, found `Partial<SourceName, Invocation<Ctx>>`
+   = note: required for `Node<Partial<SourceName, Invocation<Ctx>>>` to implement `IntoCommand<_>`
+note: required by a bound in `App::<G, Ctx>::command`
+  --> src/app.rs
+   |
+   |     pub fn command(mut self, c: impl IntoCommand<Ctx>) -> Self {
+   |                                      ^^^^^^^^^^^^^^^^ required by this bound in `App::<G, Ctx>::command`

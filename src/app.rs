@@ -79,7 +79,7 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     /// Add one top-level command.
     ///
     /// Takes anything [`IntoCommand`]: a [`Command`] built with
-    /// [`command`](crate::command) / [`group`](crate::group) /
+    /// [`command`](fn@crate::command) / [`group`](fn@crate::group) /
     /// [`external`](crate::external), or a zero-argument function returning one.
     pub fn command(mut self, c: impl IntoCommand<Ctx>) -> Self {
         self.commands.push(c.into_command());
@@ -106,8 +106,9 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     ///
     /// # Panics
     ///
-    /// Panics if no command was registered, if a registered group is empty, or
-    /// if two siblings share a name or alias.
+    /// Panics if no command was registered, if a registered group is empty,
+    /// if two siblings share a name or alias, or if a top-level command is a
+    /// [default](crate::Node::by_default).
     fn fold(self) -> (Registry, OptionParser<(G, Invocation<Ctx>)>) {
         let App {
             globals,
@@ -115,6 +116,13 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
             about,
             version,
         } = self;
+        if let Some(d) = commands.iter().find(|c| c.is_default()) {
+            panic!(
+                "a default command cannot be at the top level: `{}` runs when no sibling is \
+                 named, and only a group has siblings to name; put it in a group",
+                d.name()
+            );
+        }
         let registry = Registry {
             known: commands.iter().flat_map(Command::spellings).collect(),
             listed: commands
@@ -131,6 +139,15 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
         }
         if let Some(version) = &version {
             parser = parser.version(version.as_str());
+        }
+        // bpaf checks that every positional comes after every option only when
+        // help renders — and then panics, in any build. A debug build renders
+        // it once here, so a broken order fails where the tree is built
+        // instead of at a user's `--help`. (Not `check_invariants`: it prints
+        // to stdout.)
+        #[cfg(debug_assertions)]
+        {
+            let _ = parser.run_inner(&["--help"][..]);
         }
         (registry, parser)
     }
@@ -341,25 +358,21 @@ pub(crate) const COMPLETE_REV_1: &str = "--bpaf-complete-rev=1";
 
 /// The candidate values in a revision-1 completion payload.
 ///
-/// The wire format has two shapes, and the difference is the *count*:
+/// The wire format (verified against bpaf 0.9.27) has **no header line**: it
+/// is one item per line, `"<value>\t<description>"` or just `"<value>"`.
 ///
-/// - exactly one candidate — `"<value>\n"`, with no header and no description
-///   (a shell with one answer inserts it rather than showing a menu);
-/// - otherwise — a header line (`"<group>\t<help>\n"`, possibly just `"\n"`)
-///   followed by one `"<value>\t<description>\n"` or `"<value>\n"` per
-///   candidate.
+/// - A metavariable placeholder — what a value completer contributes beside
+///   its candidates — is an item with an **empty** value (`"\tthe source"`),
+///   and is not a candidate.
+/// - A lone item is printed without its description (a shell with one answer
+///   inserts it rather than showing a menu).
+/// - Nothing applicable is the empty string, or a lone empty line.
 ///
-/// Nothing applicable is the empty string, so a single line is never a lone
-/// header: it is always the one-candidate shape.
+/// So every line's value up to its first tab is a candidate, unless it is
+/// empty.
 pub(crate) fn candidate_values(out: &str) -> Vec<String> {
-    let lines: Vec<&str> = out.lines().collect();
-    let items: &[&str] = match lines.len() {
-        0 | 1 => &lines,
-        _ => &lines[1..],
-    };
-    items
-        .iter()
-        .map(|l| l.split('\t').next().unwrap_or(""))
+    out.lines()
+        .filter_map(|l| l.split('\t').next())
         .filter(|v| !v.is_empty())
         .map(str::to_string)
         .collect()
@@ -623,28 +636,68 @@ mod tests {
         assert_eq!(report_outcome(Err(Failure::runtime("boom"))), 1);
     }
 
+    /// bpaf's rule — every positional after every option — is only checked
+    /// when help renders, so a debug build renders it once at fold time to
+    /// fail where the tree is built rather than at a user's `--help`.
     #[test]
-    fn candidate_values_reads_the_one_candidate_shape() {
-        // One candidate: no header line, and the description is already gone.
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "positional and command items")]
+    fn a_positional_before_an_option_panics_when_folded() {
+        let p = bpaf::positional::<String>("P");
+        let o = bpaf::long("opt").switch();
+        let bad = crate::command("bad", "bad", construct!(p, o), |_, _: &()| {});
+        let _ = App::new(bpaf::pure(())).command(bad).into_parser();
+    }
+
+    /// … however deep the command sits: here, a curried command two levels
+    /// down, with its positional before its option.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "positional and command items")]
+    fn a_nested_positional_before_an_option_panics_when_folded() {
+        let p = bpaf::positional::<String>("P");
+        let o = bpaf::long("opt").switch();
+        let bad = crate::curried_command("bad", "bad", construct!(p, o), |_, _: String, _: &()| {});
+        let source = crate::group_args(
+            "source",
+            "sources",
+            || bpaf::positional::<String>("SOURCE"),
+            vec![cmd("list")],
+            vec![bad],
+        );
+        let outer = crate::group("outer", "outer", vec![source]);
+        let _ = App::new(bpaf::pure(())).command(outer).into_parser();
+    }
+
+    #[test]
+    fn candidate_values_reads_a_lone_item() {
+        // One candidate: printed without its description.
         assert_eq!(candidate_values("alice\n"), ["alice"]);
     }
 
     #[test]
-    fn candidate_values_reads_the_header_shape() {
-        // Two or more: a header line first, then one line each, with or without
-        // a tab-separated description.
+    fn candidate_values_skips_the_metavariable_placeholder() {
+        // A value completer's metavariable is an item with an empty value.
         assert_eq!(
-            candidate_values("WHO\ta person\nalice\tthe boss\nalfred\n"),
-            ["alice", "alfred"]
+            candidate_values("\tthe source\nbandcamp\nbandit\n"),
+            ["bandcamp", "bandit"]
         );
-        // The header may be blank — it is still a header.
-        assert_eq!(candidate_values("\nalice\nalfred\n"), ["alice", "alfred"]);
+    }
+
+    #[test]
+    fn candidate_values_keeps_the_first_of_several_commands() {
+        // No header line: the first line is a candidate like any other.
+        assert_eq!(
+            candidate_values("sync\tsync a source\nstatus\tshow\n"),
+            ["sync", "status"]
+        );
     }
 
     #[test]
     fn candidate_values_of_nothing_applicable_is_empty() {
         let none: [&str; 0] = [];
         assert_eq!(candidate_values(""), none);
+        assert_eq!(candidate_values("\n"), none);
     }
 
     #[test]

@@ -11,6 +11,10 @@ E0428/E0252).
 Extended by ADR-006 (2026-09-23): the snake_case-constructor rule moved from
 `#[verb]` into `#[derive(Arg)]`.
 
+"Currying stays additive" (Consequences) realised by
+[ADR-011](011-curried-commands-and-default-commands.md) (2026-11-03):
+`#[group(args = T)]` and `#[command(curried)]`.
+
 Supersedes ADR-004's decisions 2 (`group!` as a list), 3 (`commands!` as a
 `macro_rules!` macro) and 4 (`app!`'s forwarding), and ADR-004's decision 1
 clause that `#[verb]` expands to "a function `create()` and a module `create`

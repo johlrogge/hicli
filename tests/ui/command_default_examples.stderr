@@ -1,0 +1,5 @@
+error: a `default` command is shown on its group's help page, so its doc comment is its one-line help only: move the details and examples to the group's doc comment
+  --> tests/ui/command_default_examples.rs:15:11
+   |
+15 | #[command(default)]
+   |           ^^^^^^^

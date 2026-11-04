@@ -1,0 +1,33 @@
+error[E0277]: the trait bound `NotAnError: std::error::Error` is not satisfied
+  --> tests/ui/return_error_not_an_error.rs:13:1
+   |
+13 | #[command]
+   | ^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `std::error::Error` is not implemented for `NotAnError`
+  --> tests/ui/return_error_not_an_error.rs:10:1
+   |
+10 | struct NotAnError;
+   | ^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `IntoOutcome`
+  --> src/outcome.rs
+   |
+   | impl<E: Into<Failure>> IntoOutcome for Result<(), E> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Result<(), E>`
+...
+   | impl<E: Into<Failure>> IntoOutcome for Result<Success, E> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Result<Success, E>`
+   = note: required for `Box<(dyn std::error::Error + 'static)>` to implement `From<NotAnError>`
+   = note: required for `NotAnError` to implement `Into<Box<(dyn std::error::Error + 'static)>>`
+   = note: 2 redundant requirements hidden
+   = note: required for `NotAnError` to implement `Into<Failure>`
+   = note: required for `Result<(), NotAnError>` to implement `IntoOutcome`
+note: required by a bound in `command`
+  --> src/command.rs
+   |
+   | pub fn command<Ctx, A, R>(
+   |        ------- required by a bound in this function
+...
+   |     R: IntoOutcome,
+   |        ^^^^^^^^^^^ required by this bound in `command`
+   = note: this error originates in the attribute macro `command` (in Nightly builds, run with -Z macro-backtrace for more info)

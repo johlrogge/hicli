@@ -663,7 +663,7 @@ mod tests {
 //     }
 //
 // ===========================================================================
-// ===== FUTURE, not v1: "currying" ==========================================
+// ===== "currying" — built since ADR-011 (this sketch predates it) ==========
 // ===========================================================================
 //
 // `moniker event ./ev main create "Summer Party"`: the group parses `EventRef`
@@ -675,5 +675,6 @@ mod tests {
 //     #[group(args = EventRef)]
 //     pub mod event { … }
 //
-// Nothing in the consumer-facing shape changes. See ADR-004's "Future work" for
-// what the primitives must look like today so this stays additive.
+// Nothing in the consumer-facing shape changes. As built (ADR-011), children
+// that receive the value are marked `#[command(curried)]`; unmarked children
+// are fixed siblings.

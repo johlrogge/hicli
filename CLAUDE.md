@@ -71,8 +71,12 @@ Run `just ci` before considering any change done.
   command that takes it) — because moniker's pain justified each — and the
   `alias`/`hide` keys, the doc comment's `# Examples` footer plus
   `App::about`/`App::version` (ADR-008), and `completion_script` (ADR-009),
-  because mdma-cli's migration from clap justified them. Deferred until
-  the next real consumer's pain justifies them: group-level currying (`#[group(args = T)]`), a field-composing
+  because mdma-cli's migration from clap justified them — as it did
+  group-level currying (`#[group(args = T)]`, `#[group(curried = T)]`,
+  `#[command(curried)]`) and a group's `#[command(default)]` (ADR-011),
+  and `Into<Failure>` error returns, so `?` works (ADR-012).
+  Deferred until the next real consumer's pain justifies them: nested `args`
+  groups, a default in a curried group or at the top level, a field-composing
   `#[derive(Arg)]` for composites, `#[arg(parser = …)]`, completion masks,
   globals-aware completion, `inventory`-style auto-registration (rejected
   outright, not just deferred).

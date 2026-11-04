@@ -1,0 +1,5 @@
+error: `default` goes on a #[command]: a group runs its default command, it cannot be one
+ --> tests/ui/group_default.rs:9:9
+  |
+9 | #[group(default)]
+  |         ^^^^^^^

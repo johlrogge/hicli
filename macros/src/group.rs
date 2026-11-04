@@ -28,12 +28,13 @@
 use std::io;
 use std::path::Path;
 
-use proc_macro2::{Span, TokenStream};
-use quote::quote;
+use proc_macro2::{Group, Span, TokenStream, TokenTree};
+use quote::{quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
+use syn::spanned::Spanned;
 use syn::{Attribute, Error, Ident, Item, ItemMod, LitStr, Result, Token, Type};
 
-use crate::ctx::{self, Ctx, Outline};
+use crate::ctx::{self, render, Ctx, Outline};
 use crate::discover::{children_of, Child, ChildKind};
 use crate::expand::metadata;
 use crate::fs::Fs;
@@ -44,8 +45,22 @@ use crate::shared::{
 };
 
 /// The message for an argument `#[group]` does not take (D10).
-const UNKNOWN_ARG: &str =
-    "#[group] takes `ctx = <Type>`, `alias = \"...\"` (repeatable) and `hide`";
+const UNKNOWN_ARG: &str = "#[group] takes `ctx = <Type>`, `args = <Type>`, `curried = <Type>`, \
+                           `alias = \"...\"` (repeatable) and `hide`";
+
+/// The message for `args` and `curried` on one group.
+const ARGS_AND_CURRIED: &str = "`args` and `curried` cannot be combined yet: a group that \
+                                receives its parent's argument cannot take another of its own \
+                                (deferred)";
+
+/// The message for `default` on a group.
+const GROUP_DEFAULT: &str =
+    "`default` goes on a #[command]: a group runs its default command, it cannot be one";
+
+/// The message for `args` or `curried` written without its type.
+fn needs_type(key: &Ident) -> String {
+    format!("`{key}` on a group names a type: write `{key} = <Type>`")
+}
 
 /// The message for `#[group]` on anything but a module (D9).
 const NOT_A_MODULE: &str = "#[group] goes on a module: #[group] pub mod event { … }";
@@ -64,20 +79,76 @@ pub(crate) enum Source<'a> {
     Unknown(&'a [String]),
 }
 
-/// What `#[group]` itself was given: `ctx = <Type>`, `alias = "…"`
-/// (repeatable) and `hide`, each optional.
+/// What `#[group]` itself was given: `ctx = <Type>`, `args = <Type>`,
+/// `curried = <Type>`, `alias = "…"` (repeatable) and `hide`, each optional.
 #[derive(Default)]
 pub(crate) struct GroupArgs {
     /// The context type, said out loud instead of lifted from a child.
     ctx: Option<Type>,
+    /// Whether the group takes an argument, receives one, or neither.
+    shape: Shape,
     /// The aliases and the visibility, read by the rules `#[command]` shares.
     meta: CommandMeta,
+}
+
+/// How a group relates to a curried argument (ADR-011).
+#[derive(Default)]
+pub(crate) enum Shape {
+    /// An ordinary group: every child is a `Command<Ctx>`.
+    #[default]
+    Plain,
+    /// `args = T`: the group parses a `T` and hands it to its `curried`
+    /// children; the others are its fixed siblings.
+    Args(Type),
+    /// `curried = T`: the group receives its parent's `T` and hands it on, so
+    /// every child receives it.
+    Curried(Type),
+}
+
+impl GroupArgs {
+    /// Whether `args = T` was given — what a parent `#[group]` reads.
+    pub(crate) fn takes_args(&self) -> bool {
+        matches!(self.shape, Shape::Args(_))
+    }
+
+    /// Whether `curried = T` was given — what a parent `#[group]` reads to
+    /// sort this child into the ones that receive its argument.
+    pub(crate) fn is_curried(&self) -> bool {
+        matches!(self.shape, Shape::Curried(_))
+    }
+}
+
+/// Read `= <Type>` after `key` into `slot`, refusing a repeat and a missing
+/// type.
+fn typed_key(slot: &mut Option<(Ident, Type)>, key: &Ident, input: ParseStream) -> Result<()> {
+    if slot.is_some() {
+        return Err(Error::new_spanned(key, format!("`{key}` is given twice")));
+    }
+    if !input.peek(Token![=]) {
+        return Err(Error::new_spanned(key, needs_type(key)));
+    }
+    let _: Token![=] = input.parse()?;
+    *slot = Some((key.clone(), input.parse()?));
+    Ok(())
 }
 
 impl Parse for GroupArgs {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut ctx: Option<Type> = None;
+        let mut args: Option<(Ident, Type)> = None;
+        let mut curried: Option<(Ident, Type)> = None;
         let meta = parse_keys(input, UNKNOWN_ARG, |key, input| {
+            if key == "args" {
+                typed_key(&mut args, key, input)?;
+                return Ok(true);
+            }
+            if key == "curried" {
+                typed_key(&mut curried, key, input)?;
+                return Ok(true);
+            }
+            if key == "default" {
+                return Err(Error::new_spanned(key, GROUP_DEFAULT));
+            }
             if key != "ctx" {
                 return Ok(false);
             }
@@ -88,8 +159,118 @@ impl Parse for GroupArgs {
             ctx = Some(input.parse()?);
             Ok(true)
         })?;
-        Ok(GroupArgs { ctx, meta })
+        let shape = match (args, curried) {
+            (Some((key, _)), Some(_)) => return Err(Error::new_spanned(key, ARGS_AND_CURRIED)),
+            (Some((_, ty)), None) => Shape::Args(ty),
+            (None, Some((_, ty))) => Shape::Curried(ty),
+            (None, None) => Shape::Plain,
+        };
+        Ok(GroupArgs { ctx, shape, meta })
     }
+}
+
+/// Refuse the children a group of this `shape` cannot have, each at its own
+/// ident (ADR-011). Every such child is reported at once.
+fn check_children(shape: &Shape, group: &Ident, children: &[Child]) -> Result<()> {
+    let mut errors: Vec<Error> = Vec::new();
+    let mut first_default: Option<&Ident> = None;
+    for child in children {
+        let kind = &child.kind;
+        let ident = &child.ident;
+        match shape {
+            Shape::Plain if kind.is_curried() => {
+                errors.push(Error::new_spanned(ident, curried_in_plain(ident, group)));
+            }
+            Shape::Curried(ty) if !kind.is_curried() => {
+                errors.push(Error::new_spanned(
+                    ident,
+                    unmarked_in_curried(child, group, ty),
+                ));
+            }
+            _ => {}
+        }
+        if kind.is_default() {
+            match (shape, first_default) {
+                (Shape::Args(_), _) => errors.push(Error::new_spanned(
+                    ident,
+                    default_with_argument(ident, group, "takes"),
+                )),
+                (Shape::Curried(_), _) => errors.push(Error::new_spanned(
+                    ident,
+                    default_with_argument(ident, group, "receives"),
+                )),
+                (Shape::Plain, Some(first)) => {
+                    errors.push(Error::new_spanned(ident, second_default(group, first)));
+                }
+                (Shape::Plain, None) => first_default = Some(ident),
+            }
+        }
+    }
+    if let Shape::Args(ty) = shape {
+        if !children.iter().any(|c| c.kind.is_curried()) {
+            errors.push(Error::new_spanned(ty, nobody_curried(group, ty)));
+        }
+    }
+    let mut errors = errors.into_iter();
+    match errors.next() {
+        None => Ok(()),
+        Some(mut first) => {
+            first.extend(errors);
+            Err(first)
+        }
+    }
+}
+
+/// The message for a curried child of a group with no argument to give it.
+fn curried_in_plain(child: &Ident, group: &Ident) -> String {
+    format!(
+        "`{child}` is curried, but group `{group}` has no argument to hand it: declare one with \
+         #[group(args = <Type>)]"
+    )
+}
+
+/// The message for a child of a `curried = T` group that does not take `T`.
+fn unmarked_in_curried(child: &Child, group: &Ident, ty: &Type) -> String {
+    let ident = &child.ident;
+    let ty = render(ty);
+    match &child.kind {
+        ChildKind::Command { .. } => format!(
+            "`{ident}` is in group `{group}`, which hands every child a `{ty}`: mark it \
+             #[command(curried)] and take the `{ty}` as its first parameter"
+        ),
+        kind if kind.takes_args() => format!(
+            "`{ident}` takes `args` of its own inside group `{group}`, which hands every child a \
+             `{ty}`: a group with `args` inside a curried group is not supported yet"
+        ),
+        _ => format!(
+            "`{ident}` is in group `{group}`, which hands every child a `{ty}`: mark it \
+             #[group(curried = {ty})]"
+        ),
+    }
+}
+
+/// The message for a group's second `default` command.
+fn second_default(group: &Ident, first: &Ident) -> String {
+    format!("group `{group}` already has a default command, `{first}`: a group has at most one")
+}
+
+/// The message for a `default` command in a group that takes or receives an
+/// argument.
+fn default_with_argument(child: &Ident, group: &Ident, verb: &str) -> String {
+    format!(
+        "`{child}` cannot be a default command: group `{group}` {verb} an argument, so it has \
+         no default command"
+    )
+}
+
+/// The message for an `args` group none of whose children receives the
+/// argument.
+fn nobody_curried(group: &Ident, ty: &Type) -> String {
+    format!(
+        "group `{group}` takes `args = {}`, but none of its children receives it: mark the \
+         commands that take it #[command(curried)]",
+        render(ty)
+    )
 }
 
 /// Expand `#[group]` on `item`, or explain why it cannot be a group.
@@ -127,6 +308,7 @@ fn inline_form(args: GroupArgs, item: ItemMod) -> Result<TokenStream> {
         ));
     }
     check_no_file_children(&children)?;
+    check_children(&args.shape, &item.ident, &children)?;
     let handle = emit_handle(&Handle {
         module: &item.ident,
         name,
@@ -136,6 +318,7 @@ fn inline_form(args: GroupArgs, item: ItemMod) -> Result<TokenStream> {
         aliases: args.meta.aliases,
         hide: args.meta.hide.is_some(),
         cfgs: cfg_attrs(&item.attrs),
+        shape: args.shape,
         // An inline group has no file of its own, and its only file children
         // carry an explicit `#[path]` — so there is no file for the context
         // walk to follow.
@@ -160,7 +343,7 @@ fn inline_form(args: GroupArgs, item: ItemMod) -> Result<TokenStream> {
 fn check_no_file_children(children: &[Child]) -> Result<()> {
     let mut failed: Option<Error> = None;
     for child in children {
-        if let ChildKind::Outlined { path: None } = child.kind {
+        if let ChildKind::Outlined { path: None, .. } = child.kind {
             let e = Error::new_spanned(&child.ident, file_in_inline(&child.ident));
             match &mut failed {
                 Some(first) => first.combine(e),
@@ -222,6 +405,7 @@ fn file_form(
             no_children(&item.ident, &format!("`{file}`")),
         ));
     }
+    check_children(&args.shape, &item.ident, &children)?;
     let ctx = ctx::resolve(
         args.ctx,
         &children,
@@ -236,6 +420,7 @@ fn file_form(
         aliases: args.meta.aliases,
         hide: args.meta.hide.is_some(),
         cfgs: cfg_attrs(&item.attrs),
+        shape: args.shape,
         ctx,
         children,
     });
@@ -339,6 +524,8 @@ pub(crate) struct Handle<'a> {
     /// The module's own `#[cfg]` / `#[cfg_attr]`, copied onto the handle so a
     /// configured-out group takes its registration with it.
     pub(crate) cfgs: Vec<Attribute>,
+    /// Whether the group takes an argument, receives one, or neither.
+    pub(crate) shape: Shape,
     /// The children, in source order — which is their order in `--help`.
     pub(crate) children: Vec<Child>,
     /// The type the handle names as its `Ctx`.
@@ -357,46 +544,185 @@ pub(crate) fn emit_handle(h: &Handle) -> TokenStream {
         Ctx::Generic => (quote!(<Ctx: 'static>), quote!(Ctx)),
     };
 
-    let module = h.module;
-    // Each child's handle is called *directly*, not through `IntoCommand`, so a
-    // child whose context is a different type is a plain type error at its own
-    // `push` rather than an unsatisfied trait bound on the whole group.
-    let pushes = h.children.iter().map(|c| {
-        let cfgs = &c.cfgs;
-        let child = handle_ident(&c.ident);
-        quote! {
-            #(#cfgs)*
-            __children.push(#module::#child());
-        }
-    });
-
     let handle = handle_ident(h.module);
     let doc = handle_doc(h.module);
     let cfgs = &h.cfgs;
-    let name = &h.name;
-    let help = &h.help;
     let metadata = metadata(
         h.details.as_deref(),
         h.footer.as_deref(),
         &h.aliases,
         h.hide,
+        false,
     );
+    let (ret, body) = match &h.shape {
+        Shape::Plain => plain_body(h, &ctx_ty),
+        Shape::Args(ty) => args_body(h, ty, &ctx_ty),
+        Shape::Curried(ty) => curried_body(h, ty, &ctx_ty),
+    };
 
     quote! {
         #[doc = #doc]
         #[doc(hidden)]
         #[allow(unreachable_pub)]
         #(#cfgs)*
-        pub fn #handle #generics () -> ::hicli::Command<#ctx_ty> {
-            // Every child may be configured out, and then nothing is pushed.
-            #[allow(unused_mut)]
-            let mut __children: ::std::vec::Vec<::hicli::Command<#ctx_ty>> =
-                ::std::vec::Vec::new();
-            #(#pushes)*
-            ::hicli::group(#name, #help, __children)
+        pub fn #handle #generics () -> #ret {
+            #body
             #metadata
         }
     }
+}
+
+/// How a child's handle is pushed.
+enum Push<'a> {
+    /// Unspanned, as it always has been: an ordinary group's child.
+    Plain,
+    /// At the child's ident, so a type error is reported there.
+    Spanned,
+    /// At the child's ident, and through `hicli::__CurriedOver` — the path,
+    /// generics included, is given — so a child that is not curried over the
+    /// group's type is reported in the group's terms.
+    CurriedOver(&'a TokenStream),
+}
+
+/// One `push` per child into `vec`, each under the child's own `#[cfg]`s.
+///
+/// Each child's handle is called *directly*, not through `IntoCommand`, so a
+/// child whose context — or, in a curried group, whose curried type — is a
+/// different type is an error at its own `push` rather than an unsatisfied
+/// trait bound on the whole group. A spanned `push` is written at the child's
+/// ident, module path included, so that is the only place the error points.
+fn push(h: &Handle, c: &Child, vec: &Ident, how: &Push) -> TokenStream {
+    let cfgs = &c.cfgs;
+    let child = handle_ident(&c.ident);
+    let span = c.ident.span();
+    let call = match how {
+        Push::Plain => {
+            let module = h.module;
+            quote!(#vec.push(#module::#child());)
+        }
+        Push::Spanned | Push::CurriedOver(_) => {
+            let mut module = h.module.clone();
+            module.set_span(span);
+            let handle = quote_spanned!(span=> #module::#child());
+            match how {
+                Push::CurriedOver(over) => {
+                    // Respanned whole, the group's type included: otherwise
+                    // the call would also be labelled at the attribute.
+                    let over = respan(over, span);
+                    quote_spanned!(span=> #vec.push(#over::__node(#handle));)
+                }
+                _ => quote_spanned!(span=> #vec.push(#handle);),
+            }
+        }
+    };
+    quote! {
+        #(#cfgs)*
+        #call
+    }
+}
+
+/// `tokens`, every one of them — inside groups too — at `span`.
+fn respan(tokens: &TokenStream, span: Span) -> TokenStream {
+    tokens
+        .clone()
+        .into_iter()
+        .map(|tt| match tt {
+            TokenTree::Group(g) => {
+                let mut inner = Group::new(g.delimiter(), respan(&g.stream(), span));
+                inner.set_span(span);
+                TokenTree::Group(inner)
+            }
+            mut other => {
+                other.set_span(span);
+                other
+            }
+        })
+        .collect()
+}
+
+/// `::hicli::__CurriedOver::<T, Ctx>`, for [`Push::CurriedOver`].
+fn curried_over(ty: &Type, ctx_ty: &TokenStream) -> TokenStream {
+    quote!(::hicli::__CurriedOver::<#ty, #ctx_ty>)
+}
+
+/// An ordinary group: every child is a `Command<Ctx>`, handed to
+/// `hicli::group`.
+fn plain_body(h: &Handle, ctx_ty: &TokenStream) -> (TokenStream, TokenStream) {
+    let children = Ident::new("__children", Span::call_site());
+    let pushes = h
+        .children
+        .iter()
+        .map(|c| push(h, c, &children, &Push::Plain));
+    let name = &h.name;
+    let help = &h.help;
+    // The element type is spelled out rather than interpolated, so its
+    // closing `>>` is the same joint token it has always been.
+    let body = quote! {
+        // Every child may be configured out, and then nothing is pushed.
+        #[allow(unused_mut)]
+        let mut __children: ::std::vec::Vec<::hicli::Command<#ctx_ty>> =
+            ::std::vec::Vec::new();
+        #(#pushes)*
+        ::hicli::group(#name, #help, __children)
+    };
+    (quote!(::hicli::Command<#ctx_ty>), body)
+}
+
+/// `args = T`: the fixed children and the bound (curried) ones go into two
+/// vectors, and `hicli::group_args` parses a `T` in front of the bound ones.
+fn args_body(h: &Handle, ty: &Type, ctx_ty: &TokenStream) -> (TokenStream, TokenStream) {
+    let fixed = Ident::new("__fixed", Span::call_site());
+    let bound = Ident::new("__bound", Span::call_site());
+    let over = curried_over(ty, ctx_ty);
+    let pushes: Vec<TokenStream> = h
+        .children
+        .iter()
+        .map(|c| {
+            if c.kind.is_curried() {
+                push(h, c, &bound, &Push::CurriedOver(&over))
+            } else {
+                push(h, c, &fixed, &Push::Spanned)
+            }
+        })
+        .collect();
+    let name = &h.name;
+    let help = &h.help;
+    // Spanned at the type the author wrote in `args = …`, so a type that is
+    // not an `Arg` is reported there.
+    let parser = quote_spanned!(ty.span()=> <#ty as ::hicli::Arg>::parser);
+    let body = quote! {
+        #[allow(unused_mut)]
+        let mut __fixed: ::std::vec::Vec<::hicli::Command<#ctx_ty>> =
+            ::std::vec::Vec::new();
+        #[allow(unused_mut)]
+        let mut __bound: ::std::vec::Vec<::hicli::Curried<#ty, #ctx_ty>> =
+            ::std::vec::Vec::new();
+        #(#pushes)*
+        ::hicli::group_args(#name, #help, #parser, __fixed, __bound)
+    };
+    (quote!(::hicli::Command<#ctx_ty>), body)
+}
+
+/// `curried = T`: every child receives the `T`, and so does the group — it is
+/// a `Curried<T, Ctx>` itself, built by `hicli::group`.
+fn curried_body(h: &Handle, ty: &Type, ctx_ty: &TokenStream) -> (TokenStream, TokenStream) {
+    let children = Ident::new("__children", Span::call_site());
+    let over = curried_over(ty, ctx_ty);
+    let pushes: Vec<TokenStream> = h
+        .children
+        .iter()
+        .map(|c| push(h, c, &children, &Push::CurriedOver(&over)))
+        .collect();
+    let name = &h.name;
+    let help = &h.help;
+    let body = quote! {
+        #[allow(unused_mut)]
+        let mut __children: ::std::vec::Vec<::hicli::Curried<#ty, #ctx_ty>> =
+            ::std::vec::Vec::new();
+        #(#pushes)*
+        ::hicli::group(#name, #help, __children)
+    };
+    (quote!(::hicli::Curried<#ty, #ctx_ty>), body)
 }
 
 #[cfg(test)]
@@ -982,6 +1308,369 @@ mod tests {
             ),
             "{got}"
         );
+    }
+
+    // --- curried arguments (ADR-011) -----------------------------------------
+
+    #[test]
+    fn an_args_group_sorts_its_children_into_fixed_and_bound() {
+        // The reference expansion for `args = T`, asserted whole. `list` takes
+        // no source name and is fixed; `sync` (cfg'd) and the nested curried
+        // group `jobs` receive one and are bound.
+        let got = expansion(
+            "args = SourceName",
+            "/// music sources\n\
+             pub mod source {\n\
+                 /// list sources\n\
+                 #[command]\n\
+                 pub fn list(ctx: &Ctx) {}\n\
+                 /// sync a source\n\
+                 #[cfg(unix)]\n\
+                 #[command(curried)]\n\
+                 pub fn sync(s: SourceName, ctx: &Ctx) {}\n\
+                 /// a source's jobs\n\
+                 #[group(curried = SourceName)]\n\
+                 pub mod jobs { /// c\n#[command(curried)] pub fn cancel(s: SourceName) {} }\n\
+             }",
+        );
+        let want = quote! {
+            #[doc = " music sources"]
+            pub mod source {
+                #[doc = " list sources"]
+                #[command]
+                pub fn list(ctx: &Ctx) {}
+                #[doc = " sync a source"]
+                #[cfg(unix)]
+                #[command(curried)]
+                pub fn sync(s: SourceName, ctx: &Ctx) {}
+                #[doc = " a source's jobs"]
+                #[group(curried = SourceName)]
+                pub mod jobs {
+                    #[doc = " c"]
+                    #[command(curried)]
+                    pub fn cancel(s: SourceName) {}
+                }
+            }
+
+            #[doc = "`hicli` registration handle for [`source`]."]
+            #[doc(hidden)]
+            #[allow(unreachable_pub)]
+            pub fn __hicli_source() -> ::hicli::Command<Ctx> {
+                #[allow(unused_mut)]
+                let mut __fixed: ::std::vec::Vec<::hicli::Command<Ctx>> =
+                    ::std::vec::Vec::new();
+                #[allow(unused_mut)]
+                let mut __bound: ::std::vec::Vec<::hicli::Curried<SourceName, Ctx>> =
+                    ::std::vec::Vec::new();
+                __fixed.push(source::__hicli_list());
+                #[cfg(unix)]
+                __bound.push(::hicli::__CurriedOver::<SourceName, Ctx>::__node(
+                    source::__hicli_sync()
+                ));
+                __bound.push(::hicli::__CurriedOver::<SourceName, Ctx>::__node(
+                    source::__hicli_jobs()
+                ));
+                ::hicli::group_args(
+                    "source",
+                    "music sources",
+                    <SourceName as ::hicli::Arg>::parser,
+                    __fixed,
+                    __bound
+                )
+            }
+        }
+        .to_string();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn a_curried_group_is_a_curried_node_itself() {
+        // The reference expansion for `curried = T`: one vector of curried
+        // children, `hicli::group`, and a `Curried<T, Ctx>` return.
+        let got = expansion(
+            "curried = SourceName, alias = \"j\"",
+            "/// a source's jobs\n\
+             pub mod jobs {\n\
+                 /// cancel a job\n\
+                 #[command(curried)]\n\
+                 pub fn cancel(s: SourceName, id: JobId, ctx: &Ctx) {}\n\
+             }",
+        );
+        let want = quote! {
+            #[doc = " a source's jobs"]
+            pub mod jobs {
+                #[doc = " cancel a job"]
+                #[command(curried)]
+                pub fn cancel(s: SourceName, id: JobId, ctx: &Ctx) {}
+            }
+
+            #[doc = "`hicli` registration handle for [`jobs`]."]
+            #[doc(hidden)]
+            #[allow(unreachable_pub)]
+            pub fn __hicli_jobs() -> ::hicli::Curried<SourceName, Ctx> {
+                #[allow(unused_mut)]
+                let mut __children: ::std::vec::Vec<::hicli::Curried<SourceName, Ctx>> =
+                    ::std::vec::Vec::new();
+                __children.push(::hicli::__CurriedOver::<SourceName, Ctx>::__node(
+                    jobs::__hicli_cancel()
+                ));
+                ::hicli::group("jobs", "a source's jobs", __children)
+                .alias("j")
+            }
+        }
+        .to_string();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn a_context_free_args_group_is_generic_over_ctx() {
+        let got = expansion(
+            "args = SourceName",
+            "/// sources\nmod source { /// s\n#[command(curried)] fn show(s: SourceName) {} }",
+        );
+        assert!(
+            got.contains(
+                "pub fn __hicli_source < Ctx : 'static > () -> :: hicli :: Command < Ctx >"
+            ),
+            "{got}"
+        );
+        assert!(
+            got.contains(":: hicli :: Curried < SourceName , Ctx >"),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn a_context_free_curried_group_is_generic_over_ctx() {
+        let got = expansion(
+            "curried = SourceName",
+            "/// jobs\nmod jobs { /// s\n#[command(curried)] fn show(s: SourceName) {} }",
+        );
+        assert!(
+            got.contains(
+                "pub fn __hicli_jobs < Ctx : 'static > () -> :: hicli :: Curried < SourceName , \
+                 Ctx >"
+            ),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn an_args_file_group_reads_its_children_out_of_the_file() {
+        let got = file_expansion(
+            &[
+                ("src/main.rs", ""),
+                (
+                    "src/source.rs",
+                    "/// list sources\n#[command] pub fn list(ctx: &Ctx) {}\n\
+                     /// sync a source\n#[command(curried)] pub fn sync(s: SourceName, ctx: &Ctx) {}\n\
+                     /// jobs\n#[group(curried = SourceName)] pub mod jobs;\n",
+                ),
+            ],
+            "src/main.rs",
+            "args = SourceName",
+            "/// music sources\npub mod source;",
+        );
+        assert!(
+            got.contains(
+                "__fixed . push (source :: __hicli_list ()) ; \
+                 __bound . push (:: hicli :: __CurriedOver :: < SourceName , Ctx > :: __node \
+                 (source :: __hicli_sync ())) ; \
+                 __bound . push (:: hicli :: __CurriedOver :: < SourceName , Ctx > :: __node \
+                 (source :: __hicli_jobs ())) ; \
+                 :: hicli :: group_args (\"source\" , \"music sources\" , < SourceName as :: \
+                 hicli :: Arg > :: parser , __fixed , __bound) }"
+            ),
+            "{got}"
+        );
+        assert!(
+            got.contains("pub fn __hicli_source () -> :: hicli :: Command < Ctx >"),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn a_default_command_in_a_plain_group_is_pushed_like_any_other() {
+        let got = expansion(
+            "",
+            "/// search\nmod search {\n\
+                 /// search the library\n#[command(default)] fn library(q: Query, c: &Ctx) {}\n\
+                 /// list fact values\n#[command] fn fact_values_for(t: FactType, c: &Ctx) {}\n\
+             }",
+        );
+        assert!(
+            got.contains(
+                "__children . push (search :: __hicli_library ()) ; \
+                 __children . push (search :: __hicli_fact_values_for ()) ;"
+            ),
+            "{got}"
+        );
+    }
+
+    /// Every error `#[group(attr)]` raises on the inline module `item`.
+    fn rejections(attr: &str, item: &str) -> Vec<String> {
+        let args: GroupArgs = syn::parse_str(attr).expect("the attribute parses");
+        let item: Item = syn::parse_str(item).expect("the item parses");
+        expand(&no_files(), source(None), args, item)
+            .expect_err("is not a group")
+            .into_iter()
+            .map(|e| e.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_curried_child_of_a_plain_group_is_rejected() {
+        assert_eq!(
+            rejections(
+                "",
+                "/// sources\nmod source {\n\
+                     /// s\n#[command(curried)] fn sync(s: SourceName) {}\n\
+                     /// j\n#[group(curried = SourceName)] mod jobs { /// c\n#[command(curried)] fn c(s: SourceName) {} }\n\
+                     /// l\n#[command] fn list() {}\n\
+                 }"
+            ),
+            [
+                "`sync` is curried, but group `source` has no argument to hand it: declare one \
+                 with #[group(args = <Type>)]",
+                "`jobs` is curried, but group `source` has no argument to hand it: declare one \
+                 with #[group(args = <Type>)]",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_args_group_with_no_curried_child_is_rejected() {
+        assert_eq!(
+            rejections(
+                "args = SourceName",
+                "/// sources\nmod source { /// l\n#[command] fn list() {} }"
+            ),
+            [
+                "group `source` takes `args = SourceName`, but none of its children receives it: \
+                 mark the commands that take it #[command(curried)]"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unmarked_child_of_a_curried_group_is_rejected() {
+        assert_eq!(
+            rejections(
+                "curried = crate::SourceName",
+                "/// jobs\nmod jobs {\n\
+                     /// c\n#[command(curried)] fn cancel(s: crate::SourceName) {}\n\
+                     /// l\n#[command] fn list() {}\n\
+                     /// g\n#[group] mod more { /// m\n#[command] fn m() {} }\n\
+                     /// a\n#[group(args = Other)] mod other { /// o\n#[command(curried)] fn o(x: Other) {} }\n\
+                 }"
+            ),
+            [
+                "`list` is in group `jobs`, which hands every child a `crate::SourceName`: mark it \
+                 #[command(curried)] and take the `crate::SourceName` as its first parameter",
+                "`more` is in group `jobs`, which hands every child a `crate::SourceName`: mark it \
+                 #[group(curried = crate::SourceName)]",
+                "`other` takes `args` of its own inside group `jobs`, which hands every child a \
+                 `crate::SourceName`: a group with `args` inside a curried group is not supported \
+                 yet",
+            ]
+        );
+    }
+
+    #[test]
+    fn two_default_children_are_rejected_at_the_second() {
+        assert_eq!(
+            rejections(
+                "",
+                "/// search\nmod search {\n\
+                     /// a\n#[command(default)] fn a() {}\n\
+                     /// b\n#[command(default)] fn b() {}\n\
+                     /// c\n#[command(default)] fn c() {}\n\
+                 }"
+            ),
+            [
+                "group `search` already has a default command, `a`: a group has at most one",
+                "group `search` already has a default command, `a`: a group has at most one",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_default_child_of_a_group_with_an_argument_is_rejected() {
+        assert_eq!(
+            rejections(
+                "args = SourceName",
+                "/// sources\nmod source {\n\
+                     /// l\n#[command(default)] fn list() {}\n\
+                     /// s\n#[command(curried)] fn sync(s: SourceName) {}\n\
+                 }"
+            ),
+            [
+                "`list` cannot be a default command: group `source` takes an argument, so it has \
+                 no default command"
+            ]
+        );
+        // In a curried group the default child is also unmarked: both are
+        // said.
+        assert_eq!(
+            rejections(
+                "curried = SourceName",
+                "/// jobs\nmod jobs {\n\
+                     /// l\n#[command(default)] fn list() {}\n\
+                     /// s\n#[command(curried)] fn sync(s: SourceName) {}\n\
+                 }"
+            ),
+            [
+                "`list` is in group `jobs`, which hands every child a `SourceName`: mark it \
+                 #[command(curried)] and take the `SourceName` as its first parameter",
+                "`list` cannot be a default command: group `jobs` receives an argument, so it has \
+                 no default command",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_file_group_checks_its_children_too() {
+        assert_eq!(
+            file_rejections(
+                &[
+                    ("src/main.rs", ""),
+                    (
+                        "src/source.rs",
+                        "/// s\n#[command(curried)] pub fn sync(s: SourceName) {}"
+                    ),
+                ],
+                Some("src/main.rs"),
+                "",
+                "/// sources\npub mod source;"
+            ),
+            [
+                "`sync` is curried, but group `source` has no argument to hand it: declare one \
+                 with #[group(args = <Type>)]"
+            ]
+        );
+    }
+
+    #[test]
+    fn each_curried_key_rejection_is_raised() {
+        assert_eq!(arg_rejection("args = A, args = B"), "`args` is given twice");
+        assert_eq!(
+            arg_rejection("curried = A, curried = B"),
+            "`curried` is given twice"
+        );
+        assert_eq!(
+            arg_rejection("args"),
+            "`args` on a group names a type: write `args = <Type>`"
+        );
+        assert_eq!(
+            arg_rejection("curried"),
+            "`curried` on a group names a type: write `curried = <Type>`"
+        );
+        assert_eq!(arg_rejection("args = A, curried = A"), ARGS_AND_CURRIED);
+        assert_eq!(arg_rejection("curried = A, args = A"), ARGS_AND_CURRIED);
+        // A group is never a default command — and is told where `default`
+        // goes instead.
+        assert_eq!(arg_rejection("default"), GROUP_DEFAULT);
+        assert_eq!(arg_rejection("ctx = Ctx, default"), GROUP_DEFAULT);
     }
 
     #[test]

@@ -14,6 +14,15 @@
 //! cargo run --example demo -- event audience --help
 //! cargo run --example demo -- event audience define ./dir Friends --seal-roster
 //! cargo run --example demo -- id create
+//! cargo run --example demo -- id show x   # `?` on a ParseIntError -> runtime, exit 1:
+//!                                         #   "invalid digit found in string"
+//! cargo run --example demo -- source --help    # fixed `list`, curried `sync`/`show`
+//! cargo run --example demo -- source list
+//! cargo run --example demo -- source bandcamp sync
+//! cargo run --example demo -- source bandcamp show --help   # usage names the value
+//! cargo run --example demo -- search jazz      # the default command: no word for it
+//! cargo run --example demo -- search recent    # a named sibling wins its own word
+//! cargo run --example demo -- search -- recent # `--`: "recent" is a query again
 //! cargo run --example demo -- event creat ./dir x   # typo -> suggestion, exit 2
 //! cargo run --example demo -- event create ./dir    # missing NAME -> usage, exit 2
 //! cargo run --example demo -- event create ./dir a b c d e f  # guard -> usage, exit 2
@@ -39,7 +48,7 @@ use hicli::bpaf::Bpaf;
 // One `use` for `command`, one for `group`, one for `Arg`: in every case the
 // attribute/derive below and the `hicli::command` / `hicli::group` function or
 // the `hicli::Arg` trait it expands into share a name across two namespaces.
-use hicli::{app, command, group, App, Arg, ExternalCommand, Failure, Outcome, Success};
+use hicli::{app, command, group, App, Arg, Candidate, ExternalCommand, Failure, Outcome, Success};
 
 // ---------------------------------------------------------------------------
 // Globals and context
@@ -234,6 +243,14 @@ mod event {
 // The `id` group — a second module, and a second `create`
 // ---------------------------------------------------------------------------
 
+/// An identity's number, as typed.
+#[derive(Debug, Clone, Bpaf, Arg)]
+struct IdNumber(
+    /// the identity's number
+    #[bpaf(positional("NUMBER"))]
+    String,
+);
+
 /// identity
 #[group]
 mod id {
@@ -247,6 +264,126 @@ mod id {
     pub fn create(ctx: &Ctx) -> Outcome<Success> {
         println!("[home={}] created an identity", ctx.home);
         Ok(Success::OK)
+    }
+
+    // Any error converts into a runtime failure (exit 1), so a command may
+    // return the `Result` it would have returned anyway and use `?` with no
+    // `map_err`: `demo id show x` prints "invalid digit found in string".
+    // (A check that belongs to the *argument* is better as a bpaf `guard` or
+    // `parse` on `IdNumber`, which fails as usage, exit 2.)
+    /// show an identity
+    #[command]
+    pub fn show(n: IdNumber, ctx: &Ctx) -> Result<(), std::num::ParseIntError> {
+        let n: u32 = n.0.parse()?;
+        println!("[home={}] identity #{n}", ctx.home);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The `source` group — a group that takes an argument
+// ---------------------------------------------------------------------------
+
+// The group's argument is a type like any other: it parses itself, and its
+// completer is attached here, once — every `demo source <TAB>` offers these.
+/// A configured music source.
+#[derive(Debug, Clone, Bpaf, Arg)]
+#[arg(complete = source_names)]
+struct SourceName(
+    /// the source to act on
+    #[bpaf(positional("SOURCE-NAME"))]
+    String,
+);
+
+/// The sources on offer, filtered by what has been typed so far.
+fn source_names(typed: &SourceName) -> Vec<Candidate> {
+    ["bandcamp", "discogs", "local"]
+        .iter()
+        .filter(|s| s.starts_with(typed.0.as_str()))
+        .map(|s| ((*s).to_string(), Some("a music source".to_string())))
+        .collect()
+}
+
+// `args = SourceName` makes the word after `source` a `SourceName`, parsed once
+// by the group and handed to every `curried` child: `demo source bandcamp sync`.
+// A child *without* `curried` is a fixed sibling of the value — `demo source
+// list` — and is matched first, so a source can never be named `list`.
+/// music sources
+#[group(args = SourceName)]
+mod source {
+    use super::*;
+
+    /// list the configured sources
+    #[command]
+    pub fn list(ctx: &Ctx) {
+        println!("[home={}] bandcamp, discogs, local", ctx.home);
+    }
+
+    // `curried`: the first owned parameter is the group's `SourceName`, received
+    // rather than parsed. The function is still called exactly as declared —
+    // `sync(name, ctx)` — and its invocation path is `["source", "sync"]`.
+    /// sync a source
+    #[command(curried)]
+    pub fn sync(name: SourceName, ctx: &Ctx) {
+        println!("[home={}] syncing {}", ctx.home, name.0);
+    }
+
+    // A curried command may parse arguments of its own after the group's: here,
+    // `--verbose` (`demo source local show --verbose`).
+    /// show a source's settings
+    #[command(curried)]
+    pub fn show(name: SourceName, opts: ShowOpts, ctx: &Ctx) {
+        println!(
+            "[home={}] source {} (verbose: {})",
+            ctx.home, name.0, opts.verbose
+        );
+    }
+
+    /// Options for showing a source.
+    #[derive(Debug, Clone, Bpaf, Arg)]
+    pub struct ShowOpts {
+        /// include every setting, not just the main ones
+        #[bpaf(long, switch)]
+        pub verbose: bool,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The `search` group — a group with a default command
+// ---------------------------------------------------------------------------
+
+/// What to search for.
+#[derive(Debug, Clone, Bpaf, Arg)]
+struct Query(
+    /// free text; everything if omitted
+    #[bpaf(positional("QUERY"), optional)]
+    Option<String>,
+);
+
+/// search the library
+#[group]
+mod search {
+    use super::*;
+
+    // `default`: this runs when no sibling is named — `demo search jazz` — and
+    // its path is the group's own, `["search"]`. It answers to no word, so it
+    // takes no `name`, `alias` or `hide`, and its doc comment is one line: it is
+    // listed on `demo search --help`, which is its only help page.
+    /// match titles, artists and albums
+    #[command(default)]
+    pub fn library(query: Query, ctx: &Ctx) {
+        match query.0 {
+            Some(q) => println!("[home={}] searching for {q:?}", ctx.home),
+            None => println!("[home={}] everything", ctx.home),
+        }
+    }
+
+    // A named sibling wins its own word: `demo search recent` runs this, not a
+    // search for "recent". `demo search -- recent` searches for it.
+    /// list recent searches
+    #[command]
+    pub fn recent(ctx: &Ctx) {
+        println!("[home={}] no recent searches", ctx.home);
     }
 }
 
@@ -293,7 +430,7 @@ fn foo() -> ExternalCommand {
 fn app() -> App<Globals, Ctx> {
     app! {
         globals: globals(),
-        commands: [event, id, status, debug_ctx, hicli::external(foo())],
+        commands: [event, id, source, search, status, debug_ctx, hicli::external(foo())],
     }
     .about("A small end-to-end hicli CLI.")
     .version(env!("CARGO_PKG_VERSION"))

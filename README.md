@@ -9,9 +9,10 @@ hi-cli*: a high-fidelity command-line interface rendered from the code you
 already have.
 
 > **Status:** v1 is implemented and covered by an in-process test suite. The source is
-> public at [github.com/johlrogge/hicli](https://github.com/johlrogge/hicli). 0.1.0 is
-> the first release, published to crates.io as `hicli` and `hicli-macros`. Before
-> 1.0, a minor version may carry breaking changes.
+> public at [github.com/johlrogge/hicli](https://github.com/johlrogge/hicli). 0.2.0 is
+> the current release, published to crates.io as `hicli` and `hicli-macros`. Before
+> 1.0, a minor version may carry breaking changes. Upgrading from 0.1: see
+> [`CHANGELOG.md`](CHANGELOG.md).
 
 ## The idea
 
@@ -43,7 +44,7 @@ for the full API and the `bpaf` capability analysis that grounds it.
 ```toml
 # Cargo.toml
 [dependencies]
-hicli = "0.1"
+hicli = "0.2"
 bpaf = "0.9"    # for `#[derive(Bpaf)]` on your own argument structs — see "Rules" below
 ```
 
@@ -244,9 +245,40 @@ That is the whole thing: `app event create ./ev "Summer Party"`, `app wallet car
   `#[group]` module (inline or a file) in the body, in source order. Nothing else is — not
   an argument struct, not an `impl`, not an unmarked `mod`, not `#[cfg(test)] mod
   tests`.
-- **The return** is anything implementing `IntoOutcome`: `()`, `Success`,
-  `Outcome` (`= Result<(), Failure>`) or `Outcome<Success>`. Usage failures
-  exit 2, runtime failures 1, a `Success` carries its own code and prints nothing.
+- **The return** is anything implementing `IntoOutcome`: `()`, `Success`, or a
+  `Result<(), E>` / `Result<Success, E>` whose error converts into a `Failure` —
+  `Outcome` (`= Result<(), Failure>`), but equally `io::Result<()>`,
+  `anyhow::Result<()>` or `color_eyre::Result<()>`, as you would have written
+  them anyway. Usage failures exit 2, runtime failures 1, a `Success` carries its
+  own code and prints nothing. Any other error is a runtime failure whose message
+  is its chain, outermost first:
+
+  ```rust
+  use color_eyre::eyre::WrapErr;
+
+  /// sync a source
+  #[command]
+  pub fn sync(s: SourceName, ctx: &Ctx) -> color_eyre::Result<()> {
+      let manifest = std::fs::read_to_string(ctx.manifest(&s))
+          .wrap_err("reading the manifest")
+          .wrap_err_with(|| format!("syncing {s}"))?;
+      // …
+      Ok(())
+  }
+  ```
+
+  ```console
+  $ app sync bandcamp
+  syncing bandcamp: reading the manifest: No such file or directory (os error 2)
+  $ echo $?
+  1
+  ```
+
+  A `Failure::usage(..)` (exit 2) is only reachable by returning `Outcome`;
+  hicli never downcasts an error back into a code. A closure handed to
+  `hicli::command` or `hicli::curried_command` by hand that returns `Ok(())`
+  spells `-> Outcome`. See
+  [`docs/adr/012-command-errors-convert-through-into-failure.md`](docs/adr/012-command-errors-convert-through-into-failure.md).
 
 The app itself, not a command, carries two more things, set on the composition root:
 `App::about(..)` is the text printed above `Usage:`, and
@@ -276,6 +308,57 @@ Two runnable versions of the above — a nested group, a `guard`, an external su
 — are [`examples/demo.rs`](examples/demo.rs) (groups inline) and
 [`examples/files/`](examples/files/) (groups in files); try `just demo --help` and
 `just demo-files --help`.
+
+## Object then verb, and a default command
+
+Two shapes beyond leaves and groups (see
+[`docs/adr/011-curried-commands-and-default-commands.md`](docs/adr/011-curried-commands-and-default-commands.md)).
+
+**A group that parses a value after its name** — `app source bandcamp sync` beside
+`app source list`. The group parses one `SourceName`; commands marked `curried` take it as
+their first owned parameter, unmarked ones are fixed siblings that take none:
+
+```rust
+/// manage sources
+#[group(args = SourceName)]
+pub mod source {
+    use super::*;
+
+    /// list sources
+    #[command]
+    pub fn list(ctx: &Ctx) -> Outcome { … }
+
+    /// sync a source
+    #[command(curried)]
+    pub fn sync(s: SourceName, ctx: &Ctx) -> Outcome { … }
+}
+```
+
+`sync` is still the function you wrote. A child that receives a value of another type is a
+compile error. A word spelling a fixed sibling (name or alias) is that sibling, never the value.
+A plain group inside the value's reach is `#[group(curried = SourceName)]`. Usage shows
+`source SOURCE-NAME sync`; `source --help` lists them under `Commands for SOURCE-NAME:`.
+
+**A default command** runs when no sibling is named — `app search jazz` beside
+`app search fact-values-for genre`:
+
+```rust
+/// search by text
+#[command(default)]
+pub fn query(f: Filters, q: Query, ctx: &Ctx) -> Outcome { … }
+```
+
+It answers to no word of its own, its `Invocation::path` is the group's, and `search --
+fact-values-for` searches for that literal word. Its positionals must come last.
+
+Known limits (`bpaf` 0.9.27): `source <TAB>` with nothing typed also completes the curried
+commands (picking one leads to a confusing error); a one-match value completer hides a
+prefix-matching fixed sibling (`source l` → only `local`); the old name-last order
+`source sync bandcamp` gives a misleading "did you mean `resync`"; a typo of a curried command
+after a value (`source bandcamp snyc`) gets no `did you mean` when the group has a fixed sibling;
+`source NAME --help` shows the group page;
+a misspelled sibling under a default reads as a query. A default cannot be at the top level or
+in a curried group.
 
 ## How to test it
 
@@ -375,7 +458,9 @@ Thirteen things that will otherwise bite you, stated plainly:
 2. **Positional argument structs come last in a command's parameter list.** The
    parameters are composed with `bpaf`'s `construct!` in declaration order, and `bpaf`
    requires every positional to sit at the right-hand end. Declare switches and options
-   first, positionals last. It is a rule about the *parameter* order only — a `--flag`
+   first, positionals last. Getting it wrong makes `bpaf` panic when `--help` renders, in any
+   build; in debug builds hicli renders `--help` once when the app is assembled, so the first
+   debug run or test hits it. It is a rule about the *parameter* order only — a `--flag`
    is still accepted anywhere on the command line.
 
 3. **A bare path in `commands!` is always a handle**, never a value. `commands![event]`
