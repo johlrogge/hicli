@@ -28,7 +28,9 @@ bpaf = "0.9"   # needed for #[derive(Bpaf)] on your own argument types
 ```
 
 ```rust
+use std::fmt;
 use std::process::ExitCode;
+use std::str::FromStr;
 
 use bpaf::Bpaf;
 use hicli::{app, command, group, App, Arg};
@@ -37,20 +39,20 @@ use hicli::{app, command, group, App, Arg};
 #[derive(Debug, Clone, Bpaf)]
 pub struct Globals {
     /// The node to talk to
-    #[bpaf(long, env("PLAYR_NODE"), argument("HOST"), fallback("localhost".into()))]
-    pub node: String,
+    #[bpaf(long, env("PLAYR_NODE"), argument("HOST"), fallback(Node::localhost()))]
+    pub node: Node,
 }
 
 /// Built once, after parsing, and handed to every command.
 pub struct Ctx {
-    pub node: String,
+    pub node: Node,
 }
 
 #[derive(Debug, Clone, Bpaf, Arg)]
 pub struct Output(
     /// An audio output device, as listed by `playr playback outputs`
     #[bpaf(positional("NAME"))]
-    pub String,
+    pub Name,
 );
 
 /// Check that the node answers
@@ -94,6 +96,8 @@ fn main() -> ExitCode {
     app().run(|g| Ok(Ctx { node: g.node }))
 }
 ```
+
+`Name` and `Node` are the program's own types, shown in the next section.
 
 ```console
 $ playr --help
@@ -148,7 +152,8 @@ What each piece does:
   `Bpaf` (how it is spelled) and `Arg` (so hicli can use it). Define it once and use
   it in every command that needs it. hicli has no `Arg` impls for `String`, `u64` and
   so on, so you always use a newtype
-  ([ADR-006](docs/adr/006-an-argument-is-a-type.md)).
+  ([ADR-006](docs/adr/006-an-argument-is-a-type.md)). Inside it is the value's own
+  type, here a `Name`.
 - **Global options are a `Bpaf` struct.** They are accepted before or after the
   subcommand (`playr playback stop --node pi.local`). `env(..)` makes an environment
   variable the fallback, and the doc comment on the struct becomes the `Global options`
@@ -160,6 +165,51 @@ What each piece does:
 - **Exit codes:** `0` on success, `1` for a runtime failure, `2` for a usage error.
   `run` returns the `ExitCode`. It never calls `process::exit`.
 
+### Bad values never reach a command
+
+The newtype says how an argument is spelled. The type inside it says what a valid
+value is. bpaf parses the value with that type's `FromStr`, so its rules live in one
+place, and every command receives a value that is already valid:
+
+```rust
+/// Lowercase letters, digits and `-`, such as `hdmi` or `bandcamp`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Name(String);
+
+impl FromStr for Name {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        let allowed = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+        if s.is_empty() || !s.chars().all(allowed) {
+            return Err("a name uses only a-z, 0-9 and -".to_string());
+        }
+        Ok(Name(s.to_string()))
+    }
+}
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+```
+
+`Node`, the `--node` value, is written the same way: a host name with an optional
+`:port`. A value that doesn't parse is a usage error, and no command runs:
+
+```console
+$ playr playback set-output HDMI
+couldn't parse `HDMI`: a name uses only a-z, 0-9 and -
+$ echo $?
+2
+$ playr --node pi.local:http ping
+couldn't parse `pi.local:http`: `http` is not a port number
+```
+
+A value with no rules, like the free-text search query below, can stay a `String`
+inside its newtype. Paths are `PathBuf`, and choices are enums (see
+[Choice values](#choice-values)).
+
 ## Growing the example
 
 The following sections add to `playr`. The complete program, with tests, is
@@ -168,7 +218,8 @@ The following sections add to `playr`. The complete program, with tests, is
 ### Options, switches and positionals
 
 `playr search` filters the library. Several options can share one `Bpaf` struct.
-Each field's doc comment is its help line:
+Each field's doc comment is its help line. `Bpm` accepts 20 to 300, written like
+`Name`:
 
 ```rust
 #[derive(Debug, Clone, Bpaf, Arg)]
@@ -176,6 +227,9 @@ pub struct Filters {
     /// Only tracks by this artist
     #[bpaf(long, argument("NAME"))]
     pub artist: Option<String>,
+    /// Only tracks at this tempo
+    #[bpaf(long, argument("BPM"))]
+    pub bpm: Option<Bpm>,
     /// Only tracks that were never played
     #[bpaf(long)]
     pub unplayed: bool,
@@ -202,12 +256,13 @@ one-field newtype, that would print a heading with nothing under it.
 
 `playr search --added -7` means "added in the last 7 days". bpaf reads `-7` as a short
 flag before any parser sees it, so a plain `argument` only accepts `--added=-7`. To
-accept both spellings, write the `Arg` impl by hand:
+accept both spellings, write the `Arg` impl by hand. The days are a `DaysBack`, which
+accepts `-7` and rejects `7`, `-0` and `-x`:
 
 ```rust
 /// `--added -7`: added in the last 7 days.
 #[derive(Debug, Clone)]
-pub struct Added(pub Option<String>);
+pub struct Added(pub Option<DaysBack>);
 
 impl Arg for Added {
     fn parser() -> impl Parser<Self> {
@@ -215,11 +270,14 @@ impl Arg for Added {
         // Hidden, so `--help` lists the option once, as the branch below.
         let flag = long("added").req_flag(());
         let days = any::<String, _, _>("DAYS", Some);
-        let separate = construct!(flag, days).adjacent().map(|((), d)| d).hide();
+        let separate = construct!(flag, days)
+            .adjacent()
+            .parse(|((), d)| d.parse::<DaysBack>())
+            .hide();
         // `--added=-7`: an ordinary argument already reads this one.
         let joined = long("added")
             .help("Only tracks added in the last DAYS days, e.g. -7")
-            .argument::<String>("DAYS");
+            .argument::<DaysBack>("DAYS");
         construct!([separate, joined]).optional().map(Added)
     }
 }
@@ -228,6 +286,13 @@ impl Arg for Added {
 (`use hicli::bpaf::{any, construct, long, Parser};` imports the bpaf names.) Every
 `#[derive(Arg)]` is shorthand for an `impl Arg` like this one, so you can write the
 impl by hand whenever the derive can't express what you need.
+
+```console
+$ playr search --added -7
+localhost: search None artist=None bpm=None unplayed=false added=Some(DaysBack(7))
+$ playr search --added -x
+couldn't parse: `-x` is not a number of days back, such as -7
+```
 
 ### A group's default command
 
@@ -251,8 +316,8 @@ mod search {
     #[command(default)]
     pub fn tracks(added: Added, f: Filters, q: Query, ctx: &Ctx) {
         println!(
-            "{}: search {:?} artist={:?} unplayed={} added={:?}",
-            ctx.node, q.0, f.artist, f.unplayed, added.0
+            "{}: search {:?} artist={:?} bpm={:?} unplayed={} added={:?}",
+            ctx.node, q.0, f.artist, f.bpm, f.unplayed, added.0
         );
     }
 }
@@ -260,19 +325,20 @@ mod search {
 
 ```console
 $ playr search --added -7 --artist CBL techno
-localhost: search Some("techno") artist=Some("CBL") unplayed=false added=Some("-7")
+localhost: search Some("techno") artist=Some("CBL") bpm=None unplayed=false added=Some(DaysBack(7))
 $ playr search fact-values-for genre
 localhost: values for genre
 $ playr search -- fact-values-for
-localhost: search Some("fact-values-for") artist=None unplayed=false added=None
+localhost: search Some("fact-values-for") artist=None bpm=None unplayed=false added=None
 $ playr search --help
 Search the library
 
-Usage: search (COMMAND ... | [--added=DAYS] [--artist=NAME] [--unplayed] [QUERY])
+Usage: search (COMMAND ... | [--added=DAYS] [--artist=NAME] [--bpm=BPM] [--unplayed] [QUERY])
 
 Search by text and filters
         --added=DAYS   Only tracks added in the last DAYS days, e.g. -7
         --artist=NAME  Only tracks by this artist
+        --bpm=BPM      Only tracks at this tempo
         --unplayed     Only tracks that were never played
     QUERY              Free-text query over title, artist and album
 
@@ -346,7 +412,7 @@ each command that receives the value, which must be its first parameter:
 ```rust
 #[derive(Debug, Clone, Bpaf, Arg)]
 #[arg(complete = complete_sources)]
-pub struct SourceName(#[bpaf(positional("SOURCE"))] pub String);
+pub struct SourceName(#[bpaf(positional("SOURCE"))] pub Name);
 
 /// Music sources
 #[group(args = SourceName)]
@@ -407,7 +473,7 @@ outermost first:
 fn upload(file: AudioFile, ctx: &Ctx) -> color_eyre::Result<()> {
     let bytes = std::fs::read(&file.0)
         .wrap_err("reading the file")
-        .wrap_err_with(|| format!("uploading {}", file.0))?;
+        .wrap_err_with(|| format!("uploading {}", file.0.display()))?;
     println!("{}: uploaded {} bytes", ctx.node, bytes.len());
     Ok(())
 }
@@ -535,7 +601,7 @@ Completion is attached to the argument type, so every command that takes a
 fn complete_sources(typed: &SourceName) -> Vec<Candidate> {
     ["bandcamp", "beatport", "upload"]
         .into_iter()
-        .filter(|s| s.starts_with(&typed.0))
+        .filter(|s| s.starts_with(&typed.0.to_string()))
         .map(|s| (s.to_string(), None))
         .collect()
 }
@@ -588,12 +654,16 @@ mod tests {
         },
         node_after_the_command: { playback stop --node "pi.local" } => |r| {
             let (globals, _) = r.expect("parses");
-            assert_eq!(globals.node, "pi.local");
+            assert_eq!(globals.node.host, "pi.local");
         },
         set_output_needs_a_name: { playback "set-output" } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
             assert!(e.unwrap_stderr().contains("NAME"));
+        },
+        output_names_are_checked: { playback "set-output" HDMI } => |r| {
+            let e = r.err().expect("a usage error");
+            assert_eq!(exit_code_for(&e), 2);
         },
     }
 
@@ -617,7 +687,7 @@ mod tests {
     #[test]
     fn the_command_is_still_a_function() {
         let ctx = Ctx {
-            node: "test".into(),
+            node: Node::localhost(),
         };
         assert!(upload(AudioFile("/no/such/file.flac".into()), &ctx).is_err());
     }
@@ -637,10 +707,14 @@ mod tests {
 1. **Add `bpaf = "0.9"` to your own dependencies.** `#[derive(Bpaf)]` generates
    `::bpaf::` paths. Cargo still builds a single copy of bpaf.
 2. **Declare positional parameters last** (see above).
-3. **There are no `Arg` impls for primitives.** Give each value a newtype.
+3. **There are no `Arg` impls for primitives.** Give each value a newtype, with the
+   value's own type inside.
 4. **Completers filter their own candidates, and they only see values that parsed.** A
    `String` completes from the first keystroke. A value checked by `FromStr`, such
-   as a number or a choice, doesn't complete until the partial word parses.
+   as a `Name`, a number or a choice, doesn't complete until the partial word parses.
+   Choose rules that every prefix of a valid value also passes: `b` is a valid
+   `Name`, so `source b<TAB>` offers `bandcamp` and `beatport`. An empty word is not
+   a `Name`, so `source <TAB>` offers only the commands.
 5. **`Globals` doesn't derive `Arg`.** It is parsed once at the top level.
 6. **A `#[group] pub mod x;` that lives in its own file must be declared at the top
    level of a file**, not inside an inline module.

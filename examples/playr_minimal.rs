@@ -7,7 +7,9 @@
 // turns a doc comment on a struct into a help heading (see the README).
 #![allow(missing_docs)]
 
+use std::fmt;
 use std::process::ExitCode;
+use std::str::FromStr;
 
 use bpaf::Bpaf;
 use hicli::{app, command, group, App, Arg};
@@ -16,20 +18,20 @@ use hicli::{app, command, group, App, Arg};
 #[derive(Debug, Clone, Bpaf)]
 pub struct Globals {
     /// The node to talk to
-    #[bpaf(long, env("PLAYR_NODE"), argument("HOST"), fallback("localhost".into()))]
-    pub node: String,
+    #[bpaf(long, env("PLAYR_NODE"), argument("HOST"), fallback(Node::localhost()))]
+    pub node: Node,
 }
 
 /// Built once, after parsing, and handed to every command.
 pub struct Ctx {
-    pub node: String,
+    pub node: Node,
 }
 
 #[derive(Debug, Clone, Bpaf, Arg)]
 pub struct Output(
     /// An audio output device, as listed by `playr playback outputs`
     #[bpaf(positional("NAME"))]
-    pub String,
+    pub Name,
 );
 
 /// Check that the node answers
@@ -71,4 +73,73 @@ fn app() -> App<Globals, Ctx> {
 
 fn main() -> ExitCode {
     app().run(|g| Ok(Ctx { node: g.node }))
+}
+
+// ---- the program's own types ---------------------------------------------
+
+/// Lowercase letters, digits and `-`, such as `hdmi` or `bandcamp`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Name(String);
+
+impl FromStr for Name {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        let allowed = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+        if s.is_empty() || !s.chars().all(allowed) {
+            return Err("a name uses only a-z, 0-9 and -".to_string());
+        }
+        Ok(Name(s.to_string()))
+    }
+}
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A host with an optional port: `pi.local` or `pi.local:7700`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Node {
+    pub host: String,
+    pub port: Option<u16>,
+}
+
+impl Node {
+    pub fn localhost() -> Self {
+        Node {
+            host: "localhost".to_string(),
+            port: None,
+        }
+    }
+}
+
+impl FromStr for Node {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        let (host, port) = match s.split_once(':') {
+            Some((host, port)) => match port.parse() {
+                Ok(port) => (host, Some(port)),
+                Err(_) => return Err(format!("`{port}` is not a port number")),
+            },
+            None => (s, None),
+        };
+        let allowed = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '.';
+        if host.is_empty() || !host.chars().all(allowed) {
+            return Err(format!("`{host}` is not a host name"));
+        }
+        Ok(Node {
+            host: host.to_string(),
+            port,
+        })
+    }
+}
+
+impl fmt::Display for Node {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.port {
+            Some(port) => write!(f, "{}:{port}", self.host),
+            None => f.write_str(&self.host),
+        }
+    }
 }
