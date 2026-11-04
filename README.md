@@ -244,9 +244,39 @@ That is the whole thing: `app event create ./ev "Summer Party"`, `app wallet car
   `#[group]` module (inline or a file) in the body, in source order. Nothing else is — not
   an argument struct, not an `impl`, not an unmarked `mod`, not `#[cfg(test)] mod
   tests`.
-- **The return** is anything implementing `IntoOutcome`: `()`, `Success`,
-  `Outcome` (`= Result<(), Failure>`) or `Outcome<Success>`. Usage failures
-  exit 2, runtime failures 1, a `Success` carries its own code and prints nothing.
+- **The return** is anything implementing `IntoOutcome`: `()`, `Success`, or a
+  `Result<(), E>` / `Result<Success, E>` whose error converts into a `Failure` —
+  `Outcome` (`= Result<(), Failure>`), but equally `io::Result<()>`,
+  `anyhow::Result<()>` or `color_eyre::Result<()>`, as you would have written
+  them anyway. Usage failures exit 2, runtime failures 1, a `Success` carries its
+  own code and prints nothing. Any other error is a runtime failure whose message
+  is its chain, outermost first:
+
+  ```rust
+  use color_eyre::eyre::WrapErr;
+
+  /// sync a source
+  #[command]
+  pub fn sync(s: SourceName, ctx: &Ctx) -> color_eyre::Result<()> {
+      let manifest = std::fs::read_to_string(ctx.manifest(&s))
+          .wrap_err("reading the manifest")
+          .wrap_err_with(|| format!("syncing {s}"))?;
+      // …
+      Ok(())
+  }
+  ```
+
+  ```console
+  $ app sync bandcamp
+  syncing bandcamp: reading the manifest: No such file or directory (os error 2)
+  $ echo $?
+  1
+  ```
+
+  A `Failure::usage(..)` (exit 2) is only reachable by returning `Outcome`;
+  hicli never downcasts an error back into a code. A closure handed to
+  `hicli::command` by hand that returns `Ok(())` spells `-> Outcome`. See
+  [`docs/adr/012-command-errors-convert-through-into-failure.md`](docs/adr/012-command-errors-convert-through-into-failure.md).
 
 The app itself, not a command, carries two more things, set on the composition root:
 `App::about(..)` is the text printed above `Usage:`, and

@@ -39,7 +39,9 @@ calling out.
 ## Crate layout
 
 - `src/outcome.rs` — `Success(u8)`, `Failure::{Usage, Runtime}`, `Outcome`, `IntoOutcome`
-  (four impls, no blanket: `()`, `Success`, `Outcome`, `Outcome<Success>`). Replaces the
+  (four shapes: `()`, `Success`, `Result<(), E>`, `Result<Success, E>`; the error side is
+  generic over `E: Into<Failure>` via a blanket `From<E: Into<Box<dyn Error>>> for Failure`,
+  ADR-012; `Failure` never implements `Error`). Replaces the
   old `Exit` enum (ADR-004, amending ADR-003): a success code now lives on the `Success` side, so
   there is no `Code(0)` → `1` normalisation and `Failure::message()` is never `Option`.
 - `src/invocation.rs` — `Invocation<Ctx>`, a **struct** (not a trait): a parsed command with its arguments
@@ -158,6 +160,11 @@ expands to `let a0 = <Id as ::hicli::Arg>::parser();` bound before `construct!`,
 
 ## Design contracts to hold the line on
 
+- **`Failure` never implements `std::error::Error`.** The blanket `From` (ADR-012) coheres only
+  because of it. Any error becomes `Runtime` (code 1, rendered `outer: mid: root`) and is never
+  downcast back to a code — usage errors come from the `Arg` parser or an `Outcome`-returning
+  command.
+
 - **`#[command]` leaves the function alone.** Same name, signature, visibility, attributes, body —
   verbatim. It only *adds* a hidden sibling handle. A change that makes the macro rewrite the
   function's own body, rename it, or wrap it in a synthetic module (`mod create { run }`, ADR-004's
@@ -213,7 +220,7 @@ expands to `let a0 = <Id as ::hicli::Arg>::parser();` bound before `construct!`,
   doc comment, or a blank one, is a compile error (ADR-001, enforced by rustc reading the doc
   comment's text directly — no runtime panic, unlike ADR-004's list-form `group!`).
 - **`std::process::exit` never appears in the library.** A command *returns* its outcome —
-  `Success`/`Failure`/`Outcome`/`Outcome<Success>`, normalised via `IntoOutcome` — and
+  `()`/`Success`/`Result<(), E>`/`Result<Success, E>`, normalised via `IntoOutcome` — and
   `App::run` turns that into a `std::process::ExitCode` it returns, never one it exits with.
 - **Secrets never become parser fields.** Context (incl. anything secret) is built in the
   consumer's `mk_ctx` closure from the environment, not from `bpaf` `env()` args.

@@ -46,6 +46,11 @@ hicli-macros = { version = "=0.1.0", path = "macros" }
 # UI tests for `#[command]`'s rejections: a compile error is part of the macro's
 # contract, so it is asserted like any other behaviour.
 trybuild = "1"
+# ADR-012: a command returning `anyhow::Result` / `eyre::Result` works through
+# `Into<Failure>` with no feature and no dependency of hicli's own; these
+# prove it end to end (`tests/errors.rs`).
+anyhow = "1"
+eyre = "0.6"
 
 [lints]
 workspace = true

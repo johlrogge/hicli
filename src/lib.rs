@@ -27,7 +27,10 @@
 //!   A command reports its own outcome as a value: a [`Success`] carrying an
 //!   exit code and printing nothing (how an external subcommand forwards its
 //!   child's code), or a [`Failure`] — usage `2`, runtime `1` — whose message
-//!   goes to stderr. `hicli` never calls `std::process::exit`: [`App::run`]
+//!   goes to stderr. Any error converts into a runtime `Failure`, so a command
+//!   may return `io::Result<()>`, `anyhow::Result<()>` or
+//!   `color_eyre::Result<()>` as written and use `?` freely; the message is the
+//!   error's chain, `outer: mid: root`. `hicli` never calls `std::process::exit`: [`App::run`]
 //!   *returns* a `std::process::ExitCode`, so destructors run and the consumer's
 //!   `main` stays in control.
 //! - **First-class in-process testing.** [`App::parse`] / [`App::into_parser`]
@@ -295,7 +298,7 @@ pub use bpaf;
 /// | `#[command(default)]` | [`Node::by_default`] — runs when no sibling is named, answers to no word; positionals last |
 /// | each **owned** parameter `p: T` | one argument type; its parser is `<T as Arg>::parser()`, composed in declaration order |
 /// | the single `&T` parameter | the context; `T` is the command's `Ctx`. Conventionally last, but first works too |
-/// | the return type | anything implementing [`IntoOutcome`]: `()`, [`Success`], [`Outcome`] or `Outcome<Success>` |
+/// | the return type | anything implementing [`IntoOutcome`]: `()`, [`Success`], or `Result<(), E>` / `Result<Success, E>` with `E: Into<Failure>` — [`Outcome`], `io::Result<()>`, `anyhow::Result<()>`, `color_eyre::Result<()>`, … (ADR-012) |
 ///
 /// A command with **no** `&T` parameter is generic over `Ctx`, so it can be
 /// mounted in any app.

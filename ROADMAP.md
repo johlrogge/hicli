@@ -23,7 +23,7 @@ replacement. The essentials are split across two releases:
   release itself (#3).
 - **0.2.0:** group-level arguments (#1) and a group's default command (#4),
   designed together (they reshape the group node), plus `?` on application
-  errors (#6) and `mk_ctx` seeing the selected command (#7).
+  errors (#6, done: ADR-012) and `mk_ctx` seeing the selected command (#7).
 - **Unscheduled:** choice enums (#8), owned command names (#10), the
   positionals-last check (#11), globals-aware completion (#13), and the
   nice-to-haves #14–#18.

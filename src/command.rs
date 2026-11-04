@@ -173,7 +173,15 @@ enum Kind<O> {
 ///
 /// `run` receives the parsed arguments and the shared context, and may return
 /// anything implementing [`IntoOutcome`] — `()`, [`Success`](crate::Success),
-/// [`Outcome`](crate::Outcome) or `Outcome<Success>`.
+/// or a `Result<(), E>` / `Result<Success, E>` whose error converts into a
+/// [`Failure`](crate::Failure) ([`Outcome`](crate::Outcome), `io::Result`,
+/// `anyhow::Result`, `eyre::Result`, …).
+///
+/// **A closure returning `Ok(())` needs its return type spelled.** Because the
+/// error type is generic (ADR-012), `|args, ctx| { …; Ok(()) }` no longer
+/// infers `E = Failure` and fails with "type annotations needed". Write
+/// `|args: A, ctx: &Ctx| -> Outcome { …; Ok(()) }`. A `#[command]` fn is
+/// unaffected — its return type is already written.
 ///
 /// ```
 /// # use hicli::{App, Outcome};
@@ -225,7 +233,8 @@ where
 /// parsed, handed over as `run`'s second argument.
 ///
 /// Everything else is as for [`command`]: `parser` parses the command's own
-/// arguments (`A`), `run` returns anything [`IntoOutcome`]. The resulting
+/// arguments (`A`), `run` returns anything [`IntoOutcome`] — and, as there, a
+/// closure returning `Ok(())` must spell `-> Outcome`. The resulting
 /// [`Curried`] node can only be mounted in a curried group's `bound` list.
 /// Its [`Invocation::path`] skips the value: `source bandcamp sync` is
 /// `["source", "sync"]`.

@@ -15,6 +15,8 @@ Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verban
 
 "Future work: group-level arguments ("currying")" realised by [ADR-011](011-curried-commands-and-default-commands.md) (2026-11-03): `#[group(args = T)]` and `#[command(curried)]`, built on a generic `Node<O>` rather than the `Mount` field sketched below.
 
+`IntoOutcome`'s `Result` impls generalised by [ADR-012](012-command-errors-convert-through-into-failure.md) (2026-11-04): `Result<(), E>` and `Result<Success, E>` for any `E: Into<Failure>`, so `io::Result`, `anyhow::Result` and `eyre::Result` are accepted as written. The "no blanket" rule now holds for the success side only.
+
 ## Decision
 
 ### 1. A subcommand is a function

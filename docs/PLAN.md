@@ -86,8 +86,12 @@ impl Failure {
 pub type Outcome<T = ()> = Result<T, Failure>;
 
 /// Everything a command may return, normalised to `Outcome<Success>`.
-/// Four impls, no blanket: `()`, `Success`, `Outcome`, `Outcome<Success>`.
+/// Four shapes: `()`, `Success`, `Result<(), E>`, `Result<Success, E>` with
+/// `E: Into<Failure>` (ADR-012). The success side is closed.
 pub trait IntoOutcome { fn into_outcome(self) -> Result<Success, Failure>; }
+/// Any error is a `Failure::Runtime` whose message is its `source()` chain.
+/// `Failure` never implements `Error` — the blanket depends on it.
+impl<E: Into<Box<dyn Error + 'static>>> From<E> for Failure { /* … */ }
 
 /// A parsed subcommand: arguments already bound, waiting only for the context.
 /// Not something a consumer builds — it is what a `Command`'s parser produces.
@@ -463,6 +467,14 @@ children receive it, unmarked children are fixed siblings matched first),
 when no sibling is named); the runtime primitives `curried_command`, `group_args` and
 `Node::by_default` over one generic `Node<O>`.
 
+**Also in: command errors convert through `Into<Failure>` (ADR-012)** — a blanket
+`impl<E: Into<Box<dyn Error + 'static>>> From<E> for Failure` makes any std error,
+`anyhow::Error`, `eyre::Report`, `Box<dyn Error>`, `String` or `&str` a `Failure::Runtime`
+(exit `1`, message `outer: mid: root`), and `IntoOutcome`'s two `Result` impls are generic over
+`E: Into<Failure>`, so `fn sync(..) -> color_eyre::Result<()>` is a command as written. No
+eyre/anyhow feature or dependency; `Failure` never implements `Error`; no downcasting back to a
+code. `Box<dyn Error + Send + Sync>` is not accepted.
+
 **Deferred:** nested `args` groups (they parse at runtime but have no constructor or macro form);
 a default in a curried group; a top-level default; a default that also answers to its own name
 (recipe: a second `#[command]` calling the same function); a dedicated `source NAME --help` page;
@@ -518,6 +530,12 @@ them, not built ahead of that evidence.
   byte-for-byte (including the completion layer's reliance on `construct!` order and eager
   `ParseComp`) and is re-run on every bpaf upgrade; a future CI job should run
   `cargo update -p bpaf && just test`, since `bpaf = "0.9.27"` is a caret requirement.
+- **Command errors (ADR-012):** `tests/errors.rs` (`#[command]` fns returning `eyre::Result`,
+  `anyhow::Result<Success>`, `io::Result`, `Box<dyn Error>` and `Outcome` with `?`; exit codes
+  through `run_with_args`; the `outer: mid: root` chain through `Invocation::run`; a usage
+  failure keeping `2`; the function still returning its own `eyre::Report`), with `anyhow` and
+  `eyre` as dev-dependencies only, and `trybuild` cases for a non-outcome return type, a
+  `Result` of a value, and an error type that is not an error.
 - **Macro-expansion equivalence:** the tree `app!`/`#[group]`/`commands!` build and the same tree
   written by hand with `App::commands(vec![…])`/`hicli::group(…)` parse identical argv to
   identical `invocation.path()`s — proving the macros are sugar, not a second code path.

@@ -21,6 +21,11 @@
 //! silent because it has no message to print, and [`Failure::message`] is
 //! always a `&str`.
 //!
+//! A command need not spell `Failure` at all. Any error converts into one
+//! (ADR-012), so `fn sync(..) -> color_eyre::Result<()>` or
+//! `-> io::Result<()>` is a command as written, and its error is printed as
+//! its message chain, `outer: mid: root`, with exit code `1`.
+//!
 //! Codes are `u8`, matching `std::process::ExitCode` and POSIX, which reports
 //! only the low 8 bits of a child's status. `Exit::Code(256)` — a failure the
 //! OS would have reported as success — is not representable here.
@@ -76,6 +81,18 @@ impl Success {
 ///
 /// This enum is `#[non_exhaustive]`: match on it with a `_` arm, or prefer
 /// [`Failure::code`] and [`Failure::message`].
+///
+/// Any error converts into a `Failure` — a [`Failure::Runtime`] carrying the
+/// error's message chain — so `?` works on an `io::Error`, an `anyhow::Error`
+/// or an `eyre::Report` inside a command returning [`Outcome`] (ADR-012).
+///
+/// `Failure` **never implements [`std::error::Error`]**, and that is
+/// load-bearing, not an omission: the blanket
+/// `impl<E: Into<Box<dyn Error>>> From<E> for Failure` only coheres with core's
+/// reflexive `impl From<T> for T` because `Failure` itself does not convert
+/// into `Box<dyn Error>`. Implementing `Error` for it would make the two
+/// overlap and break every command that uses `?`. It implements `Display`,
+/// which is all a printer needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Failure {
@@ -91,8 +108,14 @@ impl Failure {
         Failure::Usage(m.into())
     }
 
-    /// Build a [`Failure::Runtime`] from any `Display` error, e.g.
-    /// `something().map_err(Failure::runtime)?`.
+    /// Build a [`Failure::Runtime`] from any `Display` value.
+    ///
+    /// Reach for `?` first: an error converts into a `Failure` on its own, with
+    /// its whole source chain in the message. `runtime` is for the rest — a
+    /// message spelled on the spot (`Failure::runtime("no such source")`), or
+    /// a `Display` value that is not an error, e.g.
+    /// `something().map_err(Failure::runtime)?`. It renders `Display` only,
+    /// without the source chain.
     pub fn runtime<E: Display>(e: E) -> Self {
         Failure::Runtime(e.to_string())
     }
@@ -129,24 +152,52 @@ impl Display for Failure {
 /// `Outcome` is the plain "worked or failed" shape; `Outcome<Success>` is
 /// for the rarer command that finishes with a code of its own. Both are
 /// accepted by [`IntoOutcome`], so a command picks whichever tells the truth
-/// about it and the `?` operator works either way.
+/// about it and the `?` operator works either way — including on any
+/// [`std::error::Error`], which converts into a [`Failure::Runtime`].
+///
+/// A command does not have to return `Outcome` at all: `io::Result<()>`,
+/// `anyhow::Result<()>` or `color_eyre::Result<()>` are accepted as they are
+/// (ADR-012). Return `Outcome` when the command needs [`Failure::usage`].
 pub type Outcome<T = ()> = Result<T, Failure>;
 
 /// Everything a command is allowed to return, normalised to
 /// [`Outcome<Success>`](Outcome).
 ///
-/// The four impls are written out one by one, with **no blanket impl**: a
-/// blanket `impl<T: Into<Success>>` (or over `Result<T, E>`) would make the set
-/// of legal return types open-ended and its errors arrive as a wall of trait
-/// bounds. Listing them keeps "what may a command return?" answerable by
-/// reading this page:
+/// There are exactly four shapes. The success side is closed — `()` or
+/// [`Success`], nothing else — and the error side is generic over
+/// `E: Into<Failure>`:
 ///
 /// | Return type | Outcome |
 /// |---|---|
 /// | `()` | `Ok(Success::OK)` |
 /// | [`Success`] | `Ok(that success)` |
-/// | [`Outcome`] (`Result<(), Failure>`) | `Ok(Success::OK)` / the failure |
-/// | `Outcome<Success>` (`Result<Success, Failure>`) | itself |
+/// | `Result<(), E>` where `E: Into<Failure>` | `Ok(Success::OK)` / `Err(e.into())` |
+/// | `Result<Success, E>` where `E: Into<Failure>` | the success / `Err(e.into())` |
+///
+/// `E` is usually one of:
+///
+/// - [`Failure`] itself — [`Outcome`] and `Outcome<Success>` — which converts
+///   reflexively, so a [`Failure::Usage`] keeps exit code `2`;
+/// - any `std::error::Error + 'static` (`io::Error`, a `thiserror` enum, …);
+/// - `anyhow::Error` and `eyre::Report` (so `anyhow::Result<()>` and
+///   `color_eyre::Result<()>` are accepted as written);
+/// - `Box<dyn Error>`, `String` and `&str`.
+///
+/// Everything but `Failure` becomes a [`Failure::Runtime`] (exit code `1`)
+/// whose message is the error's `Display` followed by each
+/// [`source`](std::error::Error::source) in turn, joined by `": "` —
+/// `eyre!("root").wrap_err("mid").wrap_err("outer")` prints
+/// `outer: mid: root`. See [`Failure`]'s `From` impl.
+///
+/// `Box<dyn Error + Send + Sync>` is **not** accepted: the standard library has
+/// no conversion from it into `Box<dyn Error>`. Return `Box<dyn Error>`, or
+/// map the error with [`Failure::runtime`].
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a command return type hicli accepts",
+    label = "a `#[command]` must return `()`, `Success`, `Result<(), E>` or `Result<Success, E>`",
+    note = "the four accepted shapes are `()`, `Success`, `Result<(), E>` and `Result<Success, E>`, where `E: Into<Failure>`",
+    note = "`E` may be `Failure` (i.e. `hicli::Outcome`), any `std::error::Error + 'static`, `anyhow::Error`, `eyre::Report`, `Box<dyn Error>`, `String` or `&str`"
+)]
 pub trait IntoOutcome {
     /// Normalise this value to the outcome hicli's run path works with.
     fn into_outcome(self) -> Outcome<Success>;
@@ -166,18 +217,55 @@ impl IntoOutcome for Success {
     }
 }
 
-impl IntoOutcome for Outcome {
-    /// The common case: `?` on failure, `Ok(())` on success (exit code `0`).
-    fn into_outcome(self) -> Outcome<Success> {
-        self.map(|()| Success::OK)
+/// Any error becomes a [`Failure::Runtime`] (exit code `1`), so `?` works on
+/// it inside a command returning [`Outcome`].
+///
+/// The bound is "converts into `Box<dyn Error>`", not "implements `Error`":
+/// that one bound covers every `std::error::Error + 'static`, `String` and
+/// `&str` (std's own `From` impls), and `anyhow::Error` and `eyre::Report`
+/// (which provide that conversion themselves) — without hicli depending on
+/// either crate.
+///
+/// The message is the error's `Display`, then each
+/// [`source`](std::error::Error::source) in turn, joined by `": "`
+/// (`outer: mid: root`). It is never `{:?}`: that is developer output, with
+/// backtraces and colour codes, not a message for the user.
+impl<E> From<E> for Failure
+where
+    E: Into<Box<dyn std::error::Error + 'static>>,
+{
+    fn from(e: E) -> Self {
+        let boxed: Box<dyn std::error::Error + 'static> = e.into();
+        Failure::Runtime(chain(&*boxed))
     }
 }
 
-impl IntoOutcome for Outcome<Success> {
-    /// Already an outcome — the identity impl, so the run path has exactly one
-    /// shape to handle.
+/// `e`'s `Display`, then each `source()` in turn, joined by `": "`.
+fn chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = e.to_string();
+    let mut next = e.source();
+    while let Some(source) = next {
+        message.push_str(": ");
+        message.push_str(&source.to_string());
+        next = source.source();
+    }
+    message
+}
+
+impl<E: Into<Failure>> IntoOutcome for Result<(), E> {
+    /// The common case: `Ok(())` succeeds with `0`; an error converts into a
+    /// [`Failure`] — a `Failure` as itself, anything else as
+    /// [`Failure::Runtime`].
     fn into_outcome(self) -> Outcome<Success> {
-        self
+        self.map(|()| Success::OK).map_err(Into::into)
+    }
+}
+
+impl<E: Into<Failure>> IntoOutcome for Result<Success, E> {
+    /// A fallible command that chooses its exit code; the error converts as in
+    /// the `Result<(), E>` impl.
+    fn into_outcome(self) -> Outcome<Success> {
+        self.map_err(Into::into)
     }
 }
 
@@ -243,5 +331,82 @@ mod tests {
         assert_eq!(ok.into_outcome(), Ok(Success::code(7)));
         let err: Outcome<Success> = Err(Failure::usage("misused"));
         assert_eq!(err.into_outcome(), Err(Failure::usage("misused")));
+    }
+
+    // --- ADR-012: errors convert through `Into<Failure>` ---------------------
+
+    /// A two-level error written by hand: `outer` whose `source()` is `inner`.
+    #[derive(Debug)]
+    struct Outer(Inner);
+
+    #[derive(Debug)]
+    struct Inner;
+
+    impl Display for Outer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a")
+        }
+    }
+
+    impl Display for Inner {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("b")
+        }
+    }
+
+    impl std::error::Error for Outer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    impl std::error::Error for Inner {}
+
+    #[test]
+    fn an_error_renders_its_source_chain() {
+        let f = Failure::from(Outer(Inner));
+        assert_eq!(f, Failure::Runtime("a: b".into()));
+        assert_eq!(f.code(), 1);
+    }
+
+    #[test]
+    fn an_io_error_is_a_runtime_failure() {
+        let err: std::io::Result<()> = Err(std::io::Error::other("disk full"));
+        let f = err.into_outcome().unwrap_err();
+        assert_eq!(f, Failure::Runtime("disk full".into()));
+        assert_eq!(f.code(), 1);
+    }
+
+    #[test]
+    fn a_string_is_a_runtime_failure() {
+        let err: Result<(), String> = Err("no such source".to_string());
+        let f = err.into_outcome().unwrap_err();
+        assert_eq!(f, Failure::Runtime("no such source".into()));
+        assert_eq!(f.code(), 1);
+    }
+
+    #[test]
+    fn a_usage_failure_keeps_code_two() {
+        // `Failure` converts reflexively: it is not boxed and rewrapped as a
+        // runtime error.
+        let err = Err::<(), Failure>(Failure::usage("misused"));
+        let f = err.into_outcome().unwrap_err();
+        assert_eq!(f, Failure::usage("misused"));
+        assert_eq!(f.code(), 2);
+    }
+
+    #[test]
+    fn a_success_under_a_foreign_error_keeps_its_code() {
+        let ok = Ok::<_, std::io::Error>(Success::code(7));
+        assert_eq!(ok.into_outcome(), Ok(Success::code(7)));
+    }
+
+    #[test]
+    fn question_mark_converts_inside_an_outcome() {
+        fn read() -> Outcome {
+            Err(std::io::Error::other("gone"))?;
+            Ok(())
+        }
+        assert_eq!(read(), Err(Failure::Runtime("gone".into())));
     }
 }
