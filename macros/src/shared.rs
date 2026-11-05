@@ -75,8 +75,8 @@ pub(crate) fn marks(attr: &Attribute, name: &str) -> bool {
 
 /// The `#[path = "…"]` an author wrote on a `mod` declaration, if any.
 ///
-/// `#[group]` on a file module synthesises one for every declaration it
-/// resolved itself, so
+/// `#[group]` on a file module synthesises one wherever rustc's own rules would
+/// not find the file it resolved, so
 /// this is the question *"did the author already answer this?"* — and when they
 /// did, their attribute is re-emitted untouched and means what it always meant:
 /// a path relative to the declaring file's directory.
