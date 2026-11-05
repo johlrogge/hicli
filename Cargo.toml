@@ -20,9 +20,11 @@ repository = "https://github.com/johlrogge/hicli"
 readme = "README.md"
 keywords = ["cli", "subcommand", "bpaf", "argument", "parser"]
 categories = ["command-line-interface"]
-# Development tooling (agent config, devenv, task runner, workflow docs) is not
-# part of the published crate.
+# Development tooling (agent config, devenv, task runner, workflow docs) and the
+# promo site are not part of the published crate.
 exclude = [
+  "site/",
+  ".github/",
   ".claude/",
   "claude/",
   ".mcp.json",
