@@ -19,7 +19,7 @@ The mdma-cli evaluation (2026-11-03) filed issues #1–#18 against hicli as a cl
 replacement. The essentials are split across three releases:
 
 - **0.1.0:** help metadata and examples (#2, #9: ADR-008), completion scripts
-  (#12: ADR-009), values starting with `-` (#5: documented recipe), and the
+  (#12: ADR-009), values starting with `-` (#5; since 0.4 the glued `--added=-7` only, #29), and the
   release itself (#3).
 - **0.2.0:** group-level arguments (#1) and a group's default command (#4),
   designed together (ADR-011: they reshape the group node), plus `?` on
@@ -28,6 +28,10 @@ replacement. The essentials are split across three releases:
   binary with no trailing space (#21, #28, ADR-013), a group's bare default and
   a curried value on group help pages (#19, #20), and the missing-command
   error after a curried value (#27). The promo site ships with it.
+- **0.4.0:** coloured help and errors through bpaf's `print_message`, with
+  `Error: ` on parse errors and command failures (#31, ADR-015); only the glued
+  `--added=-7` for values starting with `-` (#29); long usage lines wrap
+  between items (#30, ADR-013 §4, a workaround for bpaf#471).
 - **Next:** `mk_ctx` seeing the selected command (#7), pending mdma-cli's
   review of the proposed answer: a lazy context (`ctx.node()?`) and no new API
   (ADR-014 once accepted). Parse errors naming the failed option (#26) need a
@@ -55,6 +59,9 @@ replacement. The essentials are split across three releases:
 
 <!-- Completed milestones -->
 
+- 0.4.0, colour and wrapping (ADR-015, 2026-11-05, #29 #30 #31): a default
+  `color` feature, `Error: ` on parse errors and command failures, long usage
+  lines wrapped between items
 - 0.3.0, help and errors (ADR-013, 2026-11-05, #19 #20 #21 #27 #28):
   `App::bin_name`, hicli-rendered usage lines, bare defaults and curried values
   on group help pages, a named missing curried command; plus the promo site

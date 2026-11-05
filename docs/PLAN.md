@@ -495,9 +495,13 @@ masks on the shell shorthands (`complete = files("*.toml")`); globals-aware comp
 completer sees only the parsed value, never `--home` — pre-parsing the globals leniently in
 completion mode needs a type-erased process-global stash with a runtime-fallible downcast, which
 hicli cannot synthesise); a usage-line override; deprecated-name warnings (an alias that prints
-a hint); visible aliases (`list, ls` in the command list); elvish completion; a helper for
-option values that start with `-` (`--since -7`) — all deferred until a consumer's pain names
-them, not built ahead of that evidence.
+a hint); visible aliases (`list, ls` in the command list); elvish completion — all deferred
+until a consumer's pain names them, not built ahead of that evidence.
+
+**Rejected:** a helper (or a documented recipe) for accepting an option value that starts with
+`-` as a separate word (`--since -7`) (#29). A dash-led value is written glued, `--since=-7`, and
+a plain `argument` reads it; the two-word form stays a usage error whose bpaf message names the
+glued form. This keeps the standard rule that a word starting with `-` is an option.
 
 ## Verification
 

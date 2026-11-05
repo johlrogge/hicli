@@ -162,15 +162,6 @@ fn source_guarded(fixed_first: bool) -> OptionParser<Source> {
     }
 }
 
-/// The `tests/hyphen_values.rs` recipe: `--name -7` and `--name=-7`.
-fn hyphen_value(name: &'static str, metavar: &'static str) -> impl Parser<String> {
-    let flag = long(name).req_flag(());
-    let value = any::<String, _, _>(metavar, Some);
-    let separate = construct!(flag, value).adjacent().map(|((), v)| v).hide();
-    let joined = long(name).argument::<String>(metavar);
-    construct!([separate, joined])
-}
-
 /// The named subcommand `fact-values-for <TYPE>`.
 fn fact_values_for() -> impl Parser<Search> {
     positional::<String>("TYPE")
@@ -195,7 +186,7 @@ fn default_branch() -> impl Parser<Search> {
                 .collect::<Vec<_>>()
         })
         .optional();
-    let added = hyphen_value("added", "DAYS").optional();
+    let added = long("added").argument::<String>("DAYS").optional();
     let query = positional::<String>("QUERY").help("free text").optional();
     construct!(artist, added, query)
         .map(|(artist, added, query)| Search::Default {
@@ -327,14 +318,16 @@ fn s3_default_branch_outcomes_are_order_independent() {
             show(p(), &["search", "--", "fact-values-for"]),
             r#"Ok(Default { query: Some("fact-values-for"), artist: None, added: None })"#
         );
-        // (g) the hyphen-value recipe works inside the default branch.
-        assert_eq!(
-            show(p(), &["search", "--added", "-7"]),
-            r#"Ok(Default { query: None, artist: None, added: Some("-7") })"#
-        );
+        // (g) a dash-led value is written glued inside the default branch; the
+        // two-word form is a usage error naming the glued form (#29).
         assert_eq!(
             show(p(), &["search", "--added=-7", "jazz"]),
             r#"Ok(Default { query: Some("jazz"), artist: None, added: Some("-7") })"#
+        );
+        assert_eq!(
+            show(p(), &["search", "--added", "-7"]),
+            "STDERR: `--added` requires an argument `DAYS`, got a flag `-7`, \
+             try `--added=-7` to use it as an argument"
         );
         // (h) a typo of the named command is silently a query — no suggestion.
         assert_eq!(
@@ -783,7 +776,7 @@ fn search_r2(guard: Option<Box<dyn Parser<()>>>, fixed: Fixed) -> OptionParser<S
         .help("by artist")
         .argument::<String>("ARTIST")
         .optional();
-    let added = hyphen_value("added", "DAYS").optional();
+    let added = long("added").argument::<String>("DAYS").optional();
     let query = positional::<String>("QUERY")
         .help("free text")
         .complete(move |s: &String| {
@@ -1404,6 +1397,58 @@ fn r2_cs4_without_the_recipe_bash_and_zsh_insert_the_metavar_literally() {
         "COMPLETION:\nCOMPREPLY+=( 'SOURCE-NAME' '')\n"
     );
     assert_eq!(comp_rev(9, p(), &["source", "l"]), "COMPLETION:\n");
+}
+
+// --- W-S1: a long usage line (#30) -------------------------------------------
+//
+// bpaf wraps a usage line per chunk, and its chunks end at style boundaries as
+// well as at spaces: `[` (text), `--name` (literal) and `]` (text) are three
+// chunks, and the line breaks between whichever two overflow column 100. The
+// continuation starts at column zero. hicli wraps long usage lines itself
+// (`help::usage_line`, ADR-013 §4); this pins bpaf's behaviour, so a fix
+// upstream shows here and the workaround can go.
+
+/// The first two lines of the help for four switches with the given names.
+fn usage_of_switches(names: [&'static str; 4]) -> Vec<String> {
+    let [a, b, c, d] = names.map(|n| long(n).switch());
+    let help = construct!(a, b, c, d)
+        .to_options()
+        .run_inner(&["--help"][..])
+        .expect_err("--help is not a parse")
+        .unwrap_stdout();
+    help.lines().take(2).map(str::to_string).collect()
+}
+
+#[test]
+fn w_s1_bpaf_wraps_a_usage_line_between_a_bracket_and_its_option() {
+    // `[` lands in column 100 and the option overflows: the line ends in `[`.
+    assert_eq!(
+        usage_of_switches([
+            "switch-number-0001-abcdefg",
+            "switch-number-0002-abcdefg",
+            "switch-number-0003-abcdef",
+            "switch-number-0004",
+        ]),
+        [
+            "Usage: [--switch-number-0001-abcdefg] [--switch-number-0002-abcdefg] \
+             [--switch-number-0003-abcdef] [",
+            "--switch-number-0004]",
+        ]
+    );
+    // The option ends in column 100 and the `]` overflows: a lone `]`.
+    assert_eq!(
+        usage_of_switches([
+            "switch-number-0001",
+            "switch-number-0002",
+            "switch-number-0003",
+            "switch-number-004-xyz",
+        ]),
+        [
+            "Usage: [--switch-number-0001] [--switch-number-0002] [--switch-number-0003] \
+             [--switch-number-004-xyz",
+            "]",
+        ]
+    );
 }
 
 // --- C-S5: errors with the guard ---------------------------------------------

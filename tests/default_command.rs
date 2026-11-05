@@ -11,9 +11,11 @@
 //! pin what hicli adds: which command runs, `Invocation::path`, help and
 //! completion.
 //!
-//! mdma's three date filters use clap's `allow_hyphen_values`; here they use
-//! the `adjacent` + `any` recipe documented in `src/arg.rs` (and pinned in
-//! `tests/hyphen_values.rs`).
+//! mdma's three date filters use clap's `allow_hyphen_values`, which accepts
+//! `--added -7`. hicli keeps the standard rule that a word starting with `-` is
+//! an option (#29): it takes the glued `--added=-7` with a plain `argument`,
+//! and rejects `--added -7` with bpaf's hint to write `--added=-7` (see
+//! `src/arg.rs` and `tests/hyphen_values.rs`).
 //!
 //! Everything is in-process: `App::parse`, `App::run_with_args` and
 //! `App::complete`, driven by `cli!` or an arg slice.
@@ -21,7 +23,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use hicli::bpaf::{any, construct, long, pure, Bpaf, ParseFailure, Parser};
+use hicli::bpaf::{construct, long, pure, Bpaf, ParseFailure, Parser};
 use hicli::{app, cli, command, exit_code_for, group, App, Arg, Failure, Outcome};
 
 // --- the consumer's argument types --------------------------------------------
@@ -79,7 +81,8 @@ pub struct Filters {
     not: bool,
 }
 
-/// mdma's date filters, each of which may start with `-` (`--added -7`).
+/// mdma's date filters, each of which may start with `-`, written glued
+/// (`--added=-7`).
 ///
 /// `Arg` is written by hand — the escape hatch for what `#[derive(Bpaf)]`
 /// cannot spell.
@@ -92,44 +95,24 @@ pub struct Dates {
 
 impl Arg for Dates {
     fn parser() -> impl Parser<Self> {
-        let started = hyphen_value(
-            "started",
-            "DATE",
-            "Filter by last started date. Format: N/A, >2026-02, <2026, 2026-01..2026-06",
-        )
-        .optional();
-        let stopped = hyphen_value(
-            "stopped",
-            "DATE",
-            "Filter by last stopped date. Same format as --started",
-        )
-        .optional();
-        let added = hyphen_value(
-            "added",
-            "DATE",
-            "Filter by date added to library: -7 (7 days ago), ~ (today), -7..~",
-        )
-        .optional();
+        let started = long("started")
+            .help("Filter by last started date. Format: N/A, >2026-02, <2026, 2026-01..2026-06")
+            .argument::<String>("DATE")
+            .optional();
+        let stopped = long("stopped")
+            .help("Filter by last stopped date. Same format as --started")
+            .argument::<String>("DATE")
+            .optional();
+        let added = long("added")
+            .help("Filter by date added to library: -7 (7 days ago), ~ (today), -7..~")
+            .argument::<String>("DATE")
+            .optional();
         construct!(Dates {
             started,
             stopped,
             added
         })
     }
-}
-
-/// `--name VALUE` where `VALUE` may start with `-`, plus `--name=VALUE`: the
-/// recipe from `src/arg.rs` / `tests/hyphen_values.rs`.
-fn hyphen_value(
-    name: &'static str,
-    metavar: &'static str,
-    help: &'static str,
-) -> impl Parser<String> {
-    let flag = long(name).req_flag(());
-    let value = any::<String, _, _>(metavar, Some);
-    let separate = construct!(flag, value).adjacent().map(|((), v)| v).hide();
-    let joined = long(name).help(help).argument::<String>(metavar);
-    construct!([separate, joined])
 }
 
 /// mdma: `query: Option<String>` — the positional, which must come last.
@@ -402,10 +385,10 @@ fn double_dash_searches_for_a_sibling_name() {
 // --- mdma's date-arg hyphen-value tests -----------------------------------------
 
 #[test]
-fn search_added_hyphen_value_parses() {
-    // `mdma search --added -7` must not be rejected as an unknown flag.
+fn search_added_glued_hyphen_value_parses() {
+    // `mdma search --added=-7`: the glued form reads a dash-led value.
     assert_eq!(
-        ok(&["search", "--added", "-7"]),
+        ok(&["search", "--added=-7"]),
         searched(
             Filters::default(),
             Dates {
@@ -418,9 +401,20 @@ fn search_added_hyphen_value_parses() {
 }
 
 #[test]
-fn search_started_hyphen_value_parses() {
+fn search_added_two_word_hyphen_value_is_a_usage_error() {
+    // #29: the two-word form is a usage error, and bpaf names the glued form.
     assert_eq!(
-        ok(&["search", "--started", "-7"]),
+        usage_error(&["search", "--added", "-7"]),
+        "`--added` requires an argument `DATE`, got a flag `-7`, \
+         try `--added=-7` to use it as an argument"
+    );
+    assert_eq!(run(&["search", "--added", "-7"]).0, 2);
+}
+
+#[test]
+fn search_started_glued_hyphen_value_parses() {
+    assert_eq!(
+        ok(&["search", "--started=-7"]),
         searched(
             Filters::default(),
             Dates {
@@ -489,18 +483,18 @@ fn a_second_positional_is_a_usage_error() {
 #[test]
 fn search_help_shows_both_forms_the_options_and_the_commands() {
     let h = help(&["search", "--help"]);
-    // bpaf wraps a long usage at 100 columns, mid-token (`[` / `--genre`), so
-    // the usage is the paragraph after `Usage: `, unwrapped.
-    let usage: String = h
-        .split("\n\n")
-        .find(|p| p.starts_with("Usage: "))
-        .unwrap_or_else(|| panic!("no usage in {h}"))
-        .lines()
-        .collect();
-    // Both forms: a named command, or the default's options and QUERY.
-    assert!(usage.starts_with("Usage: search (COMMAND ... | "), "{h}");
-    assert!(usage.contains("[--artist=ARTIST]"), "{h}");
-    assert!(usage.ends_with("[QUERY])"), "{h}");
+    // Both forms: a named command, or the default's options and QUERY. The
+    // line is too long for 100 columns, so hicli wraps it between items, each
+    // continuation under the `(` (#30).
+    let i = " ".repeat("Usage: search ".len());
+    let usage = format!(
+        "Usage: search (COMMAND ... | [--artist=ARTIST] [--title=TITLE] [--album=ALBUM] \
+         [--label=LABEL]\n\
+         {i}[--genre=GENRE] [--style=STYLE] [--bpm=BPM] [--key=KEY] [--duration=DURATION]\n\
+         {i}[--year=YEAR] [--source=SOURCE] [--no-stdin] [--played=PLAYED] [--role=ROLE]\n\
+         {i}[--energy=ENERGY] [--not] [--started=DATE] [--stopped=DATE] [--added=DATE] [QUERY])\n\n"
+    );
+    assert!(h.contains(&usage), "{h}");
     // The default's arguments, under its one-line help.
     assert!(h.contains("Search by free text and filters"), "{h}");
     for opt in [
@@ -515,7 +509,7 @@ fn search_help_shows_both_forms_the_options_and_the_commands() {
     ] {
         assert!(h.contains(opt), "missing {opt} in {h}");
     }
-    // Each date filter is listed once (the separate-word branch is hidden).
+    // Each date filter is listed once, as a plain `--added=DATE` argument.
     let added = h
         .lines()
         .filter(|l| l.trim_start().starts_with("--added"))
@@ -528,6 +522,28 @@ fn search_help_shows_both_forms_the_options_and_the_commands() {
         .unwrap_or_else(|| panic!("no commands section in {h}"));
     assert!(commands.contains("fact-values-for"), "{h}");
     assert!(commands.contains("List all distinct values"), "{h}");
+}
+
+/// #30: no help line is wider than 100 columns, and the wrapped usage never
+/// splits a bracket or parenthesis from what it encloses.
+#[test]
+fn search_help_wraps_its_usage_between_items() {
+    let h = help(&["search", "--help"]);
+    for line in h.lines() {
+        let columns = line.chars().count();
+        assert!(columns <= 100, "{columns} columns: {line:?}:\n{h}");
+    }
+    let usage = h
+        .split("\n\n")
+        .find(|p| p.starts_with("Usage: "))
+        .unwrap_or_else(|| panic!("no usage in {h}"));
+    for line in usage.lines() {
+        assert!(!line.ends_with(['[', '(']), "{line:?} ends open:\n{h}");
+        assert!(
+            !line.trim_start().starts_with([']', ')']),
+            "{line:?} starts closing:\n{h}"
+        );
+    }
 }
 
 #[test]

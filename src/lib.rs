@@ -245,6 +245,44 @@
 //! also starts with it is not offered; `source bandcamp --help` shows the
 //! group's page; a typo of a
 //! named sibling in front of a default is silently the default's value.
+//!
+//! # Features
+//!
+//! - **`color`** (on by default) — [`App::run`] prints help and errors in
+//!   colour on a terminal: section headings bold and underlined, option names
+//!   bold, metavariables underlined, and the `Error: ` prefix on a usage error
+//!   or a [`Failure`] bold red (ADR-015). It turns on `bpaf`'s `color` feature;
+//!   hicli has no code of its own behind it.
+//!
+//! Colour is decided every time something is printed, by `bpaf` through the
+//! [`supports-color`](https://docs.rs/supports-color) crate, and needs **both**
+//! stdout and stderr to qualify — so `app --help | less` and
+//! `app --help 2>/dev/null` both print plain text. For each stream, in order
+//! (verified against `supports-color` 3.0):
+//!
+//! 1. `FORCE_COLOR` set to anything but `0` or `false` (an empty value
+//!    included) forces colour on — even into a pipe, and over `NO_COLOR`.
+//!    Only when `FORCE_COLOR` is unset, `CLICOLOR_FORCE` set to anything but
+//!    `0` does the same.
+//! 2. Otherwise `NO_COLOR` set to anything but `0` — **an empty value
+//!    included** — turns colour off, as do `TERM=dumb` and a stream that is not
+//!    a terminal (unless `IGNORE_IS_TERMINAL` is set to anything but `0`).
+//! 3. Otherwise there is colour if anything says the terminal has some:
+//!    `TERM` set (and not `dumb`; on Windows, unset too), `COLORTERM` set, `CLICOLOR` set to anything
+//!    but `0`, or a CI environment. `CLICOLOR=0` alone is therefore not an off
+//!    switch; `NO_COLOR=1` is.
+//!
+//! The environment is the only control: there is no `--color=WHEN` flag,
+//! because `bpaf` keeps its colour choice private.
+//!
+//! To print plain text always, turn the feature off:
+//! `hicli = { version = "0.4", default-features = false }`. Bright colours
+//! instead of the dull default come from `bpaf` itself: add
+//! `bpaf = { version = "0.9", features = ["bright-color"] }` beside `hicli`.
+//!
+//! The test seams never colour: [`App::parse`] and [`App::complete`] return
+//! `bpaf`'s plain text, without the `Error: ` prefix, whatever the feature and
+//! the environment — so a snapshot test is the same everywhere.
 
 pub use bpaf;
 
@@ -326,7 +364,7 @@ pub use bpaf;
 /// ///
 /// /// ```sh
 /// /// mdma search --artist Bowie
-/// /// mdma search --added -7 --genre jazz
+/// /// mdma search --added=-7 --genre jazz
 /// /// ```
 /// #[command(alias = "s")]
 /// pub fn search(q: Query, ctx: &Ctx) -> Outcome { /* … */ }
@@ -337,7 +375,7 @@ pub use bpaf;
 /// ```text
 /// Examples:
 ///   mdma search --artist Bowie
-///   mdma search --added -7 --genre jazz
+///   mdma search --added=-7 --genre jazz
 /// ```
 ///
 /// The body loses its code fences, its common indentation and its leading and

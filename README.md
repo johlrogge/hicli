@@ -12,7 +12,7 @@ in-process, without spawning a binary.
 [![crates.io](https://img.shields.io/crates/v/hicli.svg)](https://crates.io/crates/hicli)
 [![docs.rs](https://docs.rs/hicli/badge.svg)](https://docs.rs/hicli)
 
-> 0.3.0, pre-1.0: a minor version may break things. Every break is listed in
+> 0.4.0, pre-1.0: a minor version may break things. Every break is listed in
 > [`CHANGELOG.md`](CHANGELOG.md). MSRV: Rust 1.99.
 
 ## Quick start
@@ -23,7 +23,7 @@ First, three commands and a global option:
 
 ```toml
 [dependencies]
-hicli = "0.3"
+hicli = "0.4"
 bpaf = "0.9"   # needed for #[derive(Bpaf)] on your own argument types
 ```
 
@@ -132,9 +132,9 @@ pi.local: output is now hdmi
 $ PLAYR_NODE=pi.local playr playback stop
 pi.local: stopped
 $ playr playbak stop
-no such command or positional: `playbak`, did you mean `playback`?
+Error: no such command or positional: `playbak`, did you mean `playback`?
 $ playr playback set-output
-expected `NAME`, pass `--help` for usage information
+Error: expected `NAME`, pass `--help` for usage information
 $ echo $?
 2
 ```
@@ -202,11 +202,11 @@ impl fmt::Display for Name {
 
 ```console
 $ playr playback set-output HDMI
-couldn't parse `HDMI`: a name uses only a-z, 0-9 and -
+Error: couldn't parse `HDMI`: a name uses only a-z, 0-9 and -
 $ echo $?
 2
 $ playr --node pi.local:http ping
-couldn't parse `pi.local:http`: `http` is not a port number
+Error: couldn't parse `pi.local:http`: `http` is not a port number
 ```
 
 Known gap: the message names the value and the reason, not the option or positional
@@ -281,9 +281,9 @@ As two words, `-7` reads as a flag, and bpaf says how to write it instead:
 $ playr search --added=-7
 localhost: search None artist=None bpm=None unplayed=false added=Some(DaysBack(7))
 $ playr search --added -7
-`--added` requires an argument `DAYS`, got a flag `-7`, try `--added=-7` to use it as an argument
+Error: `--added` requires an argument `DAYS`, got a flag `-7`, try `--added=-7` to use it as an argument
 $ playr search --added=-x
-couldn't parse `-x`: `-x` is not a number of days back, such as -7
+Error: couldn't parse `-x`: `-x` is not a number of days back, such as -7
 ```
 
 hicli keeps to the standard rule rather than special-casing hyphen values: a parser
@@ -384,9 +384,9 @@ mod library {
 $ playr library archive
 localhost: 3 files in the archive
 $ playr library archive emtpy
-no such command or positional: `emtpy`, did you mean `empty`?
+Error: no such command or positional: `emtpy`, did you mean `empty`?
 $ playr library archive empty
-this cannot be undone: pass --yes to confirm
+Error: this cannot be undone: pass --yes to confirm
 $ echo $?
 2
 $ playr library archive empty --yes
@@ -476,7 +476,7 @@ follow it; a misspelled one gets a "did you mean":
 
 ```console
 $ playr source bandcamp
-expected a command after `bandcamp`: `check-updates`
+Error: expected a command after `bandcamp`: `check-updates`
 ```
 
 Commands without the `curried` mark, like `list`, are matched first, so a source
@@ -511,7 +511,7 @@ fn upload(file: AudioFile, ctx: &Ctx) -> color_eyre::Result<()> {
 
 ```console
 $ playr upload missing.flac
-uploading missing.flac: reading the file: No such file or directory (os error 2)
+Error: uploading missing.flac: reading the file: No such file or directory (os error 2)
 $ echo $?
 1
 ```
@@ -558,7 +558,7 @@ pub struct SortBy(
 
 ```console
 $ playr sort key
-couldn't parse `key`: `key` is not one of: bpm, title, artist
+Error: couldn't parse `key`: `key` is not one of: bpm, title, artist
 ```
 
 Shell completion doesn't work for these values yet: `sort b<TAB>` offers nothing.
@@ -621,6 +621,18 @@ fn app() -> App<Globals, Ctx> {
     .version(env!("CARGO_PKG_VERSION"))
 }
 ```
+
+### Colour
+
+On a terminal, `run` prints help and errors in colour: headings and option names in
+bold, metavariables underlined, and `Error: ` in bold red. It needs both stdout and
+stderr to be terminals, so `playr --help | less` and `playr --help 2>/dev/null` print
+plain text. `NO_COLOR=1` turns colour off and `FORCE_COLOR=1` forces it on; there is
+no `--color` flag. To never print colour, depend on
+`hicli = { version = "0.4", default-features = false }`. For bright colours, add
+`bpaf = { version = "0.9", features = ["bright-color"] }`. `App::parse` and the
+snapshot tests built on it always get plain text without the `Error: ` prefix. See
+[ADR-015](docs/adr/015-coloured-output-through-print-message.md).
 
 ### Shell completion
 

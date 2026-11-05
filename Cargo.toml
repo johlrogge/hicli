@@ -9,7 +9,7 @@ missing_docs = "warn"
 
 [package]
 name = "hicli"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 # `#[group]` on a file-module declaration needs attribute macros on non-inline
 # modules, stable since 1.99 (ADR-010).
@@ -36,13 +36,21 @@ exclude = [
   "docs/sketches/",
 ]
 
+[features]
+default = ["color"]
+# Coloured help and errors from `App::run` (ADR-015). Forwards `bpaf/color`, not
+# `bpaf/dull-color`: bpaf's `Color::default` lets `dull-color` win whenever it is
+# on, so forwarding it would silently override a consumer's own
+# `bpaf = { version = "0.9", features = ["bright-color"] }`.
+color = ["bpaf/color"]
+
 [dependencies]
 bpaf = { version = "0.9.27", features = ["derive", "autocomplete"] }
 strsim = "0.11"
 # Exact-pinned: `#[command]` expands to calls into this crate's
 # private-by-contract expansion shape, so the two versions move together and are
 # published together (macros first).
-hicli-macros = { version = "=0.3.0", path = "macros" }
+hicli-macros = { version = "=0.4.0", path = "macros" }
 
 [dev-dependencies]
 # UI tests for `#[command]`'s rejections: a compile error is part of the macro's
