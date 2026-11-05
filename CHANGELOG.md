@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Before 1.0, a minor version may carry breaking changes; they are listed under
 "Breaking" with what to change.
 
+## [0.2.1] — 2026-11-05
+
+### Fixed
+
+- A plain `mod helper;` inside a file group (`#[group] mod source;`) resolves to
+  `source/helper.rs`, as in any Rust file, instead of failing with E0583 (#25), at
+  every nesting level. `#[group]` now emits `#[path]` only where rustc's own rules
+  would not find the group's file: under a crate root not named `lib.rs`/`main.rs`
+  that keeps its modules in a same-named directory (`tests/cli.rs` + `tests/cli/`),
+  inside a file loaded through `#[path]`, or when both `x.rs` and `x/mod.rs` exist.
+  In those files rustc resolves plain submodules beside the file; give them a
+  `#[path]`. An existing `#[path = "source/import.rs"]` workaround keeps working and
+  can be removed. If you instead moved a helper module *beside* the group file to
+  get around this, move it into the group's directory (or give it a `#[path]`).
+
 ## [0.2.0] — 2026-11-04
 
 ### Added
@@ -56,5 +71,6 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
 First release: help metadata and the doc comment's `# Examples` footer (ADR-008),
 completion scripts (ADR-009) and groups in files (ADR-010).
 
+[0.2.1]: https://github.com/johlrogge/hicli/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/johlrogge/hicli/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/johlrogge/hicli/releases/tag/v0.1.0
