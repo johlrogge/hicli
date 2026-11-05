@@ -391,11 +391,26 @@ $ echo $?
 2
 $ playr library archive empty --yes
 localhost: archive emptied
+$ playr library archive --help
+Files that duplicate merges moved aside
+
+Usage: playr library archive [COMMAND ...]
+
+List the archive
+
+Available options:
+    -h, --help  Prints help information
+
+Available commands:
+    empty       Permanently delete everything in the archive
 ```
 
 Limits: one default per group; none at the top level or in an `args`/`curried`
 group; a default takes no `name`, `alias` or `hide`, and its doc comment is one
-line (it has no help page of its own). See
+line (it has no help page of its own). That line titles the default's options in
+the group's `--help`, as with `search` above; a default without options, like
+`list` here, has its line shown under `Usage:`, and the usage reads
+`[COMMAND ...]` because naming a command is optional. See
 [ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
 
 ### Object, then verb: `source <name> check-updates`
@@ -408,7 +423,11 @@ each command that receives the value, which must be its first parameter:
 ```rust
 #[derive(Debug, Clone, Bpaf, Arg)]
 #[arg(complete = complete_sources)]
-pub struct SourceName(#[bpaf(positional("SOURCE"))] pub Name);
+pub struct SourceName(
+    /// A source on the node: bandcamp, beatport or upload
+    #[bpaf(positional("SOURCE"))]
+    pub Name,
+);
 
 /// Music sources
 #[group(args = SourceName)]
@@ -441,6 +460,9 @@ Usage: playr source (COMMAND ... | SOURCE COMMAND ...)
 
 Commands for SOURCE:
     check-updates  Check the source's collection for stale items
+
+Available positional items:
+    SOURCE         A source on the node: bandcamp, beatport or upload
 
 Available options:
     -h, --help     Prints help information

@@ -465,6 +465,34 @@ fn source_help_lists_list_and_explains_the_name_first_form() {
     );
 }
 
+/// #20: the value's field doc is a positional item, not a command row.
+///
+/// `SourceName`'s own doc comment titles its section (bpaf's rule for a doc
+/// comment on a derived struct), so the positional section here is headed by
+/// it rather than by "Available positional items:".
+#[test]
+fn source_help_lists_the_value_with_the_positional_items() {
+    let h = help(&["source", "--help"]);
+    let paragraphs: Vec<&str> = h.split("\n\n").collect();
+    let row = |l: &&str| l.trim_start().starts_with("SOURCE-NAME ");
+    let commands = paragraphs
+        .iter()
+        .find(|p| p.starts_with("Commands for SOURCE-NAME:"))
+        .unwrap_or_else(|| panic!("no commands section in {h}"));
+    assert!(!commands.lines().any(|l| row(&l)), "{h}");
+    let positionals = paragraphs
+        .iter()
+        .find(|p| p.starts_with("A music source's name"))
+        .unwrap_or_else(|| panic!("no positional section in {h}"));
+    assert!(
+        positionals
+            .lines()
+            .any(|l| row(&l) && l.ends_with("the music source")),
+        "{h}"
+    );
+    assert_eq!(h.lines().filter(row).count(), 1, "{h}");
+}
+
 #[test]
 fn source_help_lists_every_per_source_command_under_the_value() {
     // mdma's `per_source_help_lists_the_commands` asks `source bandcamp

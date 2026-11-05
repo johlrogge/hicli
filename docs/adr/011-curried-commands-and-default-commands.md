@@ -99,6 +99,17 @@ build, if they do not; hicli renders `--help` once at fold time in debug builds,
 so the mistake surfaces on the first debug run or test (see #11). A group holds at most one default; a
 default takes no alias, `hide`, details or footer.
 
+**Amended (0.3.0, #19).** A default *without options* was invisible in
+`--help`: bpaf keeps a section only when it starts with an item, so its title —
+the default's help line — was never printed, and bpaf's `Meta::or` drops an
+alternative with no items, so the usage read `COMMAND ...` as if a command were
+required. The default's section is now wrapped in a `with_group_help` probe
+that records whether it has items. When it has none, the group's header is the
+default's help line (then a blank line and the group's details, if any — the
+line comes first because plain `--help` prints only a header's first paragraph,
+ADR-008), and the usage brackets the derived part: `Usage: playr library
+archive [COMMAND ...]`. A default with options is unchanged.
+
 ### 3. Runtime: one node type, generic over what it parses to
 
 `Command<Ctx>` becomes an alias for `Node<Invocation<Ctx>>`, and
@@ -118,6 +129,13 @@ children; it mirrors `#[group(args = T)]`, and "curried" only ever means "receiv
   `list`, `search f` → `fact-values-for`).
 - A per-mount shared cell carries the first remaining word to the value's
   completer, for completion only; parsed values never travel through it.
+
+**Amended (0.3.0, #20).** The `Commands for SOURCE-NAME:` title was applied to
+the value and the bound commands together, so a value with a field doc was
+listed as a row of that section, as if it were a command. The title now covers
+the bound commands only; the value is listed with the positional items, under
+`Available positional items:` (or under its type's doc heading, if the type has
+one).
 
 ## Known limits (bpaf 0.9.27)
 

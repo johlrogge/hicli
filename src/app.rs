@@ -162,13 +162,16 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
                 .map(Command::name)
                 .collect(),
         };
+        // A top-level default panicked above, so the fold has no default's
+        // help to place.
         let tree = alternative(commands, &Mount::root(bin_name.as_deref()))
-            .expect("hicli::App has no commands; add at least one via .command/.commands");
+            .expect("hicli::App has no commands; add at least one via .command/.commands")
+            .parser;
         // hicli spells the usage line itself (ADR-013): the name is display
         // only, never `Args::set_name` (ADR-009 §3).
         let mut parser = construct!(globals, tree)
             .to_options()
-            .with_usage(usage_line(bin_name.into_iter().collect()));
+            .with_usage(usage_line(bin_name.into_iter().collect(), false));
         if let Some(about) = &about {
             parser = parser.descr(about.as_str());
         }

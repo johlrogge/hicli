@@ -210,7 +210,7 @@
 //! positional, and its [`Invocation::path`] is the group's (`["search"]`). A
 //! named sibling wins its own word; `search -- fact-values-for` searches for
 //! that word. Its arguments are listed in the group's `--help` under its
-//! one-line help. The usual ordering rule applies with full force: a default's
+//! one-line help (see below for a default without any). The usual ordering rule applies with full force: a default's
 //! **positionals must come last**, after every option — so a default with a
 //! positional is still a command that ends in its positional. Broken, it
 //! still parses, but rendering `--help` anywhere in the group panics with
@@ -223,10 +223,15 @@
 //!
 //! What `--help` and completion show:
 //!
-//! - `source --help` lists the curried commands, with the value, under
-//!   `Commands for SOURCE-NAME:`, and the fixed siblings under
+//! - `source --help` lists the curried commands under
+//!   `Commands for SOURCE-NAME:`, the value itself — its field doc — under
+//!   `Available positional items:`, and the fixed siblings under
 //!   `Available commands:`; `source bandcamp sync --help` reads
 //!   `Usage: source SOURCE-NAME sync …`.
+//! - A default's one-line help titles its options in the group's `--help`. A
+//!   default without options has none to title, so its line is shown under
+//!   `Usage:` instead, and the usage reads `archive [COMMAND ...]`: naming a
+//!   command is optional.
 //! - Completing a non-empty word where the value — or the default's first
 //!   positional — goes offers the sibling commands whose names start with it,
 //!   beside the value's own candidates (`source l` → `list`).

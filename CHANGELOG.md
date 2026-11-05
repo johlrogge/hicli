@@ -20,6 +20,11 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
 - Usage lines name the binary: `Usage: playr playback stop` (#21).
 - No trailing space after a command without arguments: `Usage: playr playback stop`,
   not `Usage: playr playback stop ` (#28).
+- A group's default command without options shows its help line under `Usage:`, and
+  the usage reads `[COMMAND ...]`: `Usage: playr library archive [COMMAND ...]`, then
+  `List the archive` (#19).
+- A curried value's field doc is listed under "Available positional items:", not as a
+  row of "Commands for VALUE:" (#20).
 
 ### Changed (help text, not API)
 
@@ -27,6 +32,12 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
   `App::parse` and `App::run_with_args` print no binary name unless `.bin_name(..)` is
   set. Re-bless snapshot tests of help pages; set `.bin_name(..)` in them to match what
   `run` prints.
+- The `--help` page of a group whose default command has no options gains the
+  default's help line under `Usage:` (and the group's details follow it), and its
+  usage line reads `[COMMAND ...]` instead of `COMMAND ...` (#19).
+- The `--help` page of a curried group lists the value's row under "Available
+  positional items:" (or its type's doc heading) instead of under "Commands for
+  VALUE:" (#20).
 
 ## [0.2.1] — 2026-11-05
 

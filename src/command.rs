@@ -21,12 +21,36 @@ use crate::arg::Candidate;
 use crate::external::ExternalCommand;
 use crate::invocation::Invocation;
 use crate::outcome::IntoOutcome;
+use bpaf::doc::{Doc, MetaInfo};
 use bpaf::{any, construct, Parser};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// A boxed parser producing an `O`.
 type Boxed<O> = Box<dyn Parser<O>>;
+
+/// A set of children folded into one alternative, and what its group's help
+/// page needs to know about the default among them.
+pub(crate) struct Folded<O> {
+    /// The alternative itself.
+    pub(crate) parser: Boxed<O>,
+    /// The default child's help, if there is a default.
+    pub(crate) default: Option<DefaultHelp>,
+}
+
+/// A default command's one-line help, and whether `bpaf` will print it.
+///
+/// `bpaf` prints a default's help line only as the title of its options'
+/// section, and keeps a section only when it starts with an item (#19). A
+/// default without options would be invisible; its group puts the line in
+/// its header instead.
+pub(crate) struct DefaultHelp {
+    /// The default's one-line help.
+    help: String,
+    /// Set when the default's parser has items to list — read only after
+    /// `bpaf` has asked the parser for its metadata, which is what sets it.
+    has_items: Rc<Cell<bool>>,
+}
 
 /// A deferred parser builder — see the module docs.
 type Deferred<O> = Box<dyn FnOnce(&Mount) -> Boxed<O>>;
@@ -266,8 +290,8 @@ pub fn curried_command<T: 'static, Ctx: 'static, A: 'static, R: IntoOutcome>(
 ///   not) is that command, never the value.
 /// - `bound` are the [`Curried`] commands that run with the value.
 ///
-/// `--help` lists the bound commands, with the value, under
-/// `Commands for <METAVAR>:`, and each bound command's usage line names the
+/// `--help` lists the bound commands under `Commands for <METAVAR>:` — the
+/// value itself is a positional item — and each bound command's usage line names the
 /// value (`Usage: source SOURCE-NAME sync`). Completing a non-empty word where
 /// the value goes offers the fixed commands whose names start with it, beside
 /// whatever the value's own completer offers.
@@ -351,9 +375,11 @@ fn mount_curried<T: 'static, O: 'static, P: Parser<T> + 'static>(
     let front = Rc::new(RefCell::new(Front::default()));
     let guard = peek(front.clone(), reserved);
     let t = arg().complete(offer_siblings(front, names));
+    // The section holds the bound commands only: the value is listed with the
+    // positional items, under its own doc (#20).
+    let bound_alt = bound_alt.group_help(format!("Commands for {metavar}:").as_str());
     let branch = construct!(guard, t, bound_alt)
         .map(|((), t, f)| f.apply(t))
-        .group_help(format!("Commands for {metavar}:").as_str())
         .boxed();
     match fixed_alt {
         Some(fixed_alt) => construct!([fixed_alt, branch]).boxed(),
@@ -612,7 +638,9 @@ impl<O> Node<O> {
     ///
     /// A default answers to no word. It is mounted at its group's own path —
     /// its [`Invocation::path`] is the group's — and its arguments are listed
-    /// in the group's `--help` under its one-line help. A named sibling is
+    /// in the group's `--help` under its one-line help. A default without
+    /// arguments has its one-line help shown under the group's `Usage:` line
+    /// instead, which then reads `[COMMAND ...]`. A named sibling is
     /// matched first; `--` escapes a value spelled like one. A default's
     /// positionals must come after its options, by `bpaf`'s rule for any
     /// command.
@@ -677,19 +705,31 @@ impl<O: 'static> Node<O> {
             kind,
         } = self;
         let at = parent.child(name);
-        let inner: Boxed<O> = match kind {
-            Kind::Leaf(build) | Kind::Curried(build) => build(&at),
-            Kind::Group(children) => alternative(children, &at).unwrap_or_else(|| {
-                panic!("hicli::group `{name}` has no commands; add at least one child")
-            }),
+        let (inner, default): (Boxed<O>, Option<DefaultHelp>) = match kind {
+            Kind::Leaf(build) | Kind::Curried(build) => (build(&at), None),
+            Kind::Group(children) => {
+                let folded = alternative(children, &at).unwrap_or_else(|| {
+                    panic!("hicli::group `{name}` has no commands; add at least one child")
+                });
+                (folded.parser, folded.default)
+            }
             Kind::Default(_) => panic!(
                 "a default command cannot be mounted on its own: `{name}` {}",
                 parent.place()
             ),
         };
-        let mut opts = inner.to_options().descr(help.as_str());
-        if let Some(d) = &details {
-            opts = opts.header(d.as_str());
+        // `with_usage` asks the parser for its metadata on the spot, which is
+        // what runs a default's probe (`mount_default`) and sets `has_items`.
+        let mut opts = inner.to_options().descr(help.as_str()).with_usage(|d| d);
+        // A default without options has no section of its own to title, so
+        // its help line goes in the group's header (#19).
+        let bare = default.filter(|d| !d.has_items.get());
+        match (&bare, &details) {
+            (Some(b), details) => {
+                opts = opts.header(crate::help::default_header(&b.help, details.as_deref()));
+            }
+            (None, Some(d)) => opts = opts.header(d.as_str()),
+            (None, None) => {}
         }
         if let Some(f) = &footer {
             opts = opts.footer(crate::help::verbatim(f));
@@ -697,7 +737,7 @@ impl<O: 'static> Node<O> {
         // Last: hicli spells every usage line itself (ADR-013) — bpaf's own
         // names no binary, drops curried values from the path (spike H-S1),
         // and ends in a space when the command has no arguments.
-        opts = opts.with_usage(crate::help::usage_line(at.shown.clone()));
+        opts = opts.with_usage(crate::help::usage_line(at.shown.clone(), bare.is_some()));
         // Always `long`, never `short`: an alias is a whole word, and `long`
         // is the spelling `bpaf` matches a one-character command by too.
         let mut cmd = opts.command(name).help(help.as_str());
@@ -711,13 +751,14 @@ impl<O: 'static> Node<O> {
     }
 
     /// Mount this default command at its group's own mount point `at`,
-    /// offering the group's named siblings `names` in completion.
+    /// offering the group's named siblings `names` in completion. Also its
+    /// help, for the group's page.
     ///
     /// # Panics
     ///
     /// Panics if this default has an alias, is hidden, or has details or a
     /// footer.
-    fn mount_default(self, at: &Mount, names: Vec<Candidate>) -> Boxed<O> {
+    fn mount_default(self, at: &Mount, names: Vec<Candidate>) -> (Boxed<O>, DefaultHelp) {
         let Node {
             name,
             help,
@@ -746,10 +787,24 @@ impl<O: 'static> Node<O> {
         };
         let front = Rc::new(RefCell::new(Front::default()));
         let look = peek(front.clone(), Vec::new());
+        // `group_help` titles the options in completion; the probe around it
+        // records whether there are any to list, and gives the help section
+        // the same title (bpaf flattens a nested section into the outer one).
+        let has_items = Rc::new(Cell::new(false));
+        let seen = has_items.clone();
+        let title = help.clone();
+        let probe = move |info: MetaInfo| {
+            let mut items = Doc::default();
+            items.meta(info, false);
+            seen.set(!items.monochrome(false).is_empty());
+            Doc::from(title.as_str())
+        };
         let d = build(at)
             .complete(offer_siblings(front, names))
-            .group_help(help.as_str());
-        construct!(look, d).map(|((), o)| o).boxed()
+            .group_help(help.as_str())
+            .with_group_help(probe);
+        let parser = construct!(look, d).map(|((), o)| o).boxed();
+        (parser, DefaultHelp { help, has_items })
     }
 }
 
@@ -785,15 +840,15 @@ fn fold_named<O: 'static>(children: Vec<Node<O>>, at: &Mount) -> Option<Boxed<O>
 /// The first branch that matches wins — this is what replaces the central
 /// `match`: every child folds one more command into the alternative. A
 /// default child answers to no word: it is mounted at `at` itself, after its
-/// named siblings. `None` when there are no children; the caller decides what
-/// that means.
+/// named siblings, and its help is handed back for the group's page. `None`
+/// when there are no children; the caller decides what that means.
 ///
 /// # Panics
 ///
 /// Panics if two named children share a spelling — a name or an alias —
 /// because the second could never be reached by it, or if there are two
 /// defaults.
-pub(crate) fn alternative<O: 'static>(children: Vec<Node<O>>, at: &Mount) -> Option<Boxed<O>> {
+pub(crate) fn alternative<O: 'static>(children: Vec<Node<O>>, at: &Mount) -> Option<Folded<O>> {
     check_spellings(
         children
             .iter()
@@ -812,11 +867,18 @@ pub(crate) fn alternative<O: 'static>(children: Vec<Node<O>>, at: &Mount) -> Opt
     }
     let names = listed_names(&named);
     let named = fold_named(named, at);
-    let default = defaults.pop().map(|d| d.mount_default(at, names));
-    match (named, default) {
-        (Some(named), Some(default)) => Some(construct!([named, default]).boxed()),
-        (named, default) => named.or(default),
-    }
+    let (default, help) = match defaults.pop().map(|d| d.mount_default(at, names)) {
+        Some((parser, help)) => (Some(parser), Some(help)),
+        None => (None, None),
+    };
+    let parser = match (named, default) {
+        (Some(named), Some(default)) => construct!([named, default]).boxed(),
+        (named, default) => named.or(default)?,
+    };
+    Some(Folded {
+        parser,
+        default: help,
+    })
 }
 
 /// The parser for an external subcommand: capture the remainder verbatim, and
@@ -1138,6 +1200,7 @@ mod curried_and_default {
     fn top<O: 'static>(nodes: Vec<Node<O>>) -> OptionParser<O> {
         alternative(nodes, &Mount::root(None))
             .expect("has commands")
+            .parser
             .to_options()
     }
 
@@ -1292,12 +1355,81 @@ mod curried_and_default {
             show(source(), &["source", "--help"]),
             "STDOUT:\nthe node\n\n\
              Usage: source (COMMAND ... | SOURCE-NAME COMMAND ...)\n\n\
-             Commands for SOURCE-NAME:\n    SOURCE-NAME  the source\n    \
+             Commands for SOURCE-NAME:\n    \
              sync         sync a source\n    status       show a source's status\n    \
              cancel       cancel a job\n\n\
+             Available positional items:\n    SOURCE-NAME  the source\n\n\
              Available options:\n    -h, --help   Prints help information\n\n\
              Available commands:\n    list         list sources\n"
         );
+    }
+
+    /// `archive (empty [-y] | <default list>)`: a default without options
+    /// beside a named sibling (playr's `library archive`, #19).
+    fn archive(details: Option<&str>) -> Command<Log> {
+        let yes = bpaf::short('y').long("yes").help("do not ask").switch();
+        let empty = command("empty", "empty the archive", yes, |y: bool, c: &Log| {
+            log(c, format!("empty {y}"))
+        });
+        let list = command("list", "list the archive", pure(()), |(), c: &Log| {
+            log(c, "list".into())
+        })
+        .by_default();
+        let g = group("archive", "files moved aside", vec![empty, list]);
+        match details {
+            Some(d) => g.details(d),
+            None => g,
+        }
+    }
+
+    #[test]
+    fn a_default_without_options_is_described_under_the_usage() {
+        assert_eq!(
+            show(archive(None), &["archive", "--help"]),
+            "STDOUT:\nfiles moved aside\n\n\
+             Usage: archive [COMMAND ...]\n\n\
+             list the archive\n\n\
+             Available options:\n    -h, --help  Prints help information\n\n\
+             Available commands:\n    empty       empty the archive\n"
+        );
+        assert_eq!(show(archive(None), &["archive"]), "Ok(archive: list)");
+    }
+
+    #[test]
+    fn a_default_without_options_comes_before_the_groups_details() {
+        for args in [
+            &["archive", "--help"][..],
+            &["archive", "--help", "--help"][..],
+        ] {
+            let help = show(archive(Some("about")), args);
+            assert!(
+                help.contains("Usage: archive [COMMAND ...]\n\nlist the archive\n\nabout\n"),
+                "{help}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_default_with_options_is_described_once_and_keeps_its_usage() {
+        let help = show(search(), &["search", "--help"]);
+        assert_eq!(help.matches("search the library").count(), 1, "{help}");
+        assert_eq!(
+            usage_line(&help),
+            "Usage: search (COMMAND ... | [--artist=ARTIST] [QUERY])",
+            "{help}"
+        );
+    }
+
+    #[test]
+    fn a_group_of_only_a_bare_default_has_an_unbracketed_usage() {
+        let c = group(
+            "archive",
+            "files moved aside",
+            vec![command("list", "list the archive", pure(()), |(), _: &Log| {}).by_default()],
+        );
+        let help = show(c, &["archive", "--help"]);
+        assert_eq!(usage_line(&help), "Usage: archive", "{help}");
+        assert!(help.contains("\nlist the archive\n"), "{help}");
     }
 
     #[test]
