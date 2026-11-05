@@ -4,7 +4,7 @@
 //! Try:
 //! ```text
 //! cargo run --example playr -- --help
-//! cargo run --example playr -- search --added -7 --artist CBL techno
+//! cargo run --example playr -- search --added=-7 --artist CBL techno
 //! cargo run --example playr -- source bandcamp check-updates --apply
 //! cargo test --example playr
 //! ```
@@ -20,7 +20,6 @@ use std::process::ExitCode;
 use std::str::FromStr;
 
 use bpaf::Bpaf;
-use hicli::bpaf::{any, construct, long, Parser};
 use hicli::{app, command, group, App, Arg, Candidate, Failure, Outcome};
 
 // ---- globals and context -------------------------------------------------
@@ -175,27 +174,12 @@ pub struct FactType(
     pub Name,
 );
 
-/// `--added -7`: added in the last 7 days.
-#[derive(Debug, Clone)]
-pub struct Added(pub Option<DaysBack>);
-
-impl Arg for Added {
-    fn parser() -> impl Parser<Self> {
-        // `--added -7`: the flag, then *any* next word, even one starting with `-`.
-        // Hidden, so `--help` lists the option once, as the branch below.
-        let flag = long("added").req_flag(());
-        let days = any::<String, _, _>("DAYS", Some);
-        let separate = construct!(flag, days)
-            .adjacent()
-            .parse(|((), d)| d.parse::<DaysBack>())
-            .hide();
-        // `--added=-7`: an ordinary argument already reads this one.
-        let joined = long("added")
-            .help("Only tracks added in the last DAYS days, e.g. -7")
-            .argument::<DaysBack>("DAYS");
-        construct!([separate, joined]).optional().map(Added)
-    }
-}
+#[derive(Debug, Clone, Bpaf, Arg)]
+pub struct Added(
+    /// Only tracks added in the last DAYS days, e.g. -7
+    #[bpaf(long("added"), argument("DAYS"), optional)]
+    pub Option<DaysBack>,
+);
 
 #[derive(Debug, Clone, Bpaf, Arg)]
 pub struct Yes(
@@ -448,6 +432,14 @@ mod tests {
         output_names_are_checked: { playback "set-output" HDMI } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
+        },
+        added_takes_the_glued_form: { search "--added=-7" } => |r| {
+            assert!(r.is_ok(), "--added=-7 parses");
+        },
+        added_rejects_a_separate_negative_word: { search "--added" "-7" } => |r| {
+            let e = r.err().expect("a usage error");
+            assert_eq!(exit_code_for(&e), 2);
+            assert!(e.unwrap_stderr().contains("try `--added=-7`"));
         },
     }
 

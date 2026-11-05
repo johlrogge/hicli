@@ -262,45 +262,32 @@ one-field newtype, that would print a heading with nothing under it.
 
 ### Values that start with `-`
 
-`playr search --added -7` means "added in the last 7 days". bpaf reads `-7` as a short
-flag before any parser sees it, so a plain `argument` only accepts `--added=-7`. To
-accept both spellings, write the `Arg` impl by hand. The days are a `DaysBack`, which
-accepts `-7` and rejects `7`, `-0` and `-x`:
+`playr search --added=-7` means "added in the last 7 days". Write such a value glued
+to its option with `=`. A plain `argument` reads it, and the type inside decides what
+is valid: `DaysBack` accepts `-7` and rejects `7`, `-0` and `-x`.
 
 ```rust
-/// `--added -7`: added in the last 7 days.
-#[derive(Debug, Clone)]
-pub struct Added(pub Option<DaysBack>);
-
-impl Arg for Added {
-    fn parser() -> impl Parser<Self> {
-        // `--added -7`: the flag, then *any* next word, even one starting with `-`.
-        // Hidden, so `--help` lists the option once, as the branch below.
-        let flag = long("added").req_flag(());
-        let days = any::<String, _, _>("DAYS", Some);
-        let separate = construct!(flag, days)
-            .adjacent()
-            .parse(|((), d)| d.parse::<DaysBack>())
-            .hide();
-        // `--added=-7`: an ordinary argument already reads this one.
-        let joined = long("added")
-            .help("Only tracks added in the last DAYS days, e.g. -7")
-            .argument::<DaysBack>("DAYS");
-        construct!([separate, joined]).optional().map(Added)
-    }
-}
+#[derive(Debug, Clone, Bpaf, Arg)]
+pub struct Added(
+    /// Only tracks added in the last DAYS days, e.g. -7
+    #[bpaf(long("added"), argument("DAYS"), optional)]
+    pub Option<DaysBack>,
+);
 ```
 
-(`use hicli::bpaf::{any, construct, long, Parser};` imports the bpaf names.) Every
-`#[derive(Arg)]` is shorthand for an `impl Arg` like this one, so you can write the
-impl by hand whenever the derive can't express what you need.
+As two words, `-7` reads as a flag, and bpaf says how to write it instead:
 
 ```console
-$ playr search --added -7
+$ playr search --added=-7
 localhost: search None artist=None bpm=None unplayed=false added=Some(DaysBack(7))
-$ playr search --added -x
-couldn't parse: `-x` is not a number of days back, such as -7
+$ playr search --added -7
+`--added` requires an argument `DAYS`, got a flag `-7`, try `--added=-7` to use it as an argument
+$ playr search --added=-x
+couldn't parse `-x`: `-x` is not a number of days back, such as -7
 ```
+
+hicli keeps to the standard rule rather than special-casing hyphen values: a parser
+that sometimes takes `-7` as a value and sometimes as a flag surprises users.
 
 ### A group's default command
 
@@ -332,7 +319,7 @@ mod search {
 ```
 
 ```console
-$ playr search --added -7 --artist CBL techno
+$ playr search --added=-7 --artist CBL techno
 localhost: search Some("techno") artist=Some("CBL") bpm=None unplayed=false added=Some(DaysBack(7))
 $ playr search fact-values-for genre
 localhost: values for genre
