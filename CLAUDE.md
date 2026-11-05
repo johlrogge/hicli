@@ -76,7 +76,8 @@ Run `just ci` before considering any change done.
   group-level currying (`#[group(args = T)]`, `#[group(curried = T)]`,
   `#[command(curried)]`) and a group's `#[command(default)]` (ADR-011),
   and `Into<Failure>` error returns, so `?` works (ADR-012), and
-  hicli-rendered usage lines with `App::bin_name` (ADR-013).
+  hicli-rendered usage lines with `App::bin_name` (ADR-013), and the default
+  `color` feature printing through bpaf's `print_message` (ADR-015).
   Deferred until the next real consumer's pain justifies them: nested `args`
   groups, a default in a curried group or at the top level, a field-composing
   `#[derive(Arg)]` for composites, `#[arg(parser = …)]`, completion masks,
