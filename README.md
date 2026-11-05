@@ -1,369 +1,674 @@
 # hicli
 
-**hi cli — adds the line to your command.** CLI-enable your code: a modular,
-publishable subcommand framework for Rust, built on
-[`bpaf`](https://docs.rs/bpaf).
+**Write a subcommand as a documented function. hicli adds the command line.**
 
-Say it out loud (*hej cli*, if you are Swedish about it), or read it as *hi-fi →
-hi-cli*: a high-fidelity command-line interface rendered from the code you
-already have.
+hicli is a subcommand framework for Rust, built on [`bpaf`](https://docs.rs/bpaf).
+A command is a function with a doc comment, and a group of commands is a module.
+You don't write a central `enum Commands` or a `match` that dispatches it, and you
+never write a command's name or help text twice. The functions stay plain Rust, so
+you can call them and test them directly. The whole CLI can also be tested
+in-process, without spawning a binary.
 
-> **Status:** v1 is implemented and covered by an in-process test suite. The source is
-> public at [github.com/johlrogge/hicli](https://github.com/johlrogge/hicli). 0.2.0 is
-> the current release, published to crates.io as `hicli` and `hicli-macros`. Before
-> 1.0, a minor version may carry breaking changes. Upgrading from 0.1: see
-> [`CHANGELOG.md`](CHANGELOG.md).
+[![crates.io](https://img.shields.io/crates/v/hicli.svg)](https://crates.io/crates/hicli)
+[![docs.rs](https://docs.rs/hicli/badge.svg)](https://docs.rs/hicli)
 
-## The idea
+> 0.3.0, pre-1.0: a minor version may break things. Every break is listed in
+> [`CHANGELOG.md`](CHANGELOG.md). MSRV: Rust 1.99.
 
-Most `clap`-based CLIs end up less modular than they could be: one subcommand should
-be one self-contained unit — its arguments and its behavior — but in practice you get
-a derive-enum plus a hand-written central `match` that grows without bound.
+## Quick start
 
-`hicli` makes the alternative the path of least resistance:
-
-- **A subcommand is a documented function.** `#[command]` leaves that function exactly as
-  you wrote it — same name, same signature, same visibility — and *adds* a hidden
-  registration handle beside it.
-- **A group of subcommands is a documented module.** `#[group]` leaves the module
-  alone too, and discovers its children: a child is a child because it is *in* the
-  module, in source order. There is no list to keep in step with the code.
-- **A group whose body is a file** is the same `#[group]` on `pub mod wallet;` — one
-  file per group.
-
-There is no central dispatcher, and no name, help string or registration line written
-twice.
-
-See [`docs/adr/005-verbs-are-the-function.md`](docs/adr/005-verbs-are-the-function.md)
-for why it looks like this, [`docs/adr/006-an-argument-is-a-type.md`](docs/adr/006-an-argument-is-a-type.md)
-for why an argument is a type with completion attached, and [`docs/PLAN.md`](docs/PLAN.md)
-for the full API and the `bpaf` capability analysis that grounds it.
-
-## A whole CLI
+Most examples below build one CLI step by step. `playr` controls a networked music
+player: it starts and stops playback, searches a library and manages music sources.
+First, three commands and a global option:
 
 ```toml
-# Cargo.toml
 [dependencies]
-hicli = "0.2"
-bpaf = "0.9"    # for `#[derive(Bpaf)]` on your own argument structs — see "Rules" below
+hicli = "0.3"
+bpaf = "0.9"   # needed for #[derive(Bpaf)] on your own argument types
 ```
 
 ```rust
-// src/main.rs
+use std::fmt;
 use std::process::ExitCode;
+use std::str::FromStr;
 
 use bpaf::Bpaf;
-// One `use` for `command`, one for `group` (and, below, `Arg`): the
-// attribute/trait and the function/derive they expand into share a name across
-// two namespaces each.
-use hicli::{app, command, group, App, Arg, Failure, Outcome};
+use hicli::{app, command, group, App, Arg};
 
-/// Global options, accepted before or after the subcommand.
+/// Global options
 #[derive(Debug, Clone, Bpaf)]
 pub struct Globals {
-    /// Base directory for the app's data.
-    #[bpaf(long, argument("PATH"), fallback(".".into()))]
-    home: String,
+    /// The node to talk to
+    #[bpaf(long, env("PLAYR_NODE"), argument("HOST"), fallback(Node::localhost()))]
+    pub node: Node,
 }
 
-/// The shared context, built once after parsing. Anything secret is read from the
-/// environment here — never as a parser field, where `--help` would advertise it.
+/// Built once, after parsing, and handed to every command.
 pub struct Ctx {
-    pub home: String,
+    pub node: Node,
 }
 
-fn mk_ctx(g: Globals) -> Result<Ctx, Failure> {
-    Ok(Ctx { home: g.home })
+#[derive(Debug, Clone, Bpaf, Arg)]
+pub struct Output(
+    /// An audio output device
+    #[bpaf(positional("NAME"))]
+    pub Name,
+);
+
+/// Check that the node answers
+#[command]
+fn ping(ctx: &Ctx) {
+    println!("pong from {}", ctx.node);
 }
 
-// An argument is a *type* (see docs/adr/006-an-argument-is-a-type.md), written
-// once and taken by every command that needs it. `#[derive(Bpaf)]` names the parser
-// after the struct: `EventDir` -> `event_dir()`. `#[derive(Arg)]` turns that into
-// what `#[command]` actually calls, and `#[arg(complete = dirs)]` hands completion
-// to the shell itself — no candidate list to maintain.
-/// Where the event lives.
-#[derive(Debug, Clone, Bpaf, Arg)]
-#[arg(complete = dirs)]
-pub struct EventDir(#[bpaf(positional("DIR"))] pub String);
-
-/// The event's display name.
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct EventName(#[bpaf(positional("NAME"), some("a name is required"))] pub Vec<String>);
-
-// The newtype the completion story is *for*: every command that takes an `Id`
-// inherits its completion, declared here once.
-/// An identity in this home.
-#[derive(Debug, Clone, Bpaf, Arg)]
-#[arg(complete = complete_ids)]
-pub struct Id(#[bpaf(positional("ID"))] pub String);
-
-/// The ids under `$APP_HOME`, filtered by what has been typed.
-///
-/// Completion runs in the user's shell on every TAB, so this reads the
-/// environment (never `--home`: bpaf hands a completer only the parsed value),
-/// never panics, and answers an unreadable home with an empty list rather than
-/// an error. `bpaf` passes the result through unfiltered, so the prefix filter
-/// — `starts_with` — is ours.
-fn complete_ids(typed: &Id) -> Vec<hicli::Candidate> {
-    let Some(home) = std::env::var_os("APP_HOME") else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(std::path::Path::new(&home).join("ids")) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| name.starts_with(&typed.0))
-        .map(|name| (name, None))
-        .collect()
-}
-
-// A group is a documented module. Its children are `create`, `list` and the
-// nested `audience` group — in that order — because they are in it.
-/// events and instances
-///
-/// An event is a directory; an instance is a branch of it.
+/// Playback control
 #[group]
-mod event {
+mod playback {
     use super::*;
 
-    /// create an event
-    ///
-    /// The event directory is created if it does not exist.
+    /// Start playback from the queue
     #[command]
-    pub fn create(dir: EventDir, name: EventName, ctx: &Ctx) -> Outcome {
-        println!("[{}] created {} in {}", ctx.home, name.0.join(" "), dir.0);
-        Ok(())
+    pub fn start(ctx: &Ctx) {
+        println!("{}: playing", ctx.node);
     }
 
-    /// list the events in a directory
+    /// Stop playback
     #[command]
-    pub fn list(dir: EventDir, ctx: &Ctx) -> Outcome {
-        println!("[{}] nothing in {} yet", ctx.home, dir.0);
-        Ok(())
+    pub fn stop(ctx: &Ctx) {
+        println!("{}: stopped", ctx.node);
     }
 
-    // A nested group is a nested module, marked the same way. Its context is not
-    // written anywhere either: `define` takes `&Ctx`, so the whole tree does.
-    /// manage audiences
-    #[group]
-    pub mod audience {
-        use super::*;
-
-        /// define an audience
-        #[command]
-        pub fn define(dir: EventDir, name: EventName, ctx: &Ctx) -> Outcome {
-            println!("[{}] audience {} in {}", ctx.home, name.0.join(" "), dir.0);
-            Ok(())
-        }
+    /// Select an audio output device
+    #[command]
+    pub fn set_output(output: Output, ctx: &Ctx) {
+        println!("{}: output is now {}", ctx.node, output.0);
     }
 }
 
-// A group whose body is a file — `src/wallet.rs`, found by Rust's own module
-// rules. `#[group]` reads that file to discover the group's children, exactly
-// as it reads an inline module body.
-/// cards and deliverables
-#[group]
-pub mod wallet;
-
-/// show status
-#[command]
-fn status(ctx: &Ctx) {
-    println!("[{}] ok", ctx.home);
-}
-
-/// show an identity
-///
-/// `id: Id` is the entire completion story for this command: it declares nothing
-/// and knows nothing about `$APP_HOME` — it takes an `Id`, and an `Id` completes.
-#[command]
-fn show(id: Id, ctx: &Ctx) {
-    println!("[{}] {}", ctx.home, id.0);
-}
-
-/// The whole command tree. Named, so the tests below drive the same one.
-///
-/// Each bare name is a registration: `commands!` reads it as the hidden handle
-/// `#[command]` or `#[group]` wrote beside the item of that name. A
-/// group and a command are indistinguishable here, which is the point — `event` is
-/// a module, `status` is a function, both are just names in a list.
 fn app() -> App<Globals, Ctx> {
     app! {
         globals: globals(),
-        commands: [event, wallet, status, show],
+        commands: [ping, playback],
     }
 }
 
 fn main() -> ExitCode {
-    // `run` *returns* the exit code — hicli never calls `std::process::exit`.
-    app().run(mk_ctx)
+    app().run(|g| Ok(Ctx { node: g.node }))
 }
 ```
 
+`Name` and `Node` are the program's own types, shown in the next section.
+
+```console
+$ playr --help
+Usage: playr [--node=HOST] COMMAND ...
+
+Global options
+        --node=HOST  The node to talk to
+                     [env:PLAYR_NODE: N/A]
+
+Available options:
+    -h, --help       Prints help information
+
+Available commands:
+    ping             Check that the node answers
+    playback         Playback control
+
+$ playr playback --help
+Playback control
+
+Usage: playr playback COMMAND ...
+
+Available options:
+    -h, --help  Prints help information
+
+Available commands:
+    start       Start playback from the queue
+    stop        Stop playback
+    set-output  Select an audio output device
+
+$ playr --node pi.local playback set-output hdmi
+pi.local: output is now hdmi
+$ PLAYR_NODE=pi.local playr playback stop
+pi.local: stopped
+$ playr playbak stop
+no such command or positional: `playbak`, did you mean `playback`?
+$ playr playback set-output
+expected `NAME`, pass `--help` for usage information
+$ echo $?
+2
+```
+
+What each piece does:
+
+- **`#[command]` on a function makes it a subcommand.** The name comes from the
+  function name, with `_` turned into `-` (`set_output` becomes `set-output`), unless
+  you write `#[command(name = "…")]`. The first line of the doc comment is its help.
+  The function itself is unchanged: `playback::stop(&ctx)` still works.
+- **`#[group]` on a module makes it a group.** Its commands are the `#[command]`
+  functions and `#[group]` modules inside it, in source order. There is no list to
+  keep in sync. A command or group without a doc comment is a compile error.
+- **An argument is a type.** `set_output` takes an `Output`, a newtype that derives
+  `Bpaf` (how it is spelled) and `Arg` (so hicli can use it). Define it once and use
+  it in every command that needs it. hicli has no `Arg` impls for `String`, `u64` and
+  so on, so you always use a newtype
+  ([ADR-006](docs/adr/006-an-argument-is-a-type.md)). Inside it is the value's own
+  type, here a `Name`.
+- **Global options are a `Bpaf` struct.** They are accepted before or after the
+  subcommand (`playr playback stop --node pi.local`), except an external subcommand,
+  which needs them before its name (see the rules below). `env(..)` makes an
+  environment variable the fallback, and the doc comment on the struct becomes the
+  `Global options` heading.
+- **Never put a secret in a `Globals` field, not even with `env(..)`.** When the
+  variable is set, `--help` prints its value: `PLAYR_NODE=x playr --help` shows
+  `[env:PLAYR_NODE = "x"]`.
+- **The context `&Ctx`** is built once from the globals, by the closure you pass to
+  `run`, and every command that takes `&Ctx` receives it. Put connections and
+  configuration in it. Read secrets from the environment in that closure.
+- **Exit codes:** `0` on success, `1` for a runtime failure, `2` for a usage error.
+  `run` returns the `ExitCode`. It never calls `process::exit`.
+
+### Bad values never reach a command
+
+The newtype says how an argument is spelled. The type inside it says what a valid
+value is. bpaf parses the value with that type's `FromStr`, so its rules live in one
+place, and every command receives a value that is already valid:
+
 ```rust
-// src/wallet.rs — the body of the `wallet` group. Ordinary Rust: the group's
-// help lives on the declaration, so what is left here is the commands.
-use hicli::{command, Outcome};
+/// Lowercase letters, digits and `-`, such as `hdmi` or `bandcamp`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Name(String);
 
-use crate::Ctx;
+impl FromStr for Name {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        let allowed = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+        if s.is_empty() || !s.chars().all(allowed) {
+            return Err("a name uses only a-z, 0-9 and -".to_string());
+        }
+        Ok(Name(s.to_string()))
+    }
+}
 
-/// list the cards in your wallet
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+```
+
+`Node`, the `--node` value, is written the same way: a host name with an optional
+`:port`. A value that doesn't parse is a usage error, and no command runs:
+
+```console
+$ playr playback set-output HDMI
+couldn't parse `HDMI`: a name uses only a-z, 0-9 and -
+$ echo $?
+2
+$ playr --node pi.local:http ping
+couldn't parse `pi.local:http`: `http` is not a port number
+```
+
+Known gap: the message names the value and the reason, not the option or positional
+it was given to. With several values of the same type, the user has to work out
+which one failed ([#26](https://github.com/johlrogge/hicli/issues/26)).
+
+A value with no rules, like the free-text search query below, can stay a `String`
+inside its newtype. Paths are `PathBuf`, and choices are enums (see
+[Choice values](#choice-values)).
+
+## Growing the example
+
+The following sections add to `playr`. The complete program, with tests, is
+[`examples/playr.rs`](examples/playr.rs).
+
+### Options, switches and positionals
+
+`playr search` filters the library. Several options can share one `Bpaf` struct.
+Each field's doc comment is its help line. `Bpm` accepts 20 to 300, written like
+`Name`:
+
+```rust
+#[derive(Debug, Clone, Bpaf, Arg)]
+pub struct Filters {
+    /// Only tracks by this artist
+    #[bpaf(long, argument("NAME"))]
+    pub artist: Option<String>,
+    /// Only tracks at this tempo
+    #[bpaf(long, argument("BPM"))]
+    pub bpm: Option<Bpm>,
+    /// Only tracks that were never played
+    #[bpaf(long)]
+    pub unplayed: bool,
+}
+
+#[derive(Debug, Clone, Bpaf, Arg)]
+pub struct Query(
+    /// Free-text query over title, artist and album
+    #[bpaf(positional("QUERY"), optional)]
+    pub Option<String>,
+);
+```
+
+A command's parameters are parsed in the order they are declared. **Declare the
+types that contain positionals last.** bpaf requires this, and a debug build checks it
+the first time it runs. A release build doesn't check it up front: the same mistake
+panics when `--help` is rendered. The rule is only about parameter order: on the
+command line, flags can go anywhere.
+
+Put a doc comment on the field, not on the newtype. bpaf turns a doc comment on a
+struct into a section heading (that is how `Global options` appears above). On a
+one-field newtype, that would print a heading with nothing under it.
+
+### Values that start with `-`
+
+`playr search --added=-7` means "added in the last 7 days". Write such a value glued
+to its option with `=`. A plain `argument` reads it, and the type inside decides what
+is valid: `DaysBack` accepts `-7` and rejects `7`, `-0` and `-x`.
+
+```rust
+#[derive(Debug, Clone, Bpaf, Arg)]
+pub struct Added(
+    /// Only tracks added in the last DAYS days, e.g. -7
+    #[bpaf(long("added"), argument("DAYS"), optional)]
+    pub Option<DaysBack>,
+);
+```
+
+As two words, `-7` reads as a flag, and bpaf says how to write it instead:
+
+```console
+$ playr search --added=-7
+localhost: search None artist=None bpm=None unplayed=false added=Some(DaysBack(7))
+$ playr search --added -7
+`--added` requires an argument `DAYS`, got a flag `-7`, try `--added=-7` to use it as an argument
+$ playr search --added=-x
+couldn't parse `-x`: `-x` is not a number of days back, such as -7
+```
+
+hicli keeps to the standard rule rather than special-casing hyphen values: a parser
+that sometimes takes `-7` as a value and sometimes as a flag surprises users.
+
+### A group's default command
+
+`playr search jazz` searches, and `playr search fact-values-for genre` lists the
+genres. When a group has a `#[command(default)]`, that command runs if no other
+command in the group is named:
+
+```rust
+/// Search the library
+#[group]
+mod search {
+    use super::*;
+
+    /// List every value stored for a fact type
+    #[command]
+    pub fn fact_values_for(t: FactType, ctx: &Ctx) {
+        println!("{}: values for {}", ctx.node, t.0);
+    }
+
+    /// Search by text and filters
+    #[command(default)]
+    pub fn tracks(added: Added, f: Filters, q: Query, ctx: &Ctx) {
+        println!(
+            "{}: search {:?} artist={:?} bpm={:?} unplayed={} added={:?}",
+            ctx.node, q.0, f.artist, f.bpm, f.unplayed, added.0
+        );
+    }
+}
+```
+
+```console
+$ playr search --added=-7 --artist CBL techno
+localhost: search Some("techno") artist=Some("CBL") bpm=None unplayed=false added=Some(DaysBack(7))
+$ playr search fact-values-for genre
+localhost: values for genre
+$ playr search -- fact-values-for
+localhost: search Some("fact-values-for") artist=None bpm=None unplayed=false added=None
+$ playr search --help
+Search the library
+
+Usage: playr search (COMMAND ... | [--added=DAYS] [--artist=NAME] [--bpm=BPM] [--unplayed] [QUERY])
+
+Search by text and filters
+        --added=DAYS   Only tracks added in the last DAYS days, e.g. -7
+        --artist=NAME  Only tracks by this artist
+        --bpm=BPM      Only tracks at this tempo
+        --unplayed     Only tracks that were never played
+    QUERY              Free-text query over title, artist and album
+
+Available options:
+    -h, --help         Prints help information
+
+Available commands:
+    fact-values-for    List every value stored for a fact type
+```
+
+The default command has no name of its own. To search for a word that is also a
+command name, put `--` before it. Groups can nest, so one module can hold another.
+Here `library archive` lists the archive and `library archive empty` empties it:
+
+```rust
+/// Library maintenance
+#[group]
+mod library {
+    use super::*;
+
+    /// Files that duplicate merges moved aside
+    #[group]
+    pub mod archive {
+        use super::*;
+
+        /// Permanently delete everything in the archive
+        #[command]
+        pub fn empty(yes: Yes, ctx: &Ctx) -> Outcome {
+            if !yes.0 {
+                return Err(Failure::usage(
+                    "this cannot be undone: pass --yes to confirm",
+                ));
+            }
+            println!("{}: archive emptied", ctx.node);
+            Ok(())
+        }
+
+        /// List the archive
+        #[command(default)]
+        pub fn list(ctx: &Ctx) {
+            println!("{}: 3 files in the archive", ctx.node);
+        }
+    }
+}
+```
+
+```console
+$ playr library archive
+localhost: 3 files in the archive
+$ playr library archive emtpy
+no such command or positional: `emtpy`, did you mean `empty`?
+$ playr library archive empty
+this cannot be undone: pass --yes to confirm
+$ echo $?
+2
+$ playr library archive empty --yes
+localhost: archive emptied
+$ playr library archive --help
+Files that duplicate merges moved aside
+
+Usage: playr library archive [COMMAND ...]
+
+List the archive
+
+Available options:
+    -h, --help  Prints help information
+
+Available commands:
+    empty       Permanently delete everything in the archive
+```
+
+Limits: one default per group; none at the top level or in an `args`/`curried`
+group; a default takes no `name`, `alias` or `hide`, and its doc comment is one
+line (it has no help page of its own). That line titles the default's options in
+the group's `--help`, as with `search` above; a default without options, like
+`list` here, has its line shown under `Usage:`, and the usage reads
+`[COMMAND ...]` because naming a command is optional. See
+[ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
+
+### Object, then verb: `source <name> check-updates`
+
+`playr source list` lists the sources, and `playr source bandcamp check-updates`
+acts on one of them. Here a value (the source name) comes between the group and
+the command. Use `#[group(args = T)]` for the group and `#[command(curried)]` for
+each command that receives the value, which must be its first parameter:
+
+```rust
+#[derive(Debug, Clone, Bpaf, Arg)]
+#[arg(complete = complete_sources)]
+pub struct SourceName(
+    /// A source on the node: bandcamp, beatport or upload
+    #[bpaf(positional("SOURCE"))]
+    pub Name,
+);
+
+/// Music sources
+#[group(args = SourceName)]
+mod source {
+    use super::*;
+
+    /// List the sources on the node
+    #[command]
+    pub fn list(ctx: &Ctx) {
+        println!("{}: bandcamp, beatport, upload", ctx.node);
+    }
+
+    /// Check the source's collection for stale items
+    #[command(curried)]
+    pub fn check_updates(s: SourceName, apply: Apply, ctx: &Ctx) {
+        println!("{}: checking {} (apply: {})", ctx.node, s.0, apply.0);
+    }
+}
+```
+
+```console
+$ playr source bandcamp check-updates --apply
+localhost: checking bandcamp (apply: true)
+$ playr source list
+localhost: bandcamp, beatport, upload
+$ playr source --help
+Music sources
+
+Usage: playr source (COMMAND ... | SOURCE COMMAND ...)
+
+Commands for SOURCE:
+    check-updates  Check the source's collection for stale items
+
+Available positional items:
+    SOURCE         A source on the node: bandcamp, beatport or upload
+
+Available options:
+    -h, --help     Prints help information
+
+Available commands:
+    list           List the sources on the node
+```
+
+A source with no command says what is missing, and lists the commands that can
+follow it; a misspelled one gets a "did you mean":
+
+```console
+$ playr source bandcamp
+expected a command after `bandcamp`: `check-updates`
+```
+
+Commands without the `curried` mark, like `list`, are matched first, so a source
+can't be named `list`. A curried command whose first parameter has a different type
+is a compile error. A nested group that also receives the value is
+`#[group(curried = SourceName)]`. One known limit is surprising: `source <TAB>` with
+nothing typed also offers the curried command names, which are not valid until a
+source is typed. For the others, such as `source NAME --help` showing the group's
+page, see [ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
+
+### Errors and `?`
+
+A command can return whatever it already returns: `()`, `Outcome`, `io::Result<()>`,
+`anyhow::Result<()>`, `color_eyre::Result<()>`, `Result<(), Box<dyn Error>>`.
+`Box<dyn Error + Send + Sync>` is not accepted (the standard library can't convert
+it); return `Box<dyn Error>`, or `anyhow`/`eyre`. Any error becomes a runtime failure
+(exit 1). The message is the whole error chain, outermost first:
+
+```rust
+use color_eyre::eyre::WrapErr;
+
+/// Upload an audio file to the library
 #[command]
-pub fn cards(ctx: &Ctx) -> Outcome {
-    println!("[{}] no cards yet", ctx.home);
+fn upload(file: AudioFile, ctx: &Ctx) -> color_eyre::Result<()> {
+    let bytes = std::fs::read(&file.0)
+        .wrap_err("reading the file")
+        .wrap_err_with(|| format!("uploading {}", file.0.display()))?;
+    println!("{}: uploaded {} bytes", ctx.node, bytes.len());
     Ok(())
 }
 ```
 
-That is the whole thing: `app event create ./ev "Summer Party"`, `app wallet cards`,
-`app --help`, `app event create --help`, typo suggestions and exit codes included.
+```console
+$ playr upload missing.flac
+uploading missing.flac: reading the file: No such file or directory (os error 2)
+$ echo $?
+1
+```
 
-- **The name** is the ident, `_` → `-` (`add_admin` → `add-admin`); a command can
-  override it with `#[command(name = "…")]`, a group cannot.
-- **Another spelling, or none at all,** comes from the same two keys on both
-  attributes: `#[command(alias = "ls")]` / `#[group(alias = "…")]` (repeatable) adds an
-  unlisted alias — the canonical path never changes — and `#[command(hide)]` /
-  `#[group(hide)]` drops a command or group out of `--help`, completion and
-  suggestions while it still runs when typed exactly.
-- **The help** is the doc comment — first line for the one-line listing and the
-  `--help` heading, the rest for the long description, and a trailing `# Examples`
-  section (fence it ```` ```sh ````) rendered verbatim after the options however it is
-  headed. **A `#[command]` or `#[group]` without a doc comment is a compile error.**
-- **The arguments** are the command's owned parameters, each a type implementing
-  `Arg` — ordinarily `#[derive(Bpaf, Arg)]`. `EventDir` above is shared by three
-  commands: an argument is a type, written once, helped once, completed once,
-  tested once. `#[command]` has no parameter attributes and never sees an
-  argument's spelling — it calls `<T as Arg>::parser()`. An optional
-  `#[arg(complete = …)]` attaches completion to the type, so `id show` (and
-  every future command that takes an `Id`) inherits it for free. See
-  [`docs/adr/006-an-argument-is-a-type.md`](docs/adr/006-an-argument-is-a-type.md).
-- **The context** is the single `&T` parameter; `T` fixes the command's `Ctx`. A
-  command with no `&T` parameter is generic over `Ctx`. A group takes its `Ctx` from
-  the first `&T` among its children, or from `#[group(ctx = T)]` when you say so.
-- **The children** of a group are every `#[command]` function and every
-  `#[group]` module (inline or a file) in the body, in source order. Nothing else is — not
-  an argument struct, not an `impl`, not an unmarked `mod`, not `#[cfg(test)] mod
-  tests`.
-- **The return** is anything implementing `IntoOutcome`: `()`, `Success`, or a
-  `Result<(), E>` / `Result<Success, E>` whose error converts into a `Failure` —
-  `Outcome` (`= Result<(), Failure>`), but equally `io::Result<()>`,
-  `anyhow::Result<()>` or `color_eyre::Result<()>`, as you would have written
-  them anyway. Usage failures exit 2, runtime failures 1, a `Success` carries its
-  own code and prints nothing. Any other error is a runtime failure whose message
-  is its chain, outermost first:
+hicli treats an error as a usage error (exit 2) only when it says so. bpaf reports
+arguments that fail to parse as usage errors, and a command can return
+`Failure::usage(..)` from an `Outcome`, like `archive empty` above. hicli never
+inspects an error to choose an exit code. For any other code, return
+`Ok(Success::code(n))`. See [ADR-012](docs/adr/012-command-errors-convert-through-into-failure.md).
 
-  ```rust
-  use color_eyre::eyre::WrapErr;
+### Choice values
 
-  /// sync a source
-  #[command]
-  pub fn sync(s: SourceName, ctx: &Ctx) -> color_eyre::Result<()> {
-      let manifest = std::fs::read_to_string(ctx.manifest(&s))
-          .wrap_err("reading the manifest")
-          .wrap_err_with(|| format!("syncing {s}"))?;
-      // …
-      Ok(())
-  }
-  ```
-
-  ```console
-  $ app sync bandcamp
-  syncing bandcamp: reading the manifest: No such file or directory (os error 2)
-  $ echo $?
-  1
-  ```
-
-  A `Failure::usage(..)` (exit 2) is only reachable by returning `Outcome`;
-  hicli never downcasts an error back into a code. A closure handed to
-  `hicli::command` or `hicli::curried_command` by hand that returns `Ok(())`
-  spells `-> Outcome`. See
-  [`docs/adr/012-command-errors-convert-through-into-failure.md`](docs/adr/012-command-errors-convert-through-into-failure.md).
-
-The app itself, not a command, carries two more things, set on the composition root:
-`App::about(..)` is the text printed above `Usage:`, and
-`App::version(env!("CARGO_PKG_VERSION"))` wires `--version`/`-V` to print it and exit
-0 (`app! { … }.about(..).version(..)` reads fine). Installable completion is the same
-idea one level up: `hicli::completion_script(Shell, bin) -> String` renders the
-bash/zsh/fish script for a binary name, which you wire to a hidden command of your
-own. See
-[`docs/adr/008-command-metadata-and-help-layout.md`](docs/adr/008-command-metadata-and-help-layout.md)
-and
-[`docs/adr/009-completion-scripts-are-rendered-by-hicli.md`](docs/adr/009-completion-scripts-are-rendered-by-hicli.md).
-
-One word, four things, in three namespaces: `Command<Ctx>` (the tree node),
-`hicli::command` (the function that builds a leaf), `#[command]` (the attribute)
-and `commands!` (the list). They do not collide, and **one
-`use hicli::command;` imports both the attribute and the function** — the same
-trick `#[group]` and `hicli::group` already rely on.
-
-`#[command]` expands to your function, untouched, plus one hidden sibling —
-`pub fn __hicli_create() -> Command<Ctx>`, the *handle*. `#[group]` expands to your
-module, untouched, plus `__hicli_event()` beside it, which calls the handle of each
-child one level down. Both are plain Rust calling public API (`hicli::command`,
-`hicli::group`, `App::new(…).commands(…)`), so a command or a group that outgrows
-the macro can be written out by hand and nothing is lost.
-
-Two runnable versions of the above — a nested group, a `guard`, an external subcommand
-— are [`examples/demo.rs`](examples/demo.rs) (groups inline) and
-[`examples/files/`](examples/files/) (groups in files); try `just demo --help` and
-`just demo-files --help`.
-
-## Object then verb, and a default command
-
-Two shapes beyond leaves and groups (see
-[`docs/adr/011-curried-commands-and-default-commands.md`](docs/adr/011-curried-commands-and-default-commands.md)).
-
-**A group that parses a value after its name** — `app source bandcamp sync` beside
-`app source list`. The group parses one `SourceName`; commands marked `curried` take it as
-their first owned parameter, unmarked ones are fixed siblings that take none:
+`playr sort bpm` takes one of a fixed set of words. For now, write an enum with
+`FromStr`. Its error message is shown to the user:
 
 ```rust
-/// manage sources
-#[group(args = SourceName)]
-pub mod source {
-    use super::*;
+// A choice value: an ordinary enum with `FromStr`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SortKey {
+    Bpm,
+    Title,
+    Artist,
+}
 
-    /// list sources
-    #[command]
-    pub fn list(ctx: &Ctx) -> Outcome { … }
+impl FromStr for SortKey {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "bpm" => Ok(Self::Bpm),
+            "title" => Ok(Self::Title),
+            "artist" => Ok(Self::Artist),
+            other => Err(format!("`{other}` is not one of: bpm, title, artist")),
+        }
+    }
+}
 
-    /// sync a source
-    #[command(curried)]
-    pub fn sync(s: SourceName, ctx: &Ctx) -> Outcome { … }
+#[derive(Debug, Clone, Bpaf, Arg)]
+pub struct SortBy(
+    /// What to sort by: bpm, title or artist
+    #[bpaf(positional("KEY"))]
+    pub SortKey,
+);
+```
+
+```console
+$ playr sort key
+couldn't parse `key`: `key` is not one of: bpm, title, artist
+```
+
+Shell completion doesn't work for these values yet: `sort b<TAB>` offers nothing.
+Built-in choice enums are tracked in [#8](https://github.com/johlrogge/hicli/issues/8).
+
+### Help text
+
+All help comes from doc comments. A command's first doc line is its summary, the
+following paragraphs are its description, and an `# Examples` section is printed at
+the end of its `--help`:
+
+```rust
+/// Sort track ids read from stdin
+///
+/// Reads one track id per line and prints them sorted.
+///
+/// # Examples
+///
+/// ```sh
+/// playr search --artist CBL | playr sort bpm --descending
+/// ```
+#[command]
+fn sort(desc: Descending, by: SortBy) {
+    println!("sorting by {:?}, descending: {}", by.0, desc.0);
 }
 ```
 
-`sync` is still the function you wrote. A child that receives a value of another type is a
-compile error. A word spelling a fixed sibling (name or alias) is that sibling, never the value.
-A plain group inside the value's reach is `#[group(curried = SourceName)]`. Usage shows
-`source SOURCE-NAME sync`; `source --help` lists them under `Commands for SOURCE-NAME:`.
+```console
+$ playr sort --help
+Sort track ids read from stdin
 
-**A default command** runs when no sibling is named — `app search jazz` beside
-`app search fact-values-for genre`:
+Usage: playr sort [-d] KEY
 
-```rust
-/// search by text
-#[command(default)]
-pub fn query(f: Filters, q: Query, ctx: &Ctx) -> Outcome { … }
+Reads one track id per line and prints them sorted.
+
+Available positional items:
+    KEY               What to sort by: bpm, title or artist
+
+Available options:
+    -d, --descending  Sort descending (Z→A, high→low)
+    -h, --help        Prints help information
+
+Examples:
+  playr search --artist CBL | playr sort bpm --descending
 ```
 
-It answers to no word of its own, its `Invocation::path` is the group's, and `search --
-fact-values-for` searches for that literal word. Its positionals must come last.
+`sort` takes no `&Ctx`, so it is generic over the context and works in any app. Use
+`#[command(alias = "ls")]` to add another name and `#[command(hide)]` to keep a
+command out of help and completion; `#[group(alias = "…")]` and `#[group(hide)]` do
+the same for a group. The text above the top-level usage line and `--version` are set on the
+app:
 
-Known limits (`bpaf` 0.9.27): `source <TAB>` with nothing typed also completes the curried
-commands (picking one leads to a confusing error); a one-match value completer hides a
-prefix-matching fixed sibling (`source l` → only `local`); the old name-last order
-`source sync bandcamp` gives a misleading "did you mean `resync`"; a typo of a curried command
-after a value (`source bandcamp snyc`) gets no `did you mean` when the group has a fixed sibling;
-`source NAME --help` shows the group page;
-a misspelled sibling under a default reads as a query. A default cannot be at the top level or
-in a curried group.
+```rust
+fn app() -> App<Globals, Ctx> {
+    app! {
+        globals: globals(),
+        commands: [ping, playback, search, library, source, upload, sort, generate_completions],
+    }
+    .about("playr: control the music player")
+    .version(env!("CARGO_PKG_VERSION"))
+}
+```
 
-## How to test it
+### Shell completion
 
-Testing is in-process and first-class: no subprocess, no `assert_cmd`, no golden
-files. There are five layers, and each one is reachable on its own.
+Completion is attached to the argument type, so every command that takes a
+`SourceName` completes source names:
+
+```rust
+/// Runs on every TAB: never fails, and filters by what was typed.
+fn complete_sources(typed: &SourceName) -> Vec<Candidate> {
+    ["bandcamp", "beatport", "upload"]
+        .into_iter()
+        .filter(|s| s.starts_with(&typed.0.to_string()))
+        .map(|s| (s.to_string(), None))
+        .collect()
+}
+```
+
+`#[arg(complete = complete_sources)]` on the type (shown above) connects the two. For
+paths, use `#[arg(complete = files)]` or `#[arg(complete = dirs)]`, which let the
+shell complete them. **Your completer must filter by the typed prefix itself.** bpaf
+passes its results to the shell unchanged.
+
+Command names complete automatically. To install completion, render the script from a
+hidden command:
+
+```rust
+#[derive(Debug, Clone, Bpaf, Arg)]
+pub struct ShellArg(
+    /// A shell to print completions for: bash, zsh or fish
+    #[bpaf(positional("SHELL"))]
+    pub hicli::Shell,
+);
+
+/// Print the shell completion script
+#[command(hide)]
+fn generate_completions(shell: ShellArg) {
+    print!("{}", hicli::completion_script(shell.0, "playr"));
+}
+```
+
+```console
+$ playr generate-completions zsh > ~/.zfunc/_playr
+```
+
+### Testing
+
+The parser has no side effects, so the whole CLI can be tested in-process. You don't
+need a subprocess or golden files:
 
 ```rust
 #[cfg(test)]
@@ -371,282 +676,156 @@ mod tests {
     use super::*;
     use hicli::{cli, cli_test, exit_code_for};
 
-    // 1. Argument level: an argument struct is an ordinary bpaf parser, tested
-    //    once and trusted by every command that takes it.
-    #[test]
-    fn an_event_name_takes_many_words() {
-        use bpaf::Parser;
-        let n = event_name()
-            .to_options()
-            .run_inner(&["Summer", "Party"][..])
-            .expect("parses");
-        assert_eq!(n.0, ["Summer", "Party"]);
-    }
-
-    // 2. Function level: the command *is* the function, called exactly as it is
-    //    declared. No handle, no `run`, no parser.
-    #[test]
-    fn create_writes_the_event() {
-        let ctx = Ctx { home: ".".into() };
-        event::create(
-            EventDir("./ev".into()),
-            EventName(vec!["Summer".into(), "Party".into()]),
-            &ctx,
-        )
-        .expect("creates an event");
-    }
-
-    // 3. Parse level: which command was selected, with which globals.
-    //    `cli! { … }` takes the tokens you would type; `cli_test!` writes one
-    //    `#[test]` per line, against a fresh `app()` each time.
     cli_test! {
         app: app();
 
-        create_ok: { event create "./ev" "Summer Party" } => |r| {
-            let (g, invocation) = r.expect("parses");
-            // `path()` says *which* `create` — `event create`, not another group's.
-            assert_eq!(invocation.path(), ["event", "create"]);
-            assert_eq!(g.home, ".");
+        stop_is_under_playback: { playback stop } => |r| {
+            let (_globals, invocation) = r.expect("parses");
+            assert_eq!(invocation.path(), ["playback", "stop"]);
         },
-        create_needs_a_name: { event create "./ev" } => |r| {
-            let e = r.err().expect("expected a parse failure");
+        node_after_the_command: { playback stop --node "pi.local" } => |r| {
+            let (globals, _) = r.expect("parses");
+            assert_eq!(globals.node.host, "pi.local");
+        },
+        set_output_needs_a_name: { playback "set-output" } => |r| {
+            let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
-            assert!(e.unwrap_stderr().contains("a name is required"));
+            assert!(e.unwrap_stderr().contains("NAME"));
         },
-        nested_group: { event audience define "./ev" Friends } => |r| {
-            let (_g, invocation) = r.expect("parses");
-            assert_eq!(invocation.path(), ["event", "audience", "define"]);
+        output_names_are_checked: { playback "set-output" HDMI } => |r| {
+            let e = r.err().expect("a usage error");
+            assert_eq!(exit_code_for(&e), 2);
         },
     }
 
-    // 4. Run level: parse, `mk_ctx`, the command and the exit-code remap — as a
-    //    value.
-    //    `run_with_args` returns the `u8` that `main` would have exited with.
     #[test]
-    fn a_typo_is_a_usage_error() {
-        assert_eq!(app().run_with_args(cli! { stauts }, mk_ctx), 2);
+    fn emptying_the_archive_needs_yes() {
+        assert_eq!(
+            app().run_with_args(cli! { library archive empty }, mk_ctx),
+            2
+        );
+        assert_eq!(
+            app().run_with_args(cli! { library archive empty --yes }, mk_ctx),
+            0
+        );
     }
 
-    // 5. Completion level: in-process, no shell. The candidates come from the
-    //    *argument type*, not from anything written at the command taking it.
     #[test]
-    fn show_completes_ids_from_the_home_directory() {
-        std::env::set_var("APP_HOME", fixture_home_with_ids(&["alice", "alfred", "bo"]));
-        assert_eq!(app().complete(cli! { show al }), ["alice", "alfred"]);
+    fn source_names_complete() {
+        assert_eq!(app().complete(cli! { source b }), ["bandcamp", "beatport"]);
+    }
+
+    #[test]
+    fn the_command_is_still_a_function() {
+        let ctx = Ctx {
+            node: Node::localhost(),
+        };
+        assert!(upload(AudioFile("/no/such/file.flac".into()), &ctx).is_err());
     }
 }
 ```
 
-`App::parse` / `App::into_parser` drive the parser with no process side effects, and
-`App::run_with_args` drives the whole run path and *returns* the code instead of
-touching the process — so `main` itself is covered by ordinary tests. `App::complete`
-is the same idea for completion: it drives `bpaf`'s own completion wire protocol
-in-process, pinned at revision 1 (revision 2 asked for through `run_inner` terminates
-the process — a `bpaf` hazard outside hicli's control, so the seam never asks for
-it), and returns the candidate values a shell would have offered.
+- `cli! { … }` turns the words you would type into an argv, and `cli_test!` writes
+  one `#[test]` per line. **Quote words with hyphens** (`"set-output"`, `"--dry-run"`).
+  Without quotes, Rust splits `set-output` into three tokens.
+- `App::parse` returns the parsed globals and the selected command, in that order, or
+  the error that would be printed. `App::run_with_args` runs everything and returns the exit code
+  that `main` would. `App::complete` returns what the shell would offer.
+- Commands are ordinary functions, so you can call them directly.
+- `App::run` starts every usage line with the binary's name (`Usage: playr playback
+  stop`); the test seams don't know it, so `.bin_name("playr")` makes snapshot tests
+  show what `run` prints.
 
 ## Rules and papercuts
 
-Thirteen things that will otherwise bite you, stated plainly:
+1. **MSRV is Rust 1.99.** `#[group] pub mod x;` needs attribute macros on file-module
+   declarations, stable since 1.99.
+2. **Add `bpaf = "0.9"` to your own dependencies.** `#[derive(Bpaf)]` generates
+   `::bpaf::` paths. Cargo still builds a single copy of bpaf.
+3. **Declare positional parameters last** (see above).
+4. **There are no `Arg` impls for primitives.** Give each value a newtype, with the
+   value's own type inside.
+5. **Completers filter their own candidates, and they only see values that parsed.** A
+   `String` completes from the first keystroke. A value checked by `FromStr`, such
+   as a `Name`, a number or a choice, doesn't complete until the partial word parses.
+   Choose rules that every prefix of a valid value also passes: `b` is a valid
+   `Name`, so `source b<TAB>` offers `bandcamp` and `beatport`. An empty word is not
+   a `Name`, so `source <TAB>` offers only the commands.
+6. **`#[arg(complete = …)]` goes only on a single-field type.** On a multi-field
+   struct or an enum it is a compile error.
+7. **`Globals` doesn't derive `Arg`.** It is parsed once at the top level.
+8. **A `#[group] pub mod x;` that lives in its own file must be declared at the top
+   level of a file**, not inside an inline module. hicli puts `#[path = "x.rs"]` on
+   it, and rustc then looks up a plain `mod helper;` inside `x.rs` next to `x.rs`,
+   not under `x/` (E0583). Until that is fixed, write
+   `#[path = "x/helper.rs"] mod helper;`
+   ([#25](https://github.com/johlrogge/hicli/issues/25)). A nested `#[group] mod` is not
+   affected.
+9. **The attribute keys:**
+   - `#[command(name = "…", alias = "…", hide)]`, plus `default` and `curried` (above).
+   - `#[group(alias = "…", hide)]`, plus `args` and `curried` (above). A group has no
+     `name`: it is the module's.
+   - `#[group(ctx = T)]` names a group's context. Without it, the group takes the
+     first `&T` among its commands, and a command with no `&T` is generic over `Ctx`.
+10. **A bare name in `commands!` names a handle.** A local `Command` value must be
+    parenthesised, `commands![(c)]`. A macro of your own that forwards a list to
+    `app!` or `commands!` should match it as `$($c:tt)*`, not `$c:expr`.
+11. **External subcommands** (`hicli::external(ExternalCommand::new(…))`):
+    - Inside a group, write the group's handle by hand,
+      `#[doc(hidden)] pub fn __hicli_<name>() -> Command<Ctx>`, returning
+      `hicli::group(…)`. Discovery finds items, not values, so an external can't be a
+      discovered child.
+    - Globals go before the external's name. Everything after the name is forwarded
+      to the binary verbatim.
+    - A `--` right after the external's name is eaten by bpaf; the binary only sees
+      the words after it.
+    - See `ExternalCommand` on [docs.rs](https://docs.rs/hicli) for the rest.
 
-1. **Your crate needs its own `bpaf` dependency** — `bpaf = "0.9"`, no features.
-   `#[derive(Bpaf)]` expands to `::bpaf::…` paths, which only resolve against your
-   crate's own extern prelude; `use hicli::bpaf;` does not help. Cargo unifies the
-   two dependencies, so there is still exactly one `bpaf` in the build, and hicli's
-   `pub use bpaf` still gives you the types.
+## Upgrading from 0.1
 
-2. **Positional argument structs come last in a command's parameter list.** The
-   parameters are composed with `bpaf`'s `construct!` in declaration order, and `bpaf`
-   requires every positional to sit at the right-hand end. Declare switches and options
-   first, positionals last. Getting it wrong makes `bpaf` panic when `--help` renders, in any
-   build; in debug builds hicli renders `--help` once when the app is assembled, so the first
-   debug run or test hits it. It is a rule about the *parameter* order only — a `--flag`
-   is still accepted anywhere on the command line.
+Most code builds unchanged. Two things can break:
 
-3. **A bare path in `commands!` is always a handle**, never a value. `commands![event]`
-   means `__hicli_event()`; `commands![other::cli::event]` means
-   `other::cli::__hicli_event()`. A local that already holds a `Command` cannot be
-   written bare — parenthesise it, `commands![(c)]`, or skip the macro and write
-   `App::commands(vec![c])`. `app!`'s list follows the same rule, and a macro of your
-   own that forwards into `commands!` must forward **token trees** (`$($c:tt)*`): an
-   `:expr` capture wraps each element in an invisible group and says "expression" about
-   something whose whole meaning is that it is a *name*.
+- **E0119, conflicting `From` impls:** delete your `impl From<MyError> for Failure`.
+  hicli now converts every error type that implements `std::error::Error`, and keeps
+  the whole chain.
+- **E0282, type annotations needed:** a closure passed by hand to `hicli::command`
+  or `hicli::curried_command` that returns `Ok(())` needs `-> Outcome` written out. `#[command]` functions are
+  not affected.
 
-4. **A `#[group]` file module must be at a file's top level.** Rust resolves `mod x;`
-   inside an inline `mod a { … }` against `a/`, and a proc macro cannot see the inline
-   module path it sits in; nested use is a compile error. Inside an inline module,
-   write `#[group]` on an inline module instead.
+The full list is in [`CHANGELOG.md`](CHANGELOG.md#breaking--upgrading-from-01).
 
-5. **An external subcommand inside a group needs a hand-written handle.** Discovery
-   finds *items*, and an external is a value — there is nothing to mark. Write the
-   group's handle yourself, by the documented convention, and `commands![plugins]`
-   finds it exactly as if `#[group]` had written it:
+## Going further
 
-   ```rust
-   use hicli::{command, commands, Command, ExternalCommand};
+- **API reference:** [docs.rs/hicli](https://docs.rs/hicli).
+- **Runnable examples:** [`examples/playr.rs`](examples/playr.rs) (this README's
+  program; [`examples/playr_minimal.rs`](examples/playr_minimal.rs) is the Quick
+  start), [`examples/demo.rs`](examples/demo.rs) (groups inline),
+  [`examples/files/`](examples/files/) (one file per group), `just demo --help`.
+- **External subcommands**, git style: mount a separate binary as a command by
+  absolute path. It still appears in help and completion, and hicli never scans
+  `$PATH`. See the rules above and `ExternalCommand` on docs.rs.
+- **Writing a command by hand:** `#[command]` and `#[group]` expand to calls to
+  public functions such as `hicli::command`, `hicli::group`,
+  `hicli::curried_command`, `hicli::group_args` and `Node::by_default`. Anything the
+  macros generate, you can also write yourself.
+- **Coming from clap:** the help layout is bpaf's, not clap's. Globals are parsed once
+  and can't be overridden per subcommand. Argument spelling uses bpaf's attributes.
+  `--help` exits 0 and usage errors exit 2.
+- **Why it is designed this way:** [`docs/adr/`](docs/adr/). The main ones are
+  [005](docs/adr/005-verbs-are-the-function.md) (a command is its function),
+  [006](docs/adr/006-an-argument-is-a-type.md) (an argument is a type),
+  [011](docs/adr/011-curried-commands-and-default-commands.md) (curried groups and
+  default commands) and
+  [012](docs/adr/012-command-errors-convert-through-into-failure.md) (errors).
 
-   /// print the version
-   #[command]
-   pub fn version(ctx: &Ctx) {
-       println!("[{}] 0.1.0", ctx.home);
-   }
-
-   /// A never-executed external subcommand, registered by absolute path.
-   fn fmt_tool() -> ExternalCommand {
-       ExternalCommand::new("fmt", "format things", "/opt/bin/app-fmt")
-   }
-
-   /// `hicli` registration handle for the hand-written `plugins` group.
-   #[doc(hidden)]
-   pub fn __hicli_plugins() -> Command<Ctx> {
-       hicli::group(
-           "plugins",
-           "the installed plugins",
-           commands![version, hicli::external(fmt_tool())],
-       )
-   }
-   ```
-
-   Then `commands: [event, plugins]`. The `__hicli_<ident>` name is documented
-   public API for exactly this. (At the *top* level nothing is needed —
-   `commands![…, hicli::external(fmt_tool())]` is an expression, and expressions are
-   allowed there.)
-
-6. **A group's child order is its source order.** Moving a command in `--help` means
-   moving a function. There is no list, so there is nothing else that could say
-   otherwise — and a command that was written can never be a command that was never
-   registered.
-
-7. **The MSRV is Rust 1.99.** `#[group] pub mod x;` needs attribute macros on
-   file-module declarations, stable since 1.99; both crates carry
-   `rust-version = "1.99"`, and older toolchains are not supported.
-
-8. **hicli ships no `Arg` impls.** Not for `String`, not for `u64`, not for
-   `PathBuf`. A primitive in a command's parameter list is a compile error by design —
-   see rule 9 below and
-   [`docs/adr/006-an-argument-is-a-type.md`](docs/adr/006-an-argument-is-a-type.md) — give
-   the value a newtype and derive `Bpaf, Arg` on it instead.
-
-9. **The completer filters; `bpaf` does not.** `bpaf` passes a completer's output
-   through unfiltered — it prefix-filters only the flag names it derives itself. Every
-   `#[arg(complete = f)]` function must filter by the partial word itself
-   (`.filter(|c| c.starts_with(typed))`), or it offers every candidate at every
-   keystroke.
-
-10. **Completion completes what already parses.** `bpaf` hands a completer the
-    **parsed** value, not the raw word, so it only fires when the type parses from a
-    partial: a `String` (or a `Vec<String>` under `some(..)`) parses the empty word, so
-    completion works from the first keystroke; a `u64`, or anything else validated
-    through `.parse(..)`, does not — the empty word never reaches the completer, and
-    the first TAB yields nothing. When that matters, hand-write `Arg::parser()`,
-    complete at the *string* level, and validate after.
-
-11. **`#[arg(complete = …)]` only goes on a single-field type.** A completer on a
-    multi-field struct or an enum would be handed a fully built value with fallbacks
-    for the other fields, could not tell which field is mid-word, and would never fire
-    while another field was being typed — it is a compile error, naming both right
-    answers: make the value a newtype, or complete the field itself with `bpaf`'s own
-    `#[bpaf(complete(f))]`. A composite that wants its parts' completion hand-writes
-    `Arg::parser()`, composing `<Part as Arg>::parser()` with `construct!`.
-
-12. **`Globals` is not an `Arg`, and must not derive it.** Globals are composed at the
-    top level by `App::new`, never as a command's parameter, so a `Globals` type never
-    goes through `Arg::parser` — deriving `Arg` on it would compile and never run.
-
-13. **An option value that starts with `-` (`--since -7`) needs the `adjacent` + `any`
-    pattern, not a plain `argument`.** `bpaf` tokenises `-7` as the short flag `-7`
-    before any parser runs, so a plain `argument` accepts `--since=-7` but rejects the
-    separate-word spelling. The recipe — the flag and an `any` item glued together with
-    `adjacent`, with the separate-word branch `hide()`n so `--help` still shows one
-    `--since=DAYS` line — is written out on `Arg`'s own docs (`src/arg.rs`) and pinned
-    by `tests/hyphen_values.rs`.
-
-A missing `#[derive(Bpaf)]` on a type named `Id` produces one extra, unrelated-looking
-line of rustc noise: it is also the name of `std::process::id`, so the "cannot find
-function `id`" error comes with a "consider importing `std::process::id`" suggestion
-that is never the fix. Ignore it and add the derive.
-
-## Why `bpaf`
-
-`hicli` is built on and **re-exports** [`bpaf`](https://docs.rs/bpaf) (parser-as-value
-combinators). `bpaf`'s parsers are plain values with no process side effects, which is
-what makes first-class in-process testing possible. hicli states the `bpaf` version
-it needs; cargo unifies it with the one you declare (see rule 1 above).
-
-## Design pillars
-
-- **First-class in-process testability** — see "How to test it".
-- **Git-style multi-binary subcommands** with shared help and completion — an
-  external binary can be a subcommand (`app foo` execs the binary registered for `foo`,
-  by absolute path; the git-style `app-foo` naming is a convention, not the contract)
-  while `app --help` and completion still describe it, without ever executing it to
-  find out. Because the manifest is the single source for both the parser and the help
-  text, the test suite proves "nothing is spawned" by registering an external at a path
-  that cannot exist: help, completion and dispatch all still work. The child's exit
-  code comes back as a value (`Success::code(n)`), so `hicli` never exits the process
-  behind your `main`'s back; on Unix a signal death is reported as `128 + N`, like a
-  shell.
-- **Typo / "did you mean?" suggestions.** `bpaf` supplies suggestions for misspelled
-  commands and flags; `hicli` adds a Levenshtein gap-closer over its top-level
-  command registry for the case where `bpaf` stays silent.
-- **Trust-conscious external-subcommand discovery** — no implicit `$PATH` scanning,
-  ever; external subcommands are allowlisted by absolute path.
-
-## Known deltas from clap
-
-1. **Help text is not byte-identical.** `hicli` renders `bpaf`'s layout, not `clap`'s.
-   The target is semantic equivalence — every command and option documented with the
-   same information. If you are migrating a `clap` CLI, assert on substrings of help
-   output, not on whole snapshots.
-2. **Globals live at the top level, not per subcommand.** `hicli` composes
-   `construct!(globals, tree)`, so a global flag is accepted both before and after the
-   subcommand: `app --home x status`, `app status --home x` and even
-   `app event create dir NAME --home x` all parse with `--home` reaching the globals
-   (`bpaf`'s positional parsers stop at a dashed token, so a free-form positional does
-   not swallow it). The real difference from `clap`'s `global = true` is structural:
-   there is no per-subcommand redefinition or propagation — globals are parsed once and
-   handed to `mk_ctx`; a subcommand cannot declare, shadow or override them. The one
-   exception is an **external** subcommand: everything after its name is forwarded to
-   the child verbatim, so a global must *precede* the external's name (`app --home x foo`,
-   never `app foo --home x`).
-3. **A `--` after an external's name is consumed by `bpaf`** and not forwarded to the
-   child. If the child needs a literal `--` in its argv, it has to be passed some other
-   way.
-4. **There is no argument attribute dialect for spelling.** `clap`'s
-   `#[arg(long, short, help = …)]` has no hicli equivalent: arguments are
-   `#[derive(Bpaf)]` structs and the spelling attributes are `bpaf`'s, documented by
-   `bpaf`. `#[command]` reads only the function's ident, its doc comment and its
-   parameter *types*. The one hicli-owned argument attribute, `#[arg(complete = …)]`
-   (ADR-006), goes on the type beside `#[derive(Bpaf)]` and says only how it completes
-   — never how it parses.
-5. **Exit codes are values, not `process::exit`.** `App::run` returns
-   `std::process::ExitCode`, so destructors run and `main` stays in control. Usage
-   errors are remapped to 2 (`bpaf` uses 1) and `--help` to 0.
-
-## Who uses this
-
-The author's own CLIs, in order: [moniker](https://gitlab.johlrogge.rs/) first (its
-handlers are already parser-free), then `mdma-cli`, then `ctx`.
-
-## Getting started (development)
-
-This project runs in an immutable Nix/devenv environment. See `devenv.nix` for the
-full toolchain (stable Rust, pinned).
+## Development
 
 ```sh
-devenv shell        # or: direnv allow, if you use direnv
-just --list          # see all available tasks
-just ci               # fmt-check + clippy + test — what CI runs
-just demo --help      # run the example CLI (groups inline)
-just demo-files --help  # the same CLI with its groups in files
+devenv shell
+just ci      # fmt-check + clippy + test
 ```
 
 ## License
 
-Licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
-  <http://www.apache.org/licenses/LICENSE-2.0>)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
-
-at your option.
+Licensed under either of [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at
+your option.

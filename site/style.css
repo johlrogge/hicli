@@ -1,0 +1,1488 @@
+/* hicli promo site: the worn cover and inside pages of a 1980s
+   maths schoolbook, lying on green cloth.
+   The logo is the cover art; the page supplies the cover it is printed on.
+   No build step, no JS. */
+
+:root {
+  color-scheme: light;
+
+  /* the cloth and the board */
+  --felt: oklch(0.64 0.13 128);
+  --page-white: oklch(0.985 0.005 95);
+
+  /* type colours */
+  --ink: oklch(0.2 0.012 260);
+  --ink-soft: oklch(0.38 0.015 260);
+  --pencil: oklch(0.47 0.01 260);
+  --navy: oklch(0.38 0.1 258);
+
+  /* the book's flat 80s colours */
+  --green: oklch(0.69 0.17 143);        /* cover green  #45b649 */
+  --green-ink: oklch(0.52 0.16 143);    /* the same green, dark enough for large text */
+  --orange: oklch(0.73 0.17 62);        /* #f39200 */
+  --yellow: oklch(0.89 0.18 100);       /* rainbow yellow #f7e017 */
+  --sky: oklch(0.72 0.13 230);          /* rainbow blue #39b4e6 */
+  --teacher: oklch(0.56 0.2 27);        /* red pen #d6262b */
+
+  /* inside-page frames and their numbered circles */
+  --frame-green: oklch(0.74 0.17 138);
+  --frame-blue: oklch(0.7 0.13 232);
+  --dot-green: oklch(0.5 0.15 143);
+  --dot-blue: oklch(0.5 0.13 242);
+
+  /* the computer screen from the logo */
+  --bezel: oklch(0.87 0.03 85);
+  --screen: oklch(0.24 0.04 258);
+  --screen-text: oklch(0.93 0.025 90);
+
+  /* type */
+  --f-display: "Rubik", "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
+  --f-body: "Rubik", "Trebuchet MS", "Segoe UI", sans-serif;
+  --f-label: "Archivo", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --f-hand: "Patrick Hand", "Comic Sans MS", cursive;
+  --f-mono: "Courier Prime", "Courier New", ui-monospace, monospace;
+
+  /* space (4pt scale) */
+  --space-2xs: 0.25rem;
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+  --space-3xl: 4rem;
+
+  --gutter: clamp(0.75rem, 4vw, 3rem);
+  --measure: 40rem;
+
+  /* defaults for anything outside a framed page */
+  --frame: var(--frame-green);
+  --dot: var(--dot-green);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: var(--space-xl);
+  overflow-x: clip;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* Green cloth, as in the photo of the book. */
+body {
+  margin: 0;
+  overflow-x: clip;
+  color: var(--ink);
+  background-color: var(--felt);
+  background-image:
+    /* dark fibres */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='f'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9 0.45' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.12 0 0 0 0 0.2 0 0 0 0 0.04 0.7 0 0 0 -0.32'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23f)'/%3E%3C/svg%3E"),
+    /* light fibres */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='l'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.45 0.95' numOctaves='2' seed='9' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.85 0 0 0 0 0.92 0 0 0 0 0.6 0.6 0 0 0 -0.37'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23l)'/%3E%3C/svg%3E"),
+    /* slow unevenness in the cloth */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='700' height='700'%3E%3Cfilter id='b'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.005' numOctaves='2' seed='4' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.2 0 0 0 0 0.05 0.45 0 0 0 -0.12'/%3E%3C/filter%3E%3Crect width='700' height='700' filter='url(%23b)'/%3E%3C/svg%3E");
+  background-size: 180px 180px, 160px 160px, 700px 700px;
+  font-family: var(--f-body);
+  font-size: clamp(1.0625rem, 1rem + 0.2vw, 1.15rem);
+  line-height: 1.6;
+}
+
+/* The cloth darkens toward the edges of the view. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 80% 70% at 50% 40%, transparent 50%, oklch(0.3 0.08 130 / 0.35) 100%);
+}
+
+body > * {
+  position: relative;
+  z-index: 1;
+}
+
+.defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Base typography                                                     */
+/* ------------------------------------------------------------------ */
+
+h1,
+h2,
+h3 {
+  font-family: var(--f-display);
+  color: var(--ink);
+  margin: 0;
+  text-wrap: balance;
+}
+
+h2 {
+  font-weight: 900;
+  font-size: clamp(2rem, 1.4rem + 2.6vw, 3.25rem);
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+}
+
+h3 {
+  font-weight: 700;
+  font-size: clamp(1.2rem, 1.1rem + 0.45vw, 1.45rem);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--navy);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.18em;
+  text-decoration-color: var(--green);
+}
+
+a:hover {
+  color: var(--teacher);
+  text-decoration-color: currentColor;
+}
+
+:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+code {
+  font-family: var(--f-mono);
+  font-size: 0.92em;
+}
+
+:not(pre) > code {
+  background: oklch(0.93 0.02 95);
+  padding: 0.05em 0.3em;
+  border-radius: 0.25em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  overflow-wrap: anywhere;
+}
+
+h3 code {
+  font-size: 0.95em;
+}
+
+mark {
+  color: inherit;
+  background: color-mix(in oklch, var(--yellow) 65%, white);
+  padding: 0 0.2em;
+}
+
+.skip {
+  position: absolute;
+  left: var(--space-md);
+  top: var(--space-md);
+  z-index: 100;
+  padding: var(--space-xs) var(--space-md);
+  background: var(--ink);
+  color: var(--page-white);
+  border-radius: 0.5rem;
+  transform: translateY(-200%);
+}
+
+.skip:focus {
+  transform: none;
+}
+
+/* Hand-written marks */
+
+.pencil-note {
+  font-family: var(--f-hand);
+  font-size: clamp(1.4rem, 1.2rem + 0.9vw, 1.9rem);
+  line-height: 1.15;
+  color: var(--pencil);
+}
+
+.pencil-note--red {
+  color: var(--teacher);
+}
+
+.pencil-note code {
+  background: none;
+  padding: 0;
+  font-size: 0.8em;
+}
+
+/* The teacher's gold-foil star sticker, on good work. */
+.star {
+  position: absolute;
+  top: -1.1rem;
+  right: -0.6rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  pointer-events: none;
+}
+
+.star--inline,
+.key__answer .star {
+  position: static;
+  display: inline-block;
+  width: 1.9rem;
+  height: 1.9rem;
+  margin-left: 0.3em;
+  vertical-align: -0.35em;
+}
+
+.redline {
+  white-space: nowrap;
+  padding-bottom: 0.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 8'%3E%3Cpath d='M0 5 Q10 1 20 5 T40 5' fill='none' stroke='%23d6262b' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E") repeat-x 0 100% / 1.1em 0.3em;
+}
+
+/* Numbered circles, as on the exercise pages. */
+.num {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  min-width: 2.1em;
+  height: 2.1em;
+  padding: 0 0.5em;
+  font-family: var(--f-display);
+  font-weight: 800;
+  font-size: 0.8em;
+  line-height: 1;
+  letter-spacing: 0;
+  color: var(--page-white);
+  background: var(--dot);
+  border-radius: 999px;
+}
+
+/* ------------------------------------------------------------------ */
+/* The desk: the cover                                                 */
+/* ------------------------------------------------------------------ */
+
+.desk {
+  padding: clamp(1.25rem, 4vw, 3.5rem) var(--gutter) var(--space-2xl);
+  display: grid;
+  justify-items: center;
+  gap: clamp(2rem, 5vw, 3.5rem);
+}
+
+.cover-wrap {
+  width: min(100%, 60rem);
+  container-type: inline-size;
+  /* follows the dog-eared outline, unlike box-shadow */
+  filter:
+    drop-shadow(0 1.4rem 1.6rem oklch(0.25 0.07 130 / 0.45))
+    drop-shadow(0 2px 2px oklch(0.2 0.05 130 / 0.35));
+}
+
+.cover {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  justify-items: center;
+  gap: clamp(1.25rem, 3.5cqi, 2.25rem);
+  padding: clamp(1.1rem, 4.5cqi, 3rem) clamp(1rem, 6cqi, 4rem) clamp(1.25rem, 4cqi, 2.75rem);
+  border-radius: 1.1rem 0.45rem 0 0.7rem;
+  /* the bottom-right corner is folded over (see .cover__corner--br) */
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7cqi), calc(100% - 7cqi) 100%, 0 100%);
+  background:
+    /* scuffed, fluffy corners where the gloss has worn off */
+    radial-gradient(circle at 100% 0, oklch(0.9 0.02 85 / 0.9) 0 0.5cqi, oklch(0.85 0.03 80 / 0.35) 1.6cqi, transparent 4cqi),
+    radial-gradient(circle at 0 100%, oklch(0.9 0.02 85 / 0.9) 0 0.7cqi, oklch(0.84 0.03 80 / 0.4) 2cqi, transparent 5cqi),
+    /* yellowing only at the edges; the middle stays clean white */
+    radial-gradient(ellipse 80% 75% at 50% 48%, transparent 72%, oklch(0.9 0.05 85 / 0.5) 92%, oklch(0.84 0.06 80 / 0.7) 100%),
+    var(--page-white);
+  box-shadow:
+    inset 0 0 0 1px oklch(0.86 0.02 85),
+    inset 0 0 1.75rem oklch(0.6 0.05 75 / 0.14);
+}
+
+/* The spine hinge: a soft vertical crease near the left edge. */
+.cover::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2.4cqi;
+  width: 5px;
+  pointer-events: none;
+  background: linear-gradient(to right, oklch(0.55 0.03 80 / 0.16), oklch(1 0 0 / 0.65), oklch(0.55 0.03 80 / 0.12));
+}
+
+/* Scratches and scuffs in the gloss, kept to the edges and corners so the
+   middle of the cover, behind the logo, stays clean white. */
+.cover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.4;
+  -webkit-mask: radial-gradient(ellipse 80% 75% at 50% 48%, transparent 62%, #000 92%);
+  mask: radial-gradient(ellipse 80% 75% at 50% 48%, transparent 62%, #000 92%);
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='320'%3E%3Cfilter id='s'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012 0.5' numOctaves='2' seed='21' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.55 0 0 0 0 0.5 0 0 0 0 0.42 1.6 0 0 0 -1.05'/%3E%3C/filter%3E%3Crect width='320' height='320' filter='url(%23s)'/%3E%3C/svg%3E"),
+    /* a faint crease running in from the bottom-left corner */
+    linear-gradient(32deg, transparent 0 9%, oklch(0.55 0.03 80 / 0.25) 9.1%, oklch(1 0 0 / 0.8) 9.3%, transparent 9.6%);
+}
+
+.cover > * {
+  position: relative;
+  z-index: 1;
+}
+
+.cover > .stain,
+.cover > .cover__corner {
+  position: absolute;
+}
+
+.cover__corner {
+  pointer-events: none;
+}
+
+/* Worn-through top-left corner. */
+.cover__corner--tl {
+  top: 0;
+  left: 0;
+  width: 10cqi;
+  height: 10cqi;
+  z-index: 2;
+  background: radial-gradient(circle at 0 0, oklch(0.9 0.02 85) 0 1.2cqi, oklch(0.82 0.03 80 / 0.55) 2.4cqi, transparent 6cqi);
+}
+
+/* Dog-ear: the folded-over flap, showing the duller back of the board. */
+.cover__corner--br {
+  right: 0;
+  bottom: 0;
+  width: 7cqi;
+  height: 7cqi;
+  z-index: 2;
+  background:
+    linear-gradient(to top left, transparent 50%, oklch(0.55 0.03 80 / 0.35) 50%, transparent 53%),
+    linear-gradient(to top left, transparent 50%, oklch(0.88 0.025 85) 50%);
+  filter: drop-shadow(-2px -2px 2px oklch(0.3 0.03 80 / 0.25));
+}
+
+.stain {
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+
+/* One coffee ring, mostly off the top-right corner, clear of the art and text. */
+.stain--cover {
+  top: -17cqi;
+  right: -17cqi;
+  width: 40cqi;
+  height: 40cqi;
+  z-index: 3;
+}
+
+.cover__top {
+  justify-self: stretch;
+  display: flex;
+  align-items: baseline;
+  gap: clamp(1rem, 6cqi, 4rem);
+  padding-inline: 3cqi;
+}
+
+/* The small grade label at the top of the original cover. */
+.cover__grade {
+  font-family: var(--f-label);
+  font-weight: 900;
+  font-stretch: 85%;
+  font-size: clamp(1rem, 2.6cqi, 1.5rem);
+  letter-spacing: 0.05em;
+  color: var(--green-ink);
+}
+
+/* A pupil's name in pencil. */
+.cover__pencil {
+  font-family: var(--f-hand);
+  font-size: clamp(1.15rem, 3cqi, 1.75rem);
+  color: oklch(0.5 0.01 260 / 0.8);
+}
+
+.cover__scrawl {
+  display: inline-block;
+  padding: 0 1.4em 0 0.4em;
+  border-bottom: 1.5px solid oklch(0.5 0.01 260 / 0.55);
+}
+
+/* The logo is the cover art, printed straight onto the white board. */
+.cover__art {
+  width: min(100%, 80cqi);
+  aspect-ratio: 3 / 2;
+}
+
+.cover__art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.cover__text {
+  width: min(100%, 42rem);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-lg);
+  justify-items: center;
+  text-align: center;
+}
+
+.cover__title {
+  font-weight: 900;
+  font-size: clamp(2.25rem, 1.3rem + 4.4vw, 4.25rem);
+  line-height: 0.98;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+}
+
+.green {
+  color: var(--green-ink);
+}
+
+.lede {
+  font-size: 1.2em;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.answer--install {
+  justify-self: stretch;
+  text-align: left;
+}
+
+.links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-sm);
+}
+
+.btn {
+  display: inline-block;
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 1.05rem;
+  line-height: 1;
+  padding: 0.8rem 1.2rem 0.75rem;
+  color: var(--ink);
+  background: var(--page-white);
+  border: 2px solid var(--ink);
+  border-radius: 0.6rem;
+  box-shadow: 3px 3px 0 var(--ink);
+  text-decoration: none;
+}
+
+.btn--primary {
+  color: var(--page-white);
+  background: var(--ink);
+  box-shadow: 3px 3px 0 var(--green);
+}
+
+.btn:hover {
+  color: var(--ink);
+  background: color-mix(in oklch, var(--yellow) 55%, white);
+}
+
+.btn--primary:hover {
+  color: var(--page-white);
+  background: oklch(0.3 0.03 260);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .btn {
+    transition: transform 160ms cubic-bezier(0.25, 1, 0.5, 1), box-shadow 160ms cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  .btn:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 var(--ink);
+  }
+
+  .btn--primary:hover {
+    box-shadow: 4px 4px 0 var(--green);
+  }
+
+  .btn:active {
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0 var(--ink);
+  }
+}
+
+.fineprint {
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  max-width: 34rem;
+}
+
+/* Like the authors' names along the bottom of the original cover. */
+.cover__authors {
+  font-family: var(--f-label);
+  font-weight: 900;
+  font-stretch: 85%;
+  font-size: clamp(0.95rem, 2.5cqi, 1.4rem);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: center;
+  word-spacing: 0.15em;
+}
+
+.cover__authors span {
+  color: var(--green-ink);
+  padding-inline: 0.2em;
+}
+
+/* ------------------------------------------------------------------ */
+/* Inside pages                                                        */
+/* ------------------------------------------------------------------ */
+
+.sheet {
+  position: relative;
+  overflow: hidden;
+  width: min(100% - 2 * var(--gutter), 72rem);
+  margin-inline: auto;
+  padding: clamp(0.6rem, 2.2vw, 1.75rem) clamp(0.6rem, 2.2vw, 1.75rem) clamp(1.8rem, 3.5vw, 2.75rem);
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.4 0 0 0 0 0.35 0 0 0 0 0.25 0.22 0 0 0 -0.1'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E"),
+    radial-gradient(ellipse 80% 75% at 50% 45%, transparent 70%, oklch(0.9 0.04 85 / 0.5) 100%),
+    var(--page-white);
+  border-radius: 3px;
+  box-shadow:
+    0 1.2rem 1.8rem -1rem oklch(0.25 0.07 130 / 0.5),
+    0 2px 3px oklch(0.2 0.05 130 / 0.3);
+}
+
+main {
+  display: grid;
+  gap: clamp(2rem, 5vw, 3.5rem);
+  padding-bottom: clamp(2rem, 5vw, 3.5rem);
+}
+
+
+.sheet--green {
+  --frame: var(--frame-green);
+  --dot: var(--dot-green);
+}
+
+.sheet--blue {
+  --frame: var(--frame-blue);
+  --dot: var(--dot-blue);
+}
+
+.sheet__frame {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2xl);
+  border: clamp(6px, 0.9vw, 11px) solid var(--frame);
+  border-radius: 2px;
+  padding: clamp(1.25rem, 4.5vw, 3.5rem);
+}
+
+.sheet__folio {
+  position: absolute;
+  bottom: clamp(0.35rem, 1vw, 0.75rem);
+  right: clamp(1rem, 3vw, 2rem);
+  font-family: var(--f-display);
+  font-weight: 500;
+  font-size: 0.95rem;
+  color: var(--ink-soft);
+}
+
+.sheet:nth-of-type(even) .sheet__folio {
+  right: auto;
+  left: clamp(1rem, 3vw, 2rem);
+}
+
+.sheet--contents {
+  width: min(100%, 46rem);
+}
+
+.sheet--contents .sheet__frame {
+  gap: var(--space-md);
+}
+
+/* Contents */
+
+.toc {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.toc__title {
+  font-weight: 900;
+  font-size: 1.75rem;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+}
+
+.toc ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.toc a {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+  padding: var(--space-2xs) 0;
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.toc a:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--frame);
+}
+
+.toc .num {
+  font-size: 1rem;
+}
+
+/* The little cartoon kid in the corner, here as a stamp. */
+.sheet__kid {
+  position: absolute;
+  z-index: 2;
+  top: clamp(0.25rem, 1.5vw, 1rem);
+  right: clamp(0.75rem, 4vw, 3rem);
+  width: clamp(6.5rem, 17vw, 12rem);
+}
+
+.sheet--kid .chapter__head {
+  padding-right: clamp(6rem, 19vw, 12rem);
+}
+
+/* ------------------------------------------------------------------ */
+/* Chapter furniture                                                   */
+/* ------------------------------------------------------------------ */
+
+.chapter__head {
+  display: grid;
+  gap: var(--space-xs);
+  max-width: 48rem;
+}
+
+.chapter__label {
+  font-family: var(--f-label);
+  font-weight: 900;
+  font-stretch: 85%;
+  font-size: 1rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dot);
+}
+
+.chapter__head h2::after {
+  content: "";
+  display: block;
+  width: 4.5rem;
+  height: 7px;
+  margin-top: var(--space-sm);
+  background: var(--frame);
+}
+
+.chapter__intro {
+  font-size: 1.15em;
+  color: var(--ink-soft);
+  max-width: var(--measure);
+  margin-top: var(--space-xs);
+}
+
+.prose {
+  max-width: var(--measure);
+  display: grid;
+  gap: var(--space-md);
+}
+
+/* Versus */
+
+.versus {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-lg);
+}
+
+@media (min-width: 52rem) {
+  .versus {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2xl);
+  }
+}
+
+.versus__col {
+  padding: var(--space-lg);
+  border-radius: 6px;
+}
+
+.versus__col h3 {
+  margin-bottom: var(--space-sm);
+}
+
+.versus__col ul {
+  margin: 0;
+  padding-left: 1.6rem;
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.versus__col--them {
+  border: 2px dashed oklch(0.75 0.01 260);
+  color: var(--ink-soft);
+}
+
+.versus__col--them h3 {
+  color: var(--ink-soft);
+}
+
+.versus__col--them li::marker {
+  content: "✗  ";
+  color: var(--teacher);
+  font-weight: 700;
+}
+
+.versus__col--us {
+  border: 3px solid var(--frame);
+  background: color-mix(in oklch, var(--frame) 14%, var(--page-white));
+}
+
+.versus__col--us li::marker {
+  content: "✓  ";
+  color: var(--dot);
+  font-weight: 700;
+}
+
+/* Worked example */
+
+.worked {
+  border-top: 6px solid var(--frame);
+  padding-top: var(--space-lg);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-xl);
+}
+
+.worked__head {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.worked__kicker {
+  justify-self: start;
+  font-family: var(--f-label);
+  font-weight: 900;
+  font-stretch: 85%;
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--page-white);
+  background: var(--dot);
+  padding: 0.25rem 0.75rem 0.2rem;
+  border-radius: 999px;
+}
+
+.worked__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-xl);
+  align-items: start;
+}
+
+@media (min-width: 60rem) {
+  .worked__body {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.worked__steps {
+  list-style: none;
+  counter-reset: step;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-md);
+}
+
+@media (min-width: 52rem) {
+  .worked__steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-xl);
+  }
+}
+
+.worked__steps li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 2.1rem 1fr;
+  gap: var(--space-sm);
+  align-items: start;
+}
+
+.worked__steps li::before {
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  font-family: var(--f-display);
+  font-weight: 800;
+  color: var(--page-white);
+  background: var(--dot);
+  border-radius: 50%;
+}
+
+/* ------------------------------------------------------------------ */
+/* Code: answers on the page, and the computer screen                  */
+/* ------------------------------------------------------------------ */
+
+figure {
+  margin: 0;
+  min-width: 0;
+}
+
+pre {
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--f-mono);
+  font-size: clamp(0.8rem, 0.76rem + 0.2vw, 0.9rem);
+  line-height: 1.55;
+  tab-size: 4;
+}
+
+pre code {
+  font-size: 1em;
+}
+
+.answer {
+  position: relative;
+  background: var(--page-white);
+  border: 2px solid var(--frame);
+  border-radius: 4px;
+  padding: var(--space-md) var(--space-lg);
+}
+
+.answer pre {
+  color: var(--ink);
+}
+
+.answer figcaption,
+.screen figcaption {
+  font-family: var(--f-label);
+  font-weight: 800;
+  font-stretch: 85%;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: var(--space-xs);
+}
+
+/* Syntax: a little colour, the way a textbook prints it. */
+.t-doc {
+  background: color-mix(in oklch, var(--yellow) 45%, white);
+  color: oklch(0.34 0.07 70);
+}
+
+.t-a {
+  color: oklch(0.5 0.19 28);
+}
+
+.t-k {
+  color: var(--navy);
+  font-weight: 700;
+}
+
+.t-f {
+  color: oklch(0.42 0.12 255);
+  font-weight: 700;
+}
+
+.t-s {
+  color: oklch(0.43 0.12 145);
+}
+
+.t-n {
+  color: oklch(0.45 0.13 300);
+}
+
+.t-c {
+  color: var(--pencil);
+  font-style: italic;
+}
+
+.t-h {
+  color: var(--navy);
+  font-weight: 700;
+}
+
+.screen {
+  background: var(--bezel);
+  border: 2px solid var(--ink);
+  border-radius: 1rem;
+  padding: var(--space-sm);
+}
+
+.screen figcaption {
+  margin: 0 0 var(--space-xs) var(--space-2xs);
+  color: oklch(0.38 0.03 80);
+}
+
+.screen pre {
+  background: var(--screen);
+  color: var(--screen-text);
+  border-radius: 0.6rem;
+  padding: var(--space-md) var(--space-lg);
+  box-shadow: inset 0 0 1.5rem oklch(0.1 0.03 258 / 0.7);
+  /* terminal output wraps inside the screen instead of running past it */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.worked .screen pre {
+  padding-inline: var(--space-md);
+  font-size: clamp(0.78rem, 0.74rem + 0.15vw, 0.85rem);
+}
+
+.screen .t-p {
+  color: oklch(0.82 0.08 230);
+}
+
+.screen .t-hl {
+  color: var(--yellow);
+}
+
+.screen .t-cmd {
+  color: oklch(0.85 0.1 60);
+}
+
+.screen--small pre {
+  padding: var(--space-sm) var(--space-md);
+}
+
+/* ------------------------------------------------------------------ */
+/* Stamps                                                              */
+/* ------------------------------------------------------------------ */
+
+.stamps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-lg) var(--space-xl);
+}
+
+.stamp-wrap {
+  filter: drop-shadow(1px 2px 1.5px oklch(0.3 0.03 80 / 0.35));
+}
+
+
+/* A postage stamp: a white border bitten into perforations (the mask's
+   first layer punches holes along the border-box edge; the second keeps
+   everything inside the border solid), a white inner ring, then the face. */
+.stamp {
+  --r: 5px;
+  --ring: 6px;
+  --face: var(--page-white);
+  display: grid;
+  border: var(--r) solid var(--page-white);
+  padding: calc(var(--ring) + 0.4rem);
+  background: var(--face);
+  box-shadow: inset 0 0 0 var(--ring) var(--page-white);
+  -webkit-mask:
+    radial-gradient(var(--r) at var(--r) var(--r), #0000 97%, #000) calc(-1 * var(--r)) calc(-1 * var(--r)) / calc(2 * var(--r)) calc(2 * var(--r)) round border-box,
+    linear-gradient(#000 0 0) padding-box;
+  mask:
+    radial-gradient(var(--r) at var(--r) var(--r), #0000 97%, #000) calc(-1 * var(--r)) calc(-1 * var(--r)) / calc(2 * var(--r)) calc(2 * var(--r)) round border-box,
+    linear-gradient(#000 0 0) padding-box;
+}
+
+.stamp--blue,
+.stamp--green,
+.stamp--orange {
+  width: 8rem;
+  min-height: 9rem;
+  align-content: center;
+  justify-items: center;
+  gap: var(--space-2xs);
+  text-align: center;
+}
+
+.stamp--blue { --face: var(--dot-blue); color: var(--page-white); }
+.stamp--green { --face: var(--dot-green); color: var(--page-white); }
+.stamp--orange { --face: var(--orange); color: var(--ink); }
+
+.stamp__big {
+  font-family: var(--f-mono);
+  font-weight: 700;
+  font-size: 2.1rem;
+  line-height: 1;
+}
+
+.stamp__small {
+  font-family: var(--f-label);
+  font-weight: 900;
+  font-stretch: 85%;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The logo stamp: the transparent logo on a white face. */
+.stamp--print {
+  --r: 4px;
+  --ring: 4px;
+  --face: var(--page-white);
+  padding: var(--ring);
+}
+
+.stamp--print img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* ------------------------------------------------------------------ */
+/* Lessons (chapter 2)                                                 */
+/* ------------------------------------------------------------------ */
+
+.lesson {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-lg) var(--space-2xl);
+  align-items: start;
+  padding-top: var(--space-xl);
+  border-top: 2px dotted color-mix(in oklch, var(--frame) 70%, white);
+}
+
+@media (min-width: 58rem) {
+  .lesson {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  }
+
+  .lesson--flip > .lesson__text {
+    order: 2;
+  }
+}
+
+.lesson__text {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-md);
+  max-width: var(--measure);
+}
+
+.lesson__text h3 {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+.stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-lg);
+}
+
+.lesson > .pencil-note {
+  align-self: center;
+  justify-self: center;
+  padding: var(--space-md) var(--space-lg);
+}
+
+/* ------------------------------------------------------------------ */
+/* Exercises with key                                                */
+/* ------------------------------------------------------------------ */
+
+.exercise {
+  position: relative;
+  max-width: 42rem;
+  padding: var(--space-lg);
+  /* the only squared paper on the page: inside the exercise boxes */
+  background:
+    linear-gradient(to right, color-mix(in oklch, var(--frame) 22%, transparent) 1px, transparent 1px) 0 0 / 22px 22px,
+    linear-gradient(to bottom, color-mix(in oklch, var(--frame) 22%, transparent) 1px, transparent 1px) 0 0 / 22px 22px,
+    var(--page-white);
+  border: 3px solid var(--frame);
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-sm);
+}
+
+.exercise h3 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+.exercise--small {
+  max-width: 34rem;
+}
+
+.key {
+  margin-top: var(--space-xs);
+}
+
+.key summary {
+  cursor: pointer;
+  font-family: var(--f-label);
+  font-weight: 900;
+  font-stretch: 85%;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dot);
+  width: fit-content;
+}
+
+.key__hint {
+  font-family: var(--f-hand);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 1.1rem;
+  color: var(--pencil);
+}
+
+/* The answer, written in pencil. */
+.key__answer {
+  margin-top: var(--space-sm);
+  font-family: var(--f-hand);
+  font-size: 1.45rem;
+  line-height: 1.3;
+  color: oklch(0.36 0.01 260);
+}
+
+.key__answer code {
+  font-size: 0.75em;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chapter 3: the stance and the rules                                 */
+/* ------------------------------------------------------------------ */
+
+.stance {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-xl);
+}
+
+@media (min-width: 60rem) {
+  .stance {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: var(--space-3xl);
+    align-items: start;
+  }
+
+  .stance__big {
+    grid-row: span 2;
+  }
+}
+
+.stance__big {
+  font-family: var(--f-display);
+  font-weight: 900;
+  font-size: clamp(1.9rem, 1.3rem + 2.6vw, 3.1rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.stance__quote {
+  margin: 0;
+  position: relative;
+  padding-left: 2.6rem;
+  font-style: italic;
+  font-size: 1.1em;
+}
+
+.stance__quote::before {
+  content: "“";
+  position: absolute;
+  left: 0;
+  top: -0.5rem;
+  font-family: var(--f-display);
+  font-style: normal;
+  font-weight: 900;
+  font-size: 4rem;
+  line-height: 1;
+  color: var(--frame);
+}
+
+.stance__quote footer {
+  margin-top: var(--space-xs);
+  font-style: normal;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+
+.stance > p:last-child {
+  max-width: var(--measure);
+}
+
+.rules {
+  list-style: none;
+  counter-reset: rule;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-xl) var(--space-3xl);
+}
+
+@media (min-width: 56rem) {
+  .rules {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.rules li {
+  counter-increment: rule;
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  column-gap: var(--space-md);
+  row-gap: var(--space-2xs);
+}
+
+.rules li::before {
+  content: counter(rule);
+  grid-row: span 2;
+  display: grid;
+  place-items: center;
+  width: 2.3rem;
+  height: 2.3rem;
+  font-family: var(--f-display);
+  font-weight: 800;
+  font-size: 1.1rem;
+  color: var(--page-white);
+  background: var(--dot);
+  border-radius: 50%;
+}
+
+.rules h3 {
+  font-size: 1.2rem;
+}
+
+.rules p {
+  color: var(--ink-soft);
+}
+
+.pencil-note--end {
+  justify-self: end;
+  text-align: right;
+}
+
+/* A coffee ring at the page's corner, clipped by the page edge. */
+.stain--corner {
+  display: none;
+}
+
+@media (min-width: 40rem) {
+  .stain--corner {
+    display: block;
+    position: absolute;
+    left: -8rem;
+    bottom: -8rem;
+    width: 16rem;
+    height: 16rem;
+    z-index: 2;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Chapter 4: testing                                                  */
+/* ------------------------------------------------------------------ */
+
+.testing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2xl);
+  align-items: start;
+}
+
+@media (min-width: 62rem) {
+  .testing {
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  }
+}
+
+.testing__text {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-lg);
+  max-width: var(--measure);
+}
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.checklist li {
+  position: relative;
+  padding-left: 1.9rem;
+}
+
+.checklist li::before {
+  content: "";
+  position: absolute;
+  left: 0.2rem;
+  top: 0.45em;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 50%;
+  background: var(--dot);
+}
+
+/* ------------------------------------------------------------------ */
+/* Colophon, on the cloth                                              */
+/* ------------------------------------------------------------------ */
+
+.colophon {
+  width: min(100% - 2 * var(--gutter), 72rem);
+  margin-inline: auto;
+  padding: var(--space-lg) 0 var(--space-3xl);
+  color: var(--ink);
+}
+
+.colophon__grid {
+  max-width: 46rem;
+  display: grid;
+  gap: var(--space-md) var(--space-2xl);
+}
+
+@media (min-width: 44rem) {
+  .colophon__grid {
+    grid-template-columns: auto 1fr;
+    align-items: center;
+  }
+
+  .colophon__fine {
+    grid-column: 1 / -1;
+  }
+}
+
+.colophon__mark {
+  font-family: var(--f-display);
+  font-weight: 900;
+  font-size: 2.4rem;
+  line-height: 1;
+}
+
+.colophon__links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-lg);
+  font-weight: 700;
+}
+
+.colophon a {
+  color: var(--ink);
+  text-decoration-color: var(--ink);
+}
+
+.colophon a:hover {
+  color: var(--ink);
+  text-decoration-thickness: 3px;
+}
+
+.colophon__links a {
+  display: inline-block;
+  padding-block: var(--space-2xs);
+}
+
+.colophon__fine {
+  font-size: 0.95rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Small screens                                                       */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 40rem) {
+  .answer {
+    padding: var(--space-sm);
+  }
+
+  .screen pre {
+    padding: var(--space-sm);
+  }
+
+  .exercise {
+    padding: var(--space-md);
+  }
+
+  .star {
+    width: 2.2rem;
+    height: 2.2rem;
+    right: -0.2rem;
+  }
+
+  .stamp--blue,
+  .stamp--green,
+  .stamp--orange {
+    width: 6.5rem;
+    min-height: 7.5rem;
+  }
+
+  .stamp__big {
+    font-size: 1.7rem;
+  }
+}
+
+@media print {
+  body {
+    background: white;
+  }
+
+  body::before,
+  .stain,
+  .cover::after {
+    display: none;
+  }
+}

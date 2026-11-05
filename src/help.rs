@@ -41,9 +41,115 @@ pub(crate) fn verbatim(text: &str) -> Doc {
     doc
 }
 
+/// A usage line for `OptionParser::with_usage`: `Usage:`, then the `shown`
+/// words — the binary's name, the command path, each curried value's metavar
+/// — then the part `bpaf` derives from the parser's own items (ADR-013).
+///
+/// Every gap is one space, and there is never a trailing one: the derived
+/// part is appended only when it renders to something. `bpaf`'s own line
+/// writes "word + space" per path word, so a command without arguments ends
+/// in a space (#28); and it names the binary only via `Args::set_name`, which
+/// hicli never calls (ADR-009 §3), so it names none (#21).
+///
+/// Styled as `bpaf` styles its own: `Usage` emphasised, the words literal.
+///
+/// `bare_default` is set for a group whose default command takes no
+/// arguments (#19): naming a command is then optional, but `bpaf` drops an
+/// alternative with no items from the derived part, which says `COMMAND ...`
+/// as if one were required. The derived part is bracketed, `[COMMAND ...]`.
+pub(crate) fn usage_line(shown: Vec<String>, bare_default: bool) -> impl Fn(Doc) -> Doc {
+    move |derived| {
+        let mut u = Doc::default();
+        u.emphasis("Usage");
+        u.text(":");
+        for word in &shown {
+            u.text(" ");
+            u.literal(word);
+        }
+        if !derived.monochrome(false).is_empty() {
+            u.text(" ");
+            if bare_default {
+                u.text("[");
+                u.doc(&derived);
+                u.text("]");
+            } else {
+                u.doc(&derived);
+            }
+        }
+        u
+    }
+}
+
+/// The header of a group whose default command takes no arguments (#19): the
+/// default's one-line `help`, a blank line, then the group's `details`.
+///
+/// `bpaf` lists a default's help line only as the title of its options, so a
+/// default without any would never be described. The line comes first because
+/// plain `--help` prints only a header's first paragraph (ADR-008); the blank
+/// line is two hard breaks, never `"\n\n"`, so it does not end that paragraph.
+pub(crate) fn default_header(help: &str, details: Option<&str>) -> Doc {
+    let mut doc = Doc::default();
+    doc.doc(&Doc::from(help));
+    if let Some(details) = details {
+        doc.text("\n \n ");
+        doc.doc(&Doc::from(details));
+    }
+    doc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn words(ws: &[&str]) -> Vec<String> {
+        ws.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn a_usage_line_without_a_derived_part_has_no_trailing_space() {
+        let line = usage_line(words(&["playr", "playback", "stop"]), false)(Doc::default());
+        assert_eq!(line.monochrome(false), "Usage: playr playback stop");
+    }
+
+    #[test]
+    fn a_usage_line_without_words_is_usage_and_the_derived_part() {
+        let mut derived = Doc::default();
+        derived.text("[--node=HOST] COMMAND ...");
+        let line = usage_line(Vec::new(), false)(derived);
+        assert_eq!(line.monochrome(false), "Usage: [--node=HOST] COMMAND ...");
+    }
+
+    #[test]
+    fn a_usage_line_joins_words_and_the_derived_part_by_one_space() {
+        let mut derived = Doc::default();
+        derived.text("NAME");
+        let line = usage_line(words(&["playr", "set-output"]), false)(derived);
+        assert_eq!(line.monochrome(false), "Usage: playr set-output NAME");
+    }
+
+    #[test]
+    fn a_bare_defaults_usage_line_brackets_the_derived_part() {
+        let mut derived = Doc::default();
+        derived.text("COMMAND ...");
+        let line = usage_line(words(&["playr", "library", "archive"]), true)(derived);
+        assert_eq!(
+            line.monochrome(false),
+            "Usage: playr library archive [COMMAND ...]"
+        );
+    }
+
+    #[test]
+    fn a_bare_defaults_usage_line_without_a_derived_part_is_unbracketed() {
+        let line = usage_line(words(&["archive"]), true)(Doc::default());
+        assert_eq!(line.monochrome(false), "Usage: archive");
+    }
+
+    #[test]
+    fn a_default_header_is_the_line_a_blank_line_and_the_details() {
+        let h = default_header("list the archive", Some("about"));
+        assert_eq!(h.monochrome(false), "list the archive\n\nabout");
+        assert_eq!(default_header("list", None).monochrome(false), "list");
+    }
 
     /// A footer exercising every hazard: a heading, a two-space indent, a
     /// blank line, and a line indented by more than four spaces.

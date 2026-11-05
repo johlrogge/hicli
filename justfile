@@ -62,9 +62,12 @@ demo-files *args:
 #
 # `flags` is for rehearsing mid-branch: `just publish-dry --allow-dirty`. A real
 # pre-release run takes no flags, so an uncommitted file is still an error.
+#
+# cargo writes all of its progress to stderr; `2>&1` keeps a successful run
+# visible to tools that only relay stdout.
 [group: 'release']
 publish-dry *flags:
-    cargo publish --dry-run --workspace {{ flags }}
+    cargo publish --dry-run --workspace {{ flags }} 2>&1
 
 [group: 'docs']
 doc:

@@ -191,8 +191,66 @@ pub mod search {
     }
 }
 
+/// mdma: `Yes { #[arg(short, long)] yes: bool }`.
+#[derive(Debug, Clone, PartialEq, Bpaf, Arg)]
+pub struct Yes(
+    /// Do not ask for confirmation
+    #[bpaf(short('y'), long("yes"), switch)]
+    bool,
+);
+
+/// Files that duplicate merges moved aside
+#[group]
+pub mod archive {
+    use super::*;
+
+    /// Permanently delete everything in the archive
+    #[command]
+    pub fn empty(_yes: Yes, _ctx: &Ctx) -> Outcome {
+        Ok(())
+    }
+
+    /// List the archive
+    #[command(default)]
+    pub fn list(_ctx: &Ctx) -> Outcome {
+        Ok(())
+    }
+}
+
+/// Files that duplicate merges moved aside
+///
+/// About the archive.
+#[group]
+pub mod described {
+    use super::*;
+
+    /// Permanently delete everything in the archive
+    #[command]
+    pub fn empty(_yes: Yes, _ctx: &Ctx) -> Outcome {
+        Ok(())
+    }
+
+    /// List the archive
+    #[command(default)]
+    pub fn list(_ctx: &Ctx) -> Outcome {
+        Ok(())
+    }
+}
+
+/// Only a default
+#[group]
+pub mod lone {
+    use super::*;
+
+    /// List the archive
+    #[command(default)]
+    pub fn list(_ctx: &Ctx) -> Outcome {
+        Ok(())
+    }
+}
+
 fn app() -> App<(), Ctx> {
-    app! { globals: pure(()), commands: [search] }
+    app! { globals: pure(()), commands: [search, archive, described, lone] }
 }
 
 // --- seams ----------------------------------------------------------------------
@@ -470,6 +528,54 @@ fn search_help_shows_both_forms_the_options_and_the_commands() {
         .unwrap_or_else(|| panic!("no commands section in {h}"));
     assert!(commands.contains("fact-values-for"), "{h}");
     assert!(commands.contains("List all distinct values"), "{h}");
+}
+
+#[test]
+fn search_help_describes_the_default_once() {
+    let h = help(&["search", "--help"]);
+    assert_eq!(
+        h.matches("Search by free text and filters").count(),
+        1,
+        "{h}"
+    );
+}
+
+/// #19: a default without options is described under the usage, and naming a
+/// command is optional.
+#[test]
+fn a_default_without_options_is_described_under_the_usage() {
+    assert_eq!(
+        help(&["archive", "--help"]),
+        "Files that duplicate merges moved aside\n\n\
+         Usage: archive [COMMAND ...]\n\n\
+         List the archive\n\n\
+         Available options:\n    -h, --help  Prints help information\n\n\
+         Available commands:\n    \
+         empty       Permanently delete everything in the archive\n"
+    );
+    assert_eq!(path(&["archive"]), ["archive"]);
+}
+
+#[test]
+fn a_default_without_options_comes_before_the_groups_details() {
+    for args in [
+        &["described", "--help"][..],
+        &["described", "--help", "--help"][..],
+    ] {
+        let h = help(args);
+        assert!(
+            h.contains(
+                "Usage: described [COMMAND ...]\n\nList the archive\n\nAbout the archive.\n"
+            ),
+            "{h}"
+        );
+    }
+}
+
+#[test]
+fn a_group_of_only_a_bare_default_has_an_unbracketed_usage() {
+    let h = help(&["lone", "--help"]);
+    assert!(h.contains("\nUsage: lone\n\nList the archive\n"), "{h}");
 }
 
 #[test]
