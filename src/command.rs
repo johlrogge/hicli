@@ -21,7 +21,7 @@ use crate::arg::Candidate;
 use crate::external::ExternalCommand;
 use crate::invocation::Invocation;
 use crate::outcome::IntoOutcome;
-use bpaf::{any, construct, doc::Doc, Parser};
+use bpaf::{any, construct, Parser};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -43,18 +43,20 @@ pub(crate) struct Mount {
     /// The path from the root down to (and including) the command being
     /// mounted — command names only, what [`Invocation::path`] reports.
     path: Vec<&'static str>,
-    /// The same path as a usage line spells it: with the metavar of every
-    /// curried value on the way down (`source SOURCE-NAME sync`). Equal to
-    /// `path` unless the command sits under a curried group.
+    /// The same path as a usage line spells it: the binary's name, if there
+    /// is one to show, then the path with the metavar of every curried value
+    /// on the way down (`playr source SOURCE-NAME sync`, ADR-013).
     shown: Vec<String>,
 }
 
 impl Mount {
     /// The root mount: no path yet, one level above the top-level commands.
-    pub(crate) fn root() -> Mount {
+    /// `bin` is the binary's name, shown first in every usage line — display
+    /// only, never part of [`Invocation::path`].
+    pub(crate) fn root(bin: Option<&str>) -> Mount {
         Mount {
             path: Vec::new(),
-            shown: Vec::new(),
+            shown: bin.into_iter().map(str::to_string).collect(),
         }
     }
 
@@ -76,15 +78,6 @@ impl Mount {
             path: self.path.clone(),
             shown,
         }
-    }
-
-    /// Whether a usage line must spell this path differently from bpaf's
-    /// derived one — which drops every curried value (spike S5).
-    fn is_shifted(&self) -> bool {
-        self.shown
-            .iter()
-            .map(String::as_str)
-            .ne(self.path.iter().copied())
     }
 
     /// Where this is, for a panic message.
@@ -377,18 +370,6 @@ fn usage_fragment<T: 'static>(p: impl Parser<T> + 'static) -> String {
         d
     });
     seen.into_inner()
-}
-
-/// A usage line spelling the path as `shown`, then bpaf's derived fragment
-/// (spike H-S1). bpaf hands `with_usage` the fragment only.
-fn usage_prefixed(shown: &[String]) -> impl Fn(Doc) -> Doc {
-    let prefix = format!("Usage: {} ", shown.join(" "));
-    move |derived| {
-        let mut u = Doc::default();
-        u.text(&prefix);
-        u.doc(&derived);
-        u
-    }
 }
 
 /// The front of a node's remaining words, as [`peek`] last saw it.
@@ -713,11 +694,10 @@ impl<O: 'static> Node<O> {
         if let Some(f) = &footer {
             opts = opts.footer(crate::help::verbatim(f));
         }
-        // Last: under a curried group bpaf's derived usage drops the curried
-        // values from the path, so spell the path out (spike H-S1).
-        if at.is_shifted() {
-            opts = opts.with_usage(usage_prefixed(&at.shown));
-        }
+        // Last: hicli spells every usage line itself (ADR-013) — bpaf's own
+        // names no binary, drops curried values from the path (spike H-S1),
+        // and ends in a space when the command has no arguments.
+        opts = opts.with_usage(crate::help::usage_line(at.shown.clone()));
         // Always `long`, never `short`: an alias is a whole word, and `long`
         // is the spelling `bpaf` matches a one-character command by too.
         let mut cmd = opts.command(name).help(help.as_str());
@@ -911,7 +891,7 @@ mod tests {
 
     /// Mount `c` as the only top-level command and parse `args` through it.
     fn parse<Ctx: 'static>(c: Command<Ctx>, args: &[&str]) -> Invocation<Ctx> {
-        c.mount(&Mount::root())
+        c.mount(&Mount::root(None))
             .to_options()
             .run_inner(args)
             .expect("parses")
@@ -952,7 +932,7 @@ mod tests {
     #[should_panic(expected = "has no commands")]
     fn an_empty_group_cannot_be_mounted() {
         let c: Command<()> = group("event", "manage events", Vec::new());
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1017,7 +997,7 @@ mod tests {
                 command("ls", "list differently", pure(()), |(), _c: &()| {}),
             ],
         );
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1034,7 +1014,7 @@ mod tests {
             command("status", "show status", pure(()), |(), _c: &()| {}).alias("s"),
             command("sync", "sync up", pure(()), |(), _c: &()| {}).alias("s"),
         ];
-        let _ = alternative(children, &Mount::root());
+        let _ = alternative(children, &Mount::root(None));
     }
 
     #[test]
@@ -1156,7 +1136,7 @@ mod curried_and_default {
 
     /// Fold `nodes` as a top level.
     fn top<O: 'static>(nodes: Vec<Node<O>>) -> OptionParser<O> {
-        alternative(nodes, &Mount::root())
+        alternative(nodes, &Mount::root(None))
             .expect("has commands")
             .to_options()
     }
@@ -1324,7 +1304,7 @@ mod curried_and_default {
     fn a_curried_commands_usage_names_the_value() {
         assert_eq!(
             show(source(), &["source", "bandcamp", "sync", "--help"]),
-            "STDOUT:\nsync a source\n\nUsage: source SOURCE-NAME sync \n\n\
+            "STDOUT:\nsync a source\n\nUsage: source SOURCE-NAME sync\n\n\
              Available options:\n    -h, --help  Prints help information\n"
         );
         assert_eq!(
@@ -1333,10 +1313,10 @@ mod curried_and_default {
              Available positional items:\n    ID          job id\n\n\
              Available options:\n    -h, --help  Prints help information\n"
         );
-        // A fixed sibling's usage is untouched.
+        // A fixed sibling's usage names no value.
         assert_eq!(
             show(source(), &["source", "list", "--help"]),
-            "STDOUT:\nlist sources\n\nUsage: source list \n\n\
+            "STDOUT:\nlist sources\n\nUsage: source list\n\n\
              Available options:\n    -h, --help  Prints help information\n"
         );
     }
@@ -1392,7 +1372,7 @@ mod curried_and_default {
         let help = show(nested(), &["x", "A", "y", "--help"]);
         assert_eq!(usage_line(&help), "Usage: x A y B COMMAND ...", "{help}");
         let help = show(nested(), &["x", "A", "y", "B", "f", "--help"]);
-        assert_eq!(usage_line(&help), "Usage: x A y B f ", "{help}");
+        assert_eq!(usage_line(&help), "Usage: x A y B f", "{help}");
     }
 
     #[test]
@@ -1553,7 +1533,7 @@ mod curried_and_default {
     fn a_fixed_and_a_curried_command_cannot_share_a_spelling() {
         let clash = curried_command("list", "x", pure(()), |(), _: String, _: &Log| {});
         let c = group_args("source", "the node", source_name, vec![list()], vec![clash]);
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1566,7 +1546,7 @@ mod curried_and_default {
             vec![list().by_default()],
             bound(),
         );
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1574,7 +1554,7 @@ mod curried_and_default {
     fn a_curried_default_cannot_live_in_a_curried_group() {
         let d = curried_command("sync", "x", pure(()), |(), _: String, _: &Log| {}).by_default();
         let c = group_args("source", "the node", source_name, vec![list()], vec![d]);
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1582,7 +1562,7 @@ mod curried_and_default {
     fn a_group_has_at_most_one_default() {
         let d = || command("q", "q", pure(()), |(), _: &Log| {}).by_default();
         let c = group("search", "s", vec![d(), d()]);
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1608,25 +1588,25 @@ mod curried_and_default {
     #[test]
     #[should_panic(expected = "a default command answers to no word")]
     fn a_default_takes_no_alias() {
-        let _ = with_default(default_leaf().alias("x")).mount(&Mount::root());
+        let _ = with_default(default_leaf().alias("x")).mount(&Mount::root(None));
     }
 
     #[test]
     #[should_panic(expected = "a default command is never listed")]
     fn a_default_cannot_be_hidden() {
-        let _ = with_default(default_leaf().hide()).mount(&Mount::root());
+        let _ = with_default(default_leaf().hide()).mount(&Mount::root(None));
     }
 
     #[test]
     #[should_panic(expected = "a default command has no help page of its own")]
     fn a_default_takes_no_details() {
-        let _ = with_default(default_leaf().details("d")).mount(&Mount::root());
+        let _ = with_default(default_leaf().details("d")).mount(&Mount::root(None));
     }
 
     #[test]
     #[should_panic(expected = "a default command has no help page of its own")]
     fn a_default_takes_no_footer() {
-        let _ = with_default(default_leaf().footer("f")).mount(&Mount::root());
+        let _ = with_default(default_leaf().footer("f")).mount(&Mount::root(None));
     }
 
     #[test]

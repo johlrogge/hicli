@@ -101,7 +101,7 @@ fn main() -> ExitCode {
 
 ```console
 $ playr --help
-Usage: [--node=HOST] COMMAND ...
+Usage: playr [--node=HOST] COMMAND ...
 
 Global options
         --node=HOST  The node to talk to
@@ -117,7 +117,7 @@ Available commands:
 $ playr playback --help
 Playback control
 
-Usage: playback COMMAND ...
+Usage: playr playback COMMAND ...
 
 Available options:
     -h, --help  Prints help information
@@ -328,7 +328,7 @@ localhost: search Some("fact-values-for") artist=None bpm=None unplayed=false ad
 $ playr search --help
 Search the library
 
-Usage: search (COMMAND ... | [--added=DAYS] [--artist=NAME] [--bpm=BPM] [--unplayed] [QUERY])
+Usage: playr search (COMMAND ... | [--added=DAYS] [--artist=NAME] [--bpm=BPM] [--unplayed] [QUERY])
 
 Search by text and filters
         --added=DAYS   Only tracks added in the last DAYS days, e.g. -7
@@ -437,7 +437,7 @@ localhost: bandcamp, beatport, upload
 $ playr source --help
 Music sources
 
-Usage: source (COMMAND ... | SOURCE COMMAND ...)
+Usage: playr source (COMMAND ... | SOURCE COMMAND ...)
 
 Commands for SOURCE:
     check-updates  Check the source's collection for stale items
@@ -563,7 +563,7 @@ fn sort(desc: Descending, by: SortBy) {
 $ playr sort --help
 Sort track ids read from stdin
 
-Usage: sort [-d] KEY
+Usage: playr sort [-d] KEY
 
 Reads one track id per line and prints them sorted.
 
@@ -705,10 +705,9 @@ mod tests {
   the error that would be printed. `App::run_with_args` runs everything and returns the exit code
   that `main` would. `App::complete` returns what the shell would offer.
 - Commands are ordinary functions, so you can call them directly.
-- If you do snapshot help pages, note that the usage line of a command without
-  arguments ends in a space (`Usage: playback stop `). Editors and linters that strip
-  trailing whitespace will break such a snapshot
-  ([#28](https://github.com/johlrogge/hicli/issues/28)).
+- `App::run` starts every usage line with the binary's name (`Usage: playr playback
+  stop`); the test seams don't know it, so `.bin_name("playr")` makes snapshot tests
+  show what `run` prints.
 
 ## Rules and papercuts
 

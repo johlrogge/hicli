@@ -41,9 +41,63 @@ pub(crate) fn verbatim(text: &str) -> Doc {
     doc
 }
 
+/// A usage line for `OptionParser::with_usage`: `Usage:`, then the `shown`
+/// words — the binary's name, the command path, each curried value's metavar
+/// — then the part `bpaf` derives from the parser's own items (ADR-013).
+///
+/// Every gap is one space, and there is never a trailing one: the derived
+/// part is appended only when it renders to something. `bpaf`'s own line
+/// writes "word + space" per path word, so a command without arguments ends
+/// in a space (#28); and it names the binary only via `Args::set_name`, which
+/// hicli never calls (ADR-009 §3), so it names none (#21).
+///
+/// Styled as `bpaf` styles its own: `Usage` emphasised, the words literal.
+pub(crate) fn usage_line(shown: Vec<String>) -> impl Fn(Doc) -> Doc {
+    move |derived| {
+        let mut u = Doc::default();
+        u.emphasis("Usage");
+        u.text(":");
+        for word in &shown {
+            u.text(" ");
+            u.literal(word);
+        }
+        if !derived.monochrome(false).is_empty() {
+            u.text(" ");
+            u.doc(&derived);
+        }
+        u
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn words(ws: &[&str]) -> Vec<String> {
+        ws.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn a_usage_line_without_a_derived_part_has_no_trailing_space() {
+        let line = usage_line(words(&["playr", "playback", "stop"]))(Doc::default());
+        assert_eq!(line.monochrome(false), "Usage: playr playback stop");
+    }
+
+    #[test]
+    fn a_usage_line_without_words_is_usage_and_the_derived_part() {
+        let mut derived = Doc::default();
+        derived.text("[--node=HOST] COMMAND ...");
+        let line = usage_line(Vec::new())(derived);
+        assert_eq!(line.monochrome(false), "Usage: [--node=HOST] COMMAND ...");
+    }
+
+    #[test]
+    fn a_usage_line_joins_words_and_the_derived_part_by_one_space() {
+        let mut derived = Doc::default();
+        derived.text("NAME");
+        let line = usage_line(words(&["playr", "set-output"]))(derived);
+        assert_eq!(line.monochrome(false), "Usage: playr set-output NAME");
+    }
 
     /// A footer exercising every hazard: a heading, a two-space indent, a
     /// blank line, and a line indented by more than four spaces.

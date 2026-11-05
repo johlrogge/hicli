@@ -455,6 +455,37 @@ mod tests {
         );
     }
 
+    /// The usage paragraph of `args`' help page as `playr` prints it: from
+    /// `Usage:` to the next blank line, wrapping kept.
+    fn usage(args: &[&str]) -> String {
+        let page = app()
+            .bin_name("playr")
+            .parse(args.iter().copied())
+            .err()
+            .expect("--help short-circuits")
+            .unwrap_stdout();
+        let at = page.find("Usage:").expect("a usage line");
+        page[at..]
+            .split("\n\n")
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    // The README pastes these usage lines; this keeps them true.
+    #[test]
+    fn usage_lines_match_the_readme() {
+        assert_eq!(
+            usage(&["search", "--help"]),
+            "Usage: playr search (COMMAND ... | [--added=DAYS] [--artist=NAME] [--bpm=BPM] [--unplayed] [QUERY])"
+        );
+        assert_eq!(
+            usage(&["source", "--help"]),
+            "Usage: playr source (COMMAND ... | SOURCE COMMAND ...)"
+        );
+        assert_eq!(usage(&["sort", "--help"]), "Usage: playr sort [-d] KEY");
+    }
+
     #[test]
     fn source_names_complete() {
         assert_eq!(app().complete(cli! { source b }), ["bandcamp", "beatport"]);

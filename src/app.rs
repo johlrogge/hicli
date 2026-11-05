@@ -1,6 +1,7 @@
 //! The composition builder: [`App`] and exit-code handling.
 
 use crate::command::{alternative, Command, IntoCommand, Mount};
+use crate::help::usage_line;
 use crate::invocation::Invocation;
 use crate::outcome::{Failure, Success};
 use bpaf::{construct, OptionParser, ParseFailure, Parser};
@@ -26,6 +27,9 @@ pub struct App<G, Ctx> {
     about: Option<String>,
     /// The version `--version` / `-V` prints.
     version: Option<String>,
+    /// The program name every usage line starts with — display only, never
+    /// handed to `bpaf` (ADR-013).
+    bin_name: Option<String>,
 }
 
 impl<G: 'static, Ctx: 'static> App<G, Ctx> {
@@ -36,6 +40,7 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
             commands: Vec::new(),
             about: None,
             version: None,
+            bin_name: None,
         }
     }
 
@@ -73,6 +78,31 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     /// ```
     pub fn version(mut self, version: impl Into<String>) -> Self {
         self.version = Some(version.into());
+        self
+    }
+
+    /// Name the program: every usage line starts with it,
+    /// `Usage: playr playback stop`.
+    ///
+    /// [`App::run`] defaults it to the file name of `argv[0]` — the name the
+    /// user typed, a symlink's included. The test seams ([`App::parse`],
+    /// [`App::run_with_args`]) read no `argv[0]` and show no name unless this
+    /// is set, so set it in a snapshot test to see what `run` prints.
+    ///
+    /// Display only: the name is never handed to `bpaf` (ADR-009 §3,
+    /// ADR-013), so it changes no parsing and no completion.
+    ///
+    /// ```
+    /// # use hicli::{App, cli};
+    /// # use hicli::bpaf::pure;
+    /// let app = App::new(pure(()))
+    ///     .bin_name("playr")
+    ///     .command(hicli::command("stop", "stop playback", pure(()), |(), _: &()| {}));
+    /// let help = app.parse(cli! { stop --help }).err().expect("--help short-circuits");
+    /// assert!(help.unwrap_stdout().contains("Usage: playr stop\n"));
+    /// ```
+    pub fn bin_name(mut self, name: impl Into<String>) -> Self {
+        self.bin_name = Some(name.into());
         self
     }
 
@@ -115,6 +145,7 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
             commands,
             about,
             version,
+            bin_name,
         } = self;
         if let Some(d) = commands.iter().find(|c| c.is_default()) {
             panic!(
@@ -131,9 +162,13 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
                 .map(Command::name)
                 .collect(),
         };
-        let tree = alternative(commands, &Mount::root())
+        let tree = alternative(commands, &Mount::root(bin_name.as_deref()))
             .expect("hicli::App has no commands; add at least one via .command/.commands");
-        let mut parser = construct!(globals, tree).to_options();
+        // hicli spells the usage line itself (ADR-013): the name is display
+        // only, never `Args::set_name` (ADR-009 §3).
+        let mut parser = construct!(globals, tree)
+            .to_options()
+            .with_usage(usage_line(bin_name.into_iter().collect()));
         if let Some(about) = &about {
             parser = parser.descr(about.as_str());
         }
@@ -261,7 +296,11 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     /// itself: the code is *returned*, as a `std::process::ExitCode` that
     /// `main` can hand straight back.
     ///
-    /// Equivalent to `ExitCode::from(run_with_args(std::env::args().skip(1),
+    /// Unless [`App::bin_name`] was set, the program name usage lines start
+    /// with is the file name of `argv[0]` — what the user typed, a symlink's
+    /// name included. It is display only (ADR-013).
+    ///
+    /// Otherwise equivalent to `ExitCode::from(run_with_args(std::env::args().skip(1),
     /// mk_ctx))`; use [`App::run_with_args`] in tests, since `ExitCode` is not
     /// comparable and a test seam must be assertable.
     ///
@@ -269,8 +308,13 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     ///
     /// Routes through [`App::into_parser`], so it panics if no command was
     /// registered.
-    pub fn run(self, mk_ctx: impl FnOnce(G) -> Result<Ctx, Failure>) -> ExitCode {
-        ExitCode::from(self.run_with_args(std::env::args().skip(1), mk_ctx))
+    pub fn run(mut self, mk_ctx: impl FnOnce(G) -> Result<Ctx, Failure>) -> ExitCode {
+        let mut args = std::env::args();
+        let argv0 = args.next();
+        if self.bin_name.is_none() {
+            self.bin_name = argv0.as_deref().and_then(program_name);
+        }
+        ExitCode::from(self.run_with_args(args, mk_ctx))
     }
 
     /// Run the app against an explicit argument vector, returning the process
@@ -346,6 +390,16 @@ struct Registry {
     /// The canonical names of the listed (non-hidden) top-level commands: the
     /// only suggestion candidates.
     listed: Vec<&'static str>,
+}
+
+/// The program name a usage line shows for `argv0`: its file name, so
+/// `/usr/bin/playr` and `./target/debug/playr` are both `playr`. `None` when
+/// there is no file name to show.
+fn program_name(argv0: &str) -> Option<String> {
+    std::path::Path::new(argv0)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
 }
 
 /// `bpaf`'s completion request, at the only revision that is safe in-process.
@@ -667,6 +721,17 @@ mod tests {
         );
         let outer = crate::group("outer", "outer", vec![source]);
         let _ = App::new(bpaf::pure(())).command(outer).into_parser();
+    }
+
+    #[test]
+    fn program_name_is_the_file_name_of_argv0() {
+        assert_eq!(program_name("/usr/bin/playr").as_deref(), Some("playr"));
+        assert_eq!(program_name("playr").as_deref(), Some("playr"));
+        assert_eq!(
+            program_name("./target/debug/playr").as_deref(),
+            Some("playr")
+        );
+        assert_eq!(program_name(""), None);
     }
 
     #[test]

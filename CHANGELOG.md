@@ -7,6 +7,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Before 1.0, a minor version may carry breaking changes; they are listed under
 "Breaking" with what to change.
 
+## [Unreleased]
+
+### Added
+
+- `App::bin_name(name)`: the program name usage lines start with. `App::run`
+  defaults it to the file name of `argv[0]`. It is display only and never passed to
+  bpaf (#21, ADR-013).
+
+### Fixed
+
+- Usage lines name the binary: `Usage: playr playback stop` (#21).
+- No trailing space after a command without arguments: `Usage: playr playback stop`,
+  not `Usage: playr playback stop ` (#28).
+
+### Changed (help text, not API)
+
+- Every `Usage:` line in `App::run` output now starts with the binary's name.
+  `App::parse` and `App::run_with_args` print no binary name unless `.bin_name(..)` is
+  set. Re-bless snapshot tests of help pages; set `.bin_name(..)` in them to match what
+  `run` prints.
+
 ## [0.2.1] — 2026-11-05
 
 ### Fixed
