@@ -24,8 +24,8 @@
 //!
 //! The group's *declaration* — its doc comment, and its name — lives here; its
 //! *body* lives in `event.rs` beside this file. `#[group]` on the declaration
-//! reads that file to find the group's children, and emits
-//! `#[path = "event.rs"]` onto the declaration so rustc reads exactly the same
+//! reads that file to find the group's children, and re-emits the declaration
+//! unchanged — no `#[path]` — because rustc's own rules already find the same
 //! bytes.
 //!
 //! This file is `examples/files/main.rs`, a mod-rs file by name, so `mod

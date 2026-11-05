@@ -18,10 +18,30 @@
 //! and `tests/cli.rs` are, and they are mod-rs files. The heuristic is *"if
 //! there is no `demo/` directory beside `demo.rs`, it is a root"*, and the
 //! other arrangement is kept as a second-choice candidate rather than guessed
-//! at. Whichever wins, `#[group]` on a file module then **emits `#[path]`**, so
-//! rustc reads
-//! exactly the bytes this module read and the guess cannot silently disagree
-//! with the compiler.
+//! at.
+//!
+//! `#[group]` on a file module then **emits `#[path]` only where rustc's own
+//! rules would not load the file this module read** ([`Load::ByPath`]), and
+//! leaves the declaration as written everywhere else ([`Load::Unaided`]). It
+//! used to emit one on every declaration, which made the guess impossible to
+//! get wrong — but rustc treats a file loaded through `#[path]` as a mod-rs
+//! file, so every group file became one, and a plain `mod helper;` inside
+//! `src/source.rs` resolved to `src/helper.rs` instead of
+//! `src/source/helper.rs` (#25). A declaration is `Unaided` only when it is
+//! provably what rustc does unprompted:
+//!
+//! - the declaring file is a `mod.rs`/`lib.rs`/`main.rs` and the file is
+//!   beside it; or
+//! - the declaring file `foo.rs` is itself loaded without a `#[path]` —
+//!   [`ordinarily_loaded`], which finds a top-level, `#[path]`-free `mod foo;`
+//!   in the file that owns `foo.rs`'s directory, recursively — and the file is
+//!   in `foo/`;
+//!
+//! and, in both cases, the other arrangement (`x.rs` against `x/mod.rs`) is
+//! absent, since both at once is E0761 to rustc. Everywhere else — a crate root
+//! not named `lib.rs`/`main.rs` with a same-named directory, a group nested in
+//! a `#[path]`-loaded file, the ambiguous pair — the `#[path]` stays, so a
+//! wrong guess still cannot silently disagree with the compiler.
 //!
 //! Every path here is relative to the same anchor the declaring file is (see
 //! [`crate::fs`]): that is what a diagnostic prints, and the emitted `#[path]`
@@ -30,7 +50,10 @@
 
 use std::path::{Path, PathBuf};
 
+use syn::Item;
+
 use crate::fs::Fs;
+use crate::shared::{path_attr, unraw_name};
 
 /// A declaration that was resolved to a file.
 pub(crate) struct Resolved {
@@ -40,6 +63,17 @@ pub(crate) struct Resolved {
     /// The value for `#[path = "…"]`: relative to the declaring file's
     /// directory, `/`-separated.
     pub(crate) relative: String,
+    /// Whether rustc, left to its own rules, loads `file` too.
+    pub(crate) load: Load,
+}
+
+/// How rustc comes to load the file a declaration was resolved to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Load {
+    /// rustc's own rules find it: the declaration goes out as written.
+    Unaided,
+    /// A `#[path]` is needed — or this module cannot prove it is not.
+    ByPath,
 }
 
 /// A declaration that was not resolved, and everywhere that was looked.
@@ -69,6 +103,7 @@ pub(crate) fn resolve(
             Ok(Resolved {
                 file,
                 relative: p.to_string(),
+                load: Load::ByPath,
             })
         } else {
             Err(NotFound {
@@ -84,7 +119,8 @@ pub(crate) fn resolve(
     let beside = dir.join(&stem);
     // `mod.rs`/`lib.rs`/`main.rs` are mod-rs by name; anything else is one only
     // if it has no directory of its own to own submodules.
-    let mod_rs = matches!(stem.as_str(), "mod" | "lib" | "main") || !fs.is_dir(&beside);
+    let by_name = matches!(stem.as_str(), "mod" | "lib" | "main");
+    let mod_rs = by_name || !fs.is_dir(&beside);
 
     // The prefixes, best first. A candidate under a directory that does not
     // exist cannot exist either, so it is not offered and not listed as tried.
@@ -93,34 +129,107 @@ pub(crate) fn resolve(
     let prefixes: Vec<String> = if mod_rs {
         let mut ps = vec![here];
         if fs.is_dir(&beside) {
-            ps.push(under);
+            ps.push(under.clone());
         }
         ps
     } else {
         // The declaring file may still be a crate root with a same-named
         // directory beside it — `tests/cli.rs` next to `tests/cli/` — so its
         // own directory stays in the running.
-        vec![under, here]
+        vec![under.clone(), here]
     };
 
     let mut tried: Vec<String> = Vec::new();
     for prefix in prefixes {
-        for relative in [
+        let pair = [
             format!("{prefix}{name}.rs"),
             format!("{prefix}{name}/mod.rs"),
-        ] {
-            let file = dir.join(&relative);
+        ];
+        for (i, relative) in pair.iter().enumerate() {
+            let file = dir.join(relative);
             let shown = show(&file);
             if tried.contains(&shown) {
                 continue;
             }
             if fs.is_file(&file) {
-                return Ok(Resolved { file, relative });
+                // rustc's own prefix for this declaring file: beside a mod-rs
+                // file by name, in `{stem}/` for a file rustc itself loaded,
+                // and none it can be proved to agree with otherwise.
+                let default = if by_name {
+                    prefix.is_empty()
+                } else {
+                    prefix == under && ordinarily_loaded(fs, declaring)
+                };
+                let other = dir.join(&pair[1 - i]);
+                let load = if default && !fs.is_file(&other) {
+                    Load::Unaided
+                } else {
+                    Load::ByPath
+                };
+                return Ok(Resolved {
+                    file,
+                    relative: relative.clone(),
+                    load,
+                });
             }
             tried.push(shown);
         }
     }
     Err(NotFound { tried })
+}
+
+/// Whether rustc loads `file` (`D/foo.rs`) without any `#[path]`'s help.
+///
+/// It does when `D/mod.rs`, `D/lib.rs` or `D/main.rs` declares `foo` plainly,
+/// or when `D.rs` — not itself named `mod`/`lib`/`main` — is ordinarily loaded
+/// and declares `foo` plainly. In either case `D/foo/mod.rs` must be absent:
+/// with both, the owner's `#[group]` would have emitted a `#[path]`, and a
+/// plain declaration is E0761. `D` is shorter at every step, so the recursion
+/// ends.
+fn ordinarily_loaded(fs: &dyn Fs, file: &Path) -> bool {
+    let Some(name) = file.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
+        return false;
+    };
+    let dir = file.parent().unwrap_or_else(|| Path::new(""));
+    if fs.is_file(&dir.join(&name).join("mod.rs")) {
+        return false;
+    }
+    if ["mod.rs", "lib.rs", "main.rs"]
+        .iter()
+        .any(|owner| declares_plainly(fs, &dir.join(owner), &name))
+    {
+        return true;
+    }
+    let Some(dir_name) = dir.file_name().map(|s| s.to_string_lossy().into_owned()) else {
+        return false;
+    };
+    if matches!(dir_name.as_str(), "mod" | "lib" | "main") {
+        return false;
+    }
+    let owner = dir
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(format!("{dir_name}.rs"));
+    fs.is_file(&owner) && ordinarily_loaded(fs, &owner) && declares_plainly(fs, &owner, &name)
+}
+
+/// Whether `owner` declares `mod <name>;` at its top level with no `#[path]`.
+///
+/// A file that cannot be read or parsed declares nothing this module can
+/// prove.
+fn declares_plainly(fs: &dyn Fs, owner: &Path, name: &str) -> bool {
+    let Ok(text) = fs.read_to_string(owner) else {
+        return false;
+    };
+    let Ok(parsed) = syn::parse_file(&text) else {
+        return false;
+    };
+    parsed.items.iter().any(|item| match item {
+        Item::Mod(m) => {
+            m.content.is_none() && unraw_name(&m.ident) == name && path_attr(&m.attrs).is_none()
+        }
+        _ => false,
+    })
 }
 
 /// A path as a diagnostic says it.
@@ -293,6 +402,107 @@ mod tests {
             tried(&["src/main.rs"], "src/main.rs", "event", Some("nope.rs")),
             ["src/nope.rs"]
         );
+    }
+
+    // --- whether rustc finds it unaided (#25) ---------------------------------
+
+    /// How rustc comes to load what `mod <name>;` in `declaring` resolved to,
+    /// in a tree whose contents matter.
+    fn load(tree: &[(&str, &str)], declaring: &str, name: &str) -> Load {
+        let fs = MapFs::new(tree);
+        resolve(&fs, Path::new(declaring), name, None)
+            .unwrap_or_else(|e| panic!("`mod {name};` should resolve; tried {:?}", e.tried))
+            .load
+    }
+
+    #[test]
+    fn a_file_beside_a_crate_root_is_found_unaided() {
+        let tree = [("src/main.rs", ""), ("src/event.rs", "")];
+        assert_eq!(load(&tree, "src/main.rs", "event"), Load::Unaided);
+    }
+
+    #[test]
+    fn a_directory_module_beside_a_crate_root_is_found_unaided() {
+        let tree = [("src/lib.rs", ""), ("src/event/mod.rs", "")];
+        assert_eq!(load(&tree, "src/lib.rs", "event"), Load::Unaided);
+    }
+
+    #[test]
+    fn a_file_under_an_ordinarily_loaded_file_is_found_unaided() {
+        for main in ["mod event;", "/// e\n#[group]\npub mod event;"] {
+            let tree = [
+                ("src/main.rs", main),
+                ("src/event.rs", ""),
+                ("src/event/audience.rs", ""),
+            ];
+            assert_eq!(
+                load(&tree, "src/event.rs", "audience"),
+                Load::Unaided,
+                "with main.rs = {main:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_under_a_path_loaded_file_keeps_its_path() {
+        let tree = [
+            ("src/main.rs", "#[path = \"event.rs\"] mod event;"),
+            ("src/event.rs", ""),
+            ("src/event/audience.rs", ""),
+        ];
+        assert_eq!(load(&tree, "src/event.rs", "audience"), Load::ByPath);
+    }
+
+    #[test]
+    fn a_root_with_its_own_directory_keeps_its_path_at_every_level() {
+        let tree = [
+            ("tests/cli.rs", "mod event;"),
+            ("tests/cli/event.rs", ""),
+            ("tests/cli/event/audience.rs", ""),
+        ];
+        assert_eq!(load(&tree, "tests/cli.rs", "event"), Load::ByPath);
+        assert_eq!(load(&tree, "tests/cli/event.rs", "audience"), Load::ByPath);
+    }
+
+    #[test]
+    fn a_three_level_chain_is_found_unaided() {
+        let tree = [
+            ("src/main.rs", "mod a;"),
+            ("src/a.rs", "mod b;"),
+            ("src/a/b.rs", ""),
+            ("src/a/b/c.rs", ""),
+        ];
+        assert_eq!(load(&tree, "src/a/b.rs", "c"), Load::Unaided);
+    }
+
+    #[test]
+    fn both_arrangements_at_once_keep_the_path() {
+        let tree = [
+            ("src/main.rs", ""),
+            ("src/event.rs", ""),
+            ("src/event/mod.rs", ""),
+        ];
+        assert_eq!(load(&tree, "src/main.rs", "event"), Load::ByPath);
+    }
+
+    #[test]
+    fn a_declaration_inside_an_inline_module_proves_nothing() {
+        let tree = [
+            ("src/main.rs", "mod outer { mod event; }"),
+            ("src/event.rs", ""),
+            ("src/event/audience.rs", ""),
+        ];
+        assert_eq!(load(&tree, "src/event.rs", "audience"), Load::ByPath);
+    }
+
+    #[test]
+    fn an_owner_that_does_not_parse_proves_nothing() {
+        let tree = [
+            ("src/main.rs", "mod event; fn ("),
+            ("src/event.rs", ""),
+            ("src/event/audience.rs", ""),
+        ];
+        assert_eq!(load(&tree, "src/event.rs", "audience"), Load::ByPath);
     }
 
     #[test]
