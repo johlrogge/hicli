@@ -365,6 +365,16 @@ fn mount_curried<T: 'static, O: 'static, P: Parser<T> + 'static>(
     let metavar = usage_fragment(arg());
     let reserved: Vec<&'static str> = fixed.iter().flat_map(Node::spellings).collect();
     let names = listed_names(&fixed);
+    let fixed_names: Vec<&'static str> = fixed
+        .iter()
+        .filter(|c| c.is_listed())
+        .map(Node::name)
+        .collect();
+    let bound_names: Vec<&'static str> = bound
+        .iter()
+        .filter(|c| c.is_listed())
+        .map(Node::name)
+        .collect();
     let fixed_alt = fold_named(fixed, at);
     let bound_alt = fold_named(bound, &at.bound(&metavar)).unwrap_or_else(|| {
         panic!(
@@ -374,10 +384,22 @@ fn mount_curried<T: 'static, O: 'static, P: Parser<T> + 'static>(
     });
     let front = Rc::new(RefCell::new(Front::default()));
     let guard = peek(front.clone(), reserved);
-    let t = arg().complete(offer_siblings(front, names));
+    let t = arg().complete(offer_siblings(front.clone(), names));
     // The section holds the bound commands only: the value is listed with the
     // positional items, under its own doc (#20).
     let bound_alt = bound_alt.group_help(format!("Commands for {metavar}:").as_str());
+    // When no bound command matches at all, bpaf would blame the value
+    // (#27). This alternative fails with hicli's own message instead: it wins
+    // over bpaf's `Missing` at the same depth, and loses to a bound command
+    // that matched and failed deeper. Its meta is `Skip`, so neither usage
+    // nor help changes.
+    let missing = bpaf::pure_with::<(), _, String>(move || {
+        let f = front.borrow();
+        Err(sibling_typo(&f, &fixed_names)
+            .unwrap_or_else(|| missing_command(&f, &metavar, &bound_names)))
+    })
+    .map(|()| -> Partial<T, O> { unreachable!("pure_with never succeeds here") });
+    let bound_alt = construct!([bound_alt, missing]);
     let branch = construct!(guard, t, bound_alt)
         .map(|((), t, f)| f.apply(t))
         .boxed();
@@ -385,6 +407,43 @@ fn mount_curried<T: 'static, O: 'static, P: Parser<T> + 'static>(
         Some(fixed_alt) => construct!([fixed_alt, branch]).boxed(),
         None => branch,
     }
+}
+
+/// The error for a curried group given its value but none of its `names`d
+/// commands after it (#27): a typo of one of them gets a "did you mean", else
+/// they are listed. The value is shown as typed, or as `metavar` if unseen.
+fn missing_command(front: &Front, metavar: &str, names: &[&str]) -> String {
+    let value = front.word.as_deref().unwrap_or(metavar);
+    if let Some(next) = &front.next {
+        if let Some(near) = crate::app::closest(next, names.iter().copied()) {
+            return format!("no such command after `{value}`: `{next}`, did you mean `{near}`?");
+        }
+    }
+    let quoted: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+    match quoted.as_slice() {
+        [] => format!("expected a command after `{value}`, pass `--help` for usage information"),
+        [one] => format!("expected a command after `{value}`: {one}"),
+        [init @ .., last] => {
+            format!(
+                "expected a command after `{value}`: {} or {last}",
+                init.join(", ")
+            )
+        }
+    }
+}
+
+/// A lone word where a curried group's value goes that is a typo of one of
+/// its fixed siblings' `names` (`source lst`) is that typo, not a value missing
+/// its command: the error bpaf gave before [`missing_command`] took over.
+fn sibling_typo(front: &Front, names: &[&str]) -> Option<String> {
+    if front.next.is_some() {
+        return None;
+    }
+    let word = front.word.as_deref()?;
+    let near = crate::app::closest(word, names.iter().copied())?;
+    Some(format!(
+        "no such command or positional: `{word}`, did you mean `{near}`?"
+    ))
 }
 
 /// What `p`'s usage line shows for its own items — `SOURCE-NAME` — read
@@ -405,11 +464,15 @@ struct Front {
     word: Option<String>,
     /// How many words remain, the first included.
     words: usize,
+    /// The first word after the first that is not dashed — where a curried
+    /// group's command goes, for [`missing_command`].
+    next: Option<String>,
 }
 
 /// A hidden parser that consumes nothing: it records the node's remaining
-/// words in `front` for [`offer_siblings`], and fails when the first of them
-/// is `reserved` — a fixed sibling's spelling (spike S4's guard).
+/// words in `front` for [`offer_siblings`] and [`missing_command`], and fails
+/// when the first of them is `reserved` — a fixed sibling's spelling (spike
+/// S4's guard).
 ///
 /// `bpaf` keeps only the completions of the branch that consumed the typed
 /// word (spike S6), so a sibling's name can only be offered from the value's
@@ -426,13 +489,18 @@ fn peek(front: Rc<RefCell<Front>>, reserved: Vec<&'static str>) -> Boxed<()> {
         *first.borrow_mut() = Front {
             word: Some(s),
             words: 0,
+            next: None,
         };
         hit.then_some(())
     })
     .optional()
     .guard(Option::is_none, "reserved word");
-    let every = any::<String, _, _>("", move |_: String| {
-        front.borrow_mut().words += 1;
+    let every = any::<String, _, _>("", move |s: String| {
+        let mut f = front.borrow_mut();
+        f.words += 1;
+        if f.words >= 2 && f.next.is_none() && !s.starts_with('-') {
+            f.next = Some(s);
+        }
         None::<()>
     })
     .anywhere()
@@ -1086,6 +1154,83 @@ mod tests {
         assert_eq!(c.footer.as_deref(), Some("Examples:"));
     }
 
+    fn front(word: Option<&str>, next: Option<&str>) -> Front {
+        Front {
+            word: word.map(str::to_string),
+            words: 0,
+            next: next.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_missing_command_lists_the_curried_commands() {
+        let f = front(Some("bandcamp"), None);
+        assert_eq!(
+            missing_command(&f, "SOURCE-NAME", &["sync", "status", "cancel"]),
+            "expected a command after `bandcamp`: `sync`, `status` or `cancel`"
+        );
+        assert_eq!(
+            missing_command(&f, "SOURCE-NAME", &["sync", "status"]),
+            "expected a command after `bandcamp`: `sync` or `status`"
+        );
+        assert_eq!(
+            missing_command(&f, "SOURCE-NAME", &["check-updates"]),
+            "expected a command after `bandcamp`: `check-updates`"
+        );
+    }
+
+    #[test]
+    fn a_missing_command_with_none_listed_points_at_help() {
+        assert_eq!(
+            missing_command(&front(Some("bandcamp"), None), "SOURCE-NAME", &[]),
+            "expected a command after `bandcamp`, pass `--help` for usage information"
+        );
+    }
+
+    #[test]
+    fn a_typo_of_a_curried_command_is_suggested() {
+        let names = ["sync", "status", "cancel"];
+        assert_eq!(
+            missing_command(
+                &front(Some("bandcamp"), Some("snyc")),
+                "SOURCE-NAME",
+                &names
+            ),
+            "no such command after `bandcamp`: `snyc`, did you mean `sync`?"
+        );
+        // Too far from every name: listed instead.
+        assert_eq!(
+            missing_command(&front(Some("bandcamp"), Some("zzz")), "SOURCE-NAME", &names),
+            "expected a command after `bandcamp`: `sync`, `status` or `cancel`"
+        );
+    }
+
+    #[test]
+    fn a_lone_typo_of_a_fixed_sibling_is_that_typo() {
+        assert_eq!(
+            sibling_typo(&front(Some("lst"), None), &["list"]).as_deref(),
+            Some("no such command or positional: `lst`, did you mean `list`?")
+        );
+        // A word after it makes it a value: the command is what is wrong.
+        assert_eq!(
+            sibling_typo(&front(Some("lst"), Some("sync")), &["list"]),
+            None
+        );
+        assert_eq!(
+            sibling_typo(&front(Some("bandcamp"), None), &["list"]),
+            None
+        );
+        assert_eq!(sibling_typo(&front(Some("lst"), None), &[]), None);
+    }
+
+    #[test]
+    fn an_unseen_value_is_shown_as_its_metavar() {
+        assert_eq!(
+            missing_command(&front(None, None), "SOURCE-NAME", &["sync"]),
+            "expected a command after `SOURCE-NAME`: `sync`"
+        );
+    }
+
     #[test]
     fn a_leaf_may_fail() {
         let c = command("apply", "apply something", pure(()), |(), _c: &()| {
@@ -1274,7 +1419,49 @@ mod curried_and_default {
     fn a_missing_curried_command_is_a_usage_error() {
         assert_eq!(
             show(source_bound_only(), &["source", "bandcamp"]),
-            "STDERR: expected `COMMAND ...`, pass `--help` for usage information"
+            "STDERR: expected a command after `bandcamp`: `sync`, `status` or `cancel`"
+        );
+        // With a fixed sibling, bpaf blamed the value (#27).
+        assert_eq!(
+            show(source(), &["source", "bandcamp"]),
+            "STDERR: expected a command after `bandcamp`: `sync`, `status` or `cancel`"
+        );
+    }
+
+    #[test]
+    fn a_misspelled_curried_command_is_suggested() {
+        assert_eq!(
+            show(source(), &["source", "bandcamp", "snyc"]),
+            "STDERR: no such command after `bandcamp`: `snyc`, did you mean `sync`?"
+        );
+        assert_eq!(
+            show(source(), &["source", "bandcamp", "zzz"]),
+            "STDERR: expected a command after `bandcamp`: `sync`, `status` or `cancel`"
+        );
+    }
+
+    #[test]
+    fn a_curried_command_that_matched_keeps_its_own_error() {
+        // Depth wins: `cancel` matched, so its missing `ID` is the error.
+        assert_eq!(
+            show(source(), &["source", "bandcamp", "cancel"]),
+            "STDERR: expected `ID`, pass `--help` for usage information"
+        );
+    }
+
+    #[test]
+    fn the_missing_command_error_leaves_the_rest_alone() {
+        // No value: bpaf's own error, as before #27.
+        assert_eq!(
+            show(source(), &["source"]),
+            "STDERR: expected `COMMAND ...` or `SOURCE-NAME`, pass `--help` for usage information"
+        );
+        let help = show(source(), &["source", "bandcamp", "--help"]);
+        assert!(help.starts_with("STDOUT:\nthe node\n"), "{help}");
+        assert!(help.contains("Commands for SOURCE-NAME:\n"), "{help}");
+        assert_eq!(
+            usage_line(&show(source_bound_only(), &["source", "--help"])),
+            "Usage: source SOURCE-NAME COMMAND ...",
         );
     }
 

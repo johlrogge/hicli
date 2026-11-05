@@ -471,16 +471,21 @@ Available commands:
     list           List the sources on the node
 ```
 
+A source with no command says what is missing, and lists the commands that can
+follow it; a misspelled one gets a "did you mean":
+
+```console
+$ playr source bandcamp
+expected a command after `bandcamp`: `check-updates`
+```
+
 Commands without the `curried` mark, like `list`, are matched first, so a source
 can't be named `list`. A curried command whose first parameter has a different type
 is a compile error. A nested group that also receives the value is
 `#[group(curried = SourceName)]`. One known limit is surprising: `source <TAB>` with
 nothing typed also offers the curried command names, which are not valid until a
-source is typed. Another: a source with no command, `source bandcamp`, fails with
-``expected `COMMAND ...`, got `bandcamp` ``, which reads as if the source name were
-wrong ([#27](https://github.com/johlrogge/hicli/issues/27)). For the others, such as
-`source NAME --help` showing the group's page, see
-[ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
+source is typed. For the others, such as `source NAME --help` showing the group's
+page, see [ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
 
 ### Errors and `?`
 

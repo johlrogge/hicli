@@ -530,16 +530,23 @@ fn suggest(registry: &Registry, args: &[String]) -> Option<String> {
         if registry.known.contains(&tok.as_str()) {
             return None;
         }
-        let mut best: Option<(usize, &str)> = None;
-        for &name in &registry.listed {
-            let d = strsim::levenshtein(tok, name);
-            if (1..=2).contains(&d) && best.is_none_or(|(bd, _)| d < bd) {
-                best = Some((d, name));
-            }
-        }
-        return best.map(|(_, name)| name.to_string());
+        return closest(tok, registry.listed.iter().copied()).map(str::to_string);
     }
     None
+}
+
+/// The name in `names` closest to `word` — one or two edits away (Levenshtein)
+/// — or `None` if none is. The nearest wins; a tie goes to the earlier name.
+/// An exact match is no suggestion.
+pub(crate) fn closest<'a>(word: &str, names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let mut best: Option<(usize, &str)> = None;
+    for name in names {
+        let d = strsim::levenshtein(word, name);
+        if (1..=2).contains(&d) && best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, name));
+        }
+    }
+    best.map(|(_, name)| name)
 }
 
 #[cfg(test)]
@@ -658,6 +665,29 @@ mod tests {
             suggest(&all(&names), &argv(&["ac"])),
             Some("aa".to_string())
         );
+    }
+
+    #[test]
+    fn closest_finds_a_name_one_or_two_edits_away() {
+        let names = ["sync", "status", "cancel"];
+        assert_eq!(closest("snyc", names), Some("sync"));
+        assert_eq!(closest("stats", names), Some("status"));
+        assert_eq!(closest("cancle", names), Some("cancel"));
+    }
+
+    #[test]
+    fn closest_ignores_exact_and_distant_words() {
+        let names = ["sync", "status"];
+        assert_eq!(closest("sync", names), None);
+        assert_eq!(closest("zzzzzz", names), None);
+        assert_eq!(closest("snyc", []), None);
+    }
+
+    #[test]
+    fn closest_prefers_the_nearest_then_the_earlier_name() {
+        assert_eq!(closest("confg", ["configure", "config"]), Some("config"));
+        assert_eq!(closest("ac", ["aa", "ab"]), Some("aa"));
+        assert_eq!(closest("ac", ["ab", "aa"]), Some("ab"));
     }
 
     #[test]

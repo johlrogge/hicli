@@ -25,6 +25,11 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
   `List the archive` (#19).
 - A curried value's field doc is listed under "Available positional items:", not as a
   row of "Commands for VALUE:" (#20).
+- A curried group given a value but no command says
+  ``expected a command after `bandcamp`: `check-updates` `` instead of blaming the
+  value, and a typo there gets a "did you mean":
+  ``no such command after `bandcamp`: `snyc`, did you mean `sync`?`` (#27). This also
+  closes ADR-011's known limit that a typo after the value got no suggestion.
 
 ### Changed (help text, not API)
 
@@ -38,6 +43,9 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
 - The `--help` page of a curried group lists the value's row under "Available
   positional items:" (or its type's doc heading) instead of under "Commands for
   VALUE:" (#20).
+- The error for a missing or misspelled curried command, after the value:
+  ``expected a command after `VALUE`: …`` or ``no such command after `VALUE`: …, did
+  you mean …?``, where it was ``expected `COMMAND ...`, got `VALUE` `` (#27).
 
 ## [0.2.1] — 2026-11-05
 

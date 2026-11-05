@@ -235,13 +235,15 @@
 //! - Completing a non-empty word where the value — or the default's first
 //!   positional — goes offers the sibling commands whose names start with it,
 //!   beside the value's own candidates (`source l` → `list`).
+//! - A value with no curried command after it lists the curried commands
+//!   (``expected a command after `bandcamp`: `sync` or `status` ``), and a typo
+//!   of one gets a `did you mean` (`source bandcamp snyc`).
 //!
 //! Known limits: `source <TAB>`, with nothing typed, also offers the curried
 //! commands, which are not valid until a value is typed; when the value's
 //! completer has exactly one match for a typed word, a fixed sibling that
-//! also starts with it is not offered; a typo of a curried command after a
-//! value (`source bandcamp snyc`) gets no `did you mean` when the group has a
-//! fixed sibling; `source bandcamp --help` shows the group's page; a typo of a
+//! also starts with it is not offered; `source bandcamp --help` shows the
+//! group's page; a typo of a
 //! named sibling in front of a default is silently the default's value.
 
 pub use bpaf;

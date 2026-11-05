@@ -541,6 +541,20 @@ Available commands:
     }
 
     #[test]
+    fn a_source_without_a_command_matches_the_readme() {
+        let e = app()
+            .bin_name("playr")
+            .parse(["source", "bandcamp"])
+            .err()
+            .expect("a usage error");
+        assert_eq!(exit_code_for(&e), 2);
+        assert_eq!(
+            e.unwrap_stderr(),
+            "expected a command after `bandcamp`: `check-updates`"
+        );
+    }
+
+    #[test]
     fn sort_help_matches_the_readme() {
         assert_eq!(
             page(&["sort", "--help"]),
