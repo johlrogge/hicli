@@ -67,9 +67,9 @@ load; the file is read by the macro only to discover children and the context.
 It is never inlined, so diagnostics keep their real spans, rust-analyzer edits
 the real file, and cargo's dep-info tracks it.
 
-The `#[path]` is kept even though a plain `mod x;` resolves on 1.99, because it
-settles the case of a crate root not named `lib.rs`/`main.rs` (e.g.
-`tests/group_files.rs` beside `tests/group_files/`).
+The `#[path]` is kept (amended by 0.2.1, see Amendment) even though a plain
+`mod x;` resolves on 1.99, because it settles the case of a crate root not named
+`lib.rs`/`main.rs` (e.g. `tests/group_files.rs` beside `tests/group_files/`).
 
 ### 2. `group_mod!` does not exist in 0.1.0
 
@@ -87,7 +87,7 @@ toolchains are not supported.
 
 - The declaring file is found via `Span::local_file()`/`Span::file()` and the
   anchor search.
-- The emitted `#[path]` remains (see 1).
+- The emitted `#[path]` remains (see 1) (amended by 0.2.1, see Amendment).
 - A file group must be at its file's top level. Inside an inline
   `#[group] mod a { … }`, a `#[group] mod b;` without `#[path]` is now rejected,
   since rustc would resolve it against a different directory than hicli can see.
@@ -116,3 +116,7 @@ toolchains are not supported.
 - An inner `#![group]` remains unavailable (E0658, rust-lang/rust#54726).
 - rust-analyzer's behaviour on attribute macros over out-of-line modules is still
   to be checked manually (`ROADMAP.md`).
+
+## Amendment (0.2.1, #25)
+
+rustc treats any file loaded through `#[path]` as a mod-rs file, so emitting `#[path]` on every file group made each group file mod-rs: a plain `mod helper;` in `src/source.rs` resolved to `src/helper.rs`, not `src/source/helper.rs` (E0583). `#[group]` now emits the synthesised `#[path]` only when rustc's own rules would not load the file the macro read. A declaration goes out as written when it is in a `mod.rs`/`lib.rs`/`main.rs` and the file is beside it, or when it is in a non-mod-rs `foo.rs` that hicli can prove rustc loaded without a `#[path]` and the file is in `foo/`. hicli proves this by finding a top-level, `#[path]`-free `mod foo;` in the file that owns `foo.rs`'s directory, recursively. In both cases the other arrangement must be absent. Everywhere else — a crate root not named `lib.rs`/`main.rs` with a same-named directory, a group nested in a `#[path]`-loaded file, an ambiguous `x.rs` + `x/mod.rs` — the `#[path]` is still emitted, and inside such a file rustc's mod-rs rule applies to plain submodules. The guarantee that rustc reads the bytes the macro read now holds by prediction where hicli can prove it, and by construction elsewhere; a wrong prediction fails to compile rather than compiling a different file.

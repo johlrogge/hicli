@@ -38,7 +38,7 @@ use crate::ctx::{self, render, Ctx, Outline};
 use crate::discover::{children_of, Child, ChildKind};
 use crate::expand::metadata;
 use crate::fs::Fs;
-use crate::resolve::{resolve as resolve_file, show};
+use crate::resolve::{resolve as resolve_file, show, Load};
 use crate::shared::{
     cfg_attrs, dashed, handle_doc, handle_ident, parse_keys, path_attr, read_doc, unraw_name,
     CommandMeta, GROUP_NEEDS_DOC,
@@ -364,11 +364,13 @@ fn file_in_inline(ident: &Ident) -> String {
 
 /// A file module: `pub mod event;` plus the file it names.
 ///
-/// The declaration comes back with a synthesised `#[path]` — so rustc reads
-/// exactly the bytes that were read here, and the one question a proc macro
-/// cannot answer (is this declaring file a crate root?) stops mattering — and
-/// the handle comes back beside it, written from the children found in the
-/// file.
+/// The declaration comes back so that rustc reads exactly the bytes that were
+/// read here: as written, where rustc's own rules find the file, and with a
+/// synthesised `#[path]` everywhere else — including wherever the one question
+/// a proc macro cannot answer (is this declaring file a crate root?) would
+/// matter. A `#[path]` is avoided where it can be, because rustc treats a file
+/// loaded through one as mod-rs. The handle comes back beside it, written from
+/// the children found in the file.
 fn file_form(
     fs: &dyn Fs,
     source: Source<'_>,
@@ -425,10 +427,14 @@ fn file_form(
         children,
     });
 
-    // Never an absolute path: `relative` is relative to the declaring file's
-    // directory, which is what `#[path]` on an outlined module means (spike
-    // 0.4). An author who wrote their own keeps it.
-    if explicit.is_none() {
+    // rustc reads the bytes read here either because its own rules find them
+    // or because a `#[path]` says so — and the `#[path]` is only added where
+    // it is needed, because it makes the file mod-rs and would send a plain
+    // `mod helper;` inside it to the wrong directory (#25). Never an absolute
+    // path: `relative` is relative to the declaring file's directory, which is
+    // what `#[path]` on an outlined module means (spike 0.4). An author who
+    // wrote their own keeps it.
+    if explicit.is_none() && found.load == Load::ByPath {
         let relative = &found.relative;
         item.attrs.push(syn::parse_quote!(#[path = #relative]));
     }
@@ -1009,11 +1015,13 @@ mod tests {
     }
 
     #[test]
-    fn a_file_group_is_re_emitted_with_a_path_and_a_handle() {
-        // The reference expansion for the file form, asserted whole. Note the
-        // synthesised `#[path]` — relative, never absolute — and that the
-        // handle is written from children the macro found by *reading*
-        // `src/event.rs`, in the file's source order.
+    fn a_file_group_beside_a_crate_root_is_re_emitted_without_a_path() {
+        // The reference expansion for the file form, asserted whole. `main.rs`
+        // is mod-rs by name and `src/event.rs` is beside it, so rustc finds the
+        // file unaided and the declaration goes out as written — no `#[path]`,
+        // which would make `event.rs` mod-rs too (#25). The handle is written
+        // from children the macro found by *reading* `src/event.rs`, in the
+        // file's source order.
         let got = file_expansion(
             &event_tree(),
             "src/main.rs",
@@ -1027,7 +1035,6 @@ mod tests {
             #[doc = " events and instances"]
             #[doc = ""]
             #[doc = " An event is a directory; an instance is a branch of it."]
-            #[path = "event.rs"]
             pub mod event;
 
             #[doc = "`hicli` registration handle for [`event`]."]
@@ -1071,6 +1078,45 @@ mod tests {
             "{got}"
         );
         assert!(!got.contains("# [group"), "a #[group] was emitted:\n{got}");
+    }
+
+    #[test]
+    fn a_file_group_under_a_root_with_its_own_directory_keeps_a_path() {
+        // `tests/cli.rs` is a crate root, so rustc would look in `tests/` —
+        // the `#[path]` is what makes `tests/cli/event.rs` the answer.
+        let got = file_expansion(
+            &[
+                ("tests/cli.rs", ""),
+                (
+                    "tests/cli/event.rs",
+                    "/// c\n#[command] pub fn create(c: &Ctx) {}",
+                ),
+            ],
+            "tests/cli.rs",
+            "",
+            "/// events\npub mod event;",
+        );
+        assert!(got.contains("# [path = \"cli/event.rs\"]"), "{got}");
+    }
+
+    #[test]
+    fn a_nested_file_group_in_an_ordinary_file_has_no_path() {
+        // `src/event.rs` is loaded by `main.rs`'s own plain declaration, so it
+        // is not mod-rs, and rustc looks in `src/event/` unaided.
+        let got = file_expansion(
+            &[
+                ("src/main.rs", "/// e\n#[group]\npub mod event;"),
+                ("src/event.rs", ""),
+                (
+                    "src/event/audience.rs",
+                    "/// d\n#[command] pub fn define(c: &Ctx) {}",
+                ),
+            ],
+            "src/event.rs",
+            "",
+            "/// a\npub mod audience;",
+        );
+        assert!(!got.contains("# [path"), "a #[path] was emitted:\n{got}");
     }
 
     #[test]

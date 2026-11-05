@@ -732,12 +732,23 @@ pub use hicli_macros::command;
 /// - a **non-mod-rs** file `x.rs` searches `x/` — `src/event.rs` finds
 ///   `src/event/audience.rs` or `src/event/audience/mod.rs`.
 ///
-/// The macro then **emits `#[path = "<relative>"]`** for every declaration it
-/// resolved itself, so rustc reads exactly the bytes the macro read. That also
-/// settles the one question a proc macro cannot ask the compiler — *is this
-/// declaring file a crate root?* — because whichever file the macro chose is
-/// the file rustc is told to use. The emitted path is always relative to the
-/// declaring file's directory; an absolute path never appears in the output.
+/// rustc must read exactly the bytes the macro read, so the macro **emits
+/// `#[path = "<relative>"]` only when rustc's own rules would not find the
+/// file**: under a crate root not named `lib.rs`/`main.rs` that keeps its
+/// modules in a same-named directory (`tests/cli.rs` + `tests/cli/`), for a
+/// group nested in a file that was itself loaded through `#[path]`, or when
+/// both `x.rs` and `x/mod.rs` exist. That settles the one question a proc
+/// macro cannot ask the compiler — *is this declaring file a crate root?* —
+/// wherever it would matter. Otherwise the declaration goes out as written, so
+/// plain `mod helper;` items inside a group file resolve as in any Rust file:
+/// `src/source.rs`'s `mod helper;` is `src/source/helper.rs`. An emitted path
+/// is always relative to the declaring file's directory; an absolute path
+/// never appears in the output.
+///
+/// Inside a file loaded through `#[path]` — an author's own or an emitted one
+/// — rustc treats the file as mod-rs and resolves plain submodules **beside**
+/// it, not in a directory named after it; give those submodules their own
+/// `#[path]`.
 ///
 /// ## Rebuilds
 ///
