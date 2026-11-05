@@ -483,18 +483,18 @@ fn a_second_positional_is_a_usage_error() {
 #[test]
 fn search_help_shows_both_forms_the_options_and_the_commands() {
     let h = help(&["search", "--help"]);
-    // bpaf wraps a long usage at 100 columns, mid-token (`[` / `--genre`), so
-    // the usage is the paragraph after `Usage: `, unwrapped.
-    let usage: String = h
-        .split("\n\n")
-        .find(|p| p.starts_with("Usage: "))
-        .unwrap_or_else(|| panic!("no usage in {h}"))
-        .lines()
-        .collect();
-    // Both forms: a named command, or the default's options and QUERY.
-    assert!(usage.starts_with("Usage: search (COMMAND ... | "), "{h}");
-    assert!(usage.contains("[--artist=ARTIST]"), "{h}");
-    assert!(usage.ends_with("[QUERY])"), "{h}");
+    // Both forms: a named command, or the default's options and QUERY. The
+    // line is too long for 100 columns, so hicli wraps it between items, each
+    // continuation under the `(` (#30).
+    let i = " ".repeat("Usage: search ".len());
+    let usage = format!(
+        "Usage: search (COMMAND ... | [--artist=ARTIST] [--title=TITLE] [--album=ALBUM] \
+         [--label=LABEL]\n\
+         {i}[--genre=GENRE] [--style=STYLE] [--bpm=BPM] [--key=KEY] [--duration=DURATION]\n\
+         {i}[--year=YEAR] [--source=SOURCE] [--no-stdin] [--played=PLAYED] [--role=ROLE]\n\
+         {i}[--energy=ENERGY] [--not] [--started=DATE] [--stopped=DATE] [--added=DATE] [QUERY])\n\n"
+    );
+    assert!(h.contains(&usage), "{h}");
     // The default's arguments, under its one-line help.
     assert!(h.contains("Search by free text and filters"), "{h}");
     for opt in [
@@ -522,6 +522,28 @@ fn search_help_shows_both_forms_the_options_and_the_commands() {
         .unwrap_or_else(|| panic!("no commands section in {h}"));
     assert!(commands.contains("fact-values-for"), "{h}");
     assert!(commands.contains("List all distinct values"), "{h}");
+}
+
+/// #30: no help line is wider than 100 columns, and the wrapped usage never
+/// splits a bracket or parenthesis from what it encloses.
+#[test]
+fn search_help_wraps_its_usage_between_items() {
+    let h = help(&["search", "--help"]);
+    for line in h.lines() {
+        let columns = line.chars().count();
+        assert!(columns <= 100, "{columns} columns: {line:?}:\n{h}");
+    }
+    let usage = h
+        .split("\n\n")
+        .find(|p| p.starts_with("Usage: "))
+        .unwrap_or_else(|| panic!("no usage in {h}"));
+    for line in usage.lines() {
+        assert!(!line.ends_with(['[', '(']), "{line:?} ends open:\n{h}");
+        assert!(
+            !line.trim_start().starts_with([']', ')']),
+            "{line:?} starts closing:\n{h}"
+        );
+    }
 }
 
 #[test]

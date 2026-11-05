@@ -8,6 +8,8 @@ Corrected (#31), 2026-11-05: in 0.3 `run` printed no coloured output; the
 coloured path arrived with ADR-015. The last of the "Alternatives considered"
 is reworded accordingly.
 
+Amended (#30), 2026-11-05: §4, long usage lines wrap between items.
+
 Closes johlrogge/hicli#21 (usage lines name no binary) and johlrogge/hicli#28
 (a trailing space after a command without arguments). Keeps ADR-009 §3: hicli
 still never hands `bpaf` the program name. Generalises what ADR-011 §4 did for
@@ -59,6 +61,62 @@ unless `bin_name` is set. The name is never part of `Invocation::path`.
 ADR-009 §3 stands. The name is display text, written into the usage line by
 hicli. `bpaf` never sees it, so `--bpaf-complete-style-*` stays an unknown flag
 (exit 2) with or without `bin_name`. `tests/usage.rs` pins that.
+
+### 4. Long usage lines wrap between items (amendment, #30)
+
+**The defect.** `mdma rekordbox export --help` printed
+
+```
+Usage: mdma rekordbox export [--playlist=PLAYLIST]... [--output=OUTPUT] [--format=FORMAT] [--replace
+]
+```
+
+The root cause is in `bpaf`'s console renderer (`buffer/console.rs`). It
+wraps per chunk, and a chunk ends at a style boundary as well as at a space:
+`[` (text), `--replace` (literal) and `]` (text) are three chunks, so the line
+breaks between whichever two cross column 100, and a `[` or `]` lands on a
+line apart from its option. The continuation margin is zero, so the next line
+starts at column zero. (The overflow check also compares a chunk's byte length
+with a character position.) `tests/bpaf_contract.rs` (W-S1) pins this with
+plain `bpaf`, and an issue is filed upstream.
+
+There is no clean fix in hicli: the derived part reaches `with_usage` as an
+opaque `Doc`, whose tokens are private and whose public renderings are
+monochrome.
+
+**The workaround**, all in `help::usage_line`:
+
+- **A line that fits in 100 columns is unchanged**: it is built from `bpaf`'s
+  own derived tokens, byte for byte as before, styles included. Only a longer
+  line takes the path below.
+- **Layout.** The derived part's text (unwrapped, monochrome) is split at
+  spaces into units that never break: a `...` word stays with the word before
+  it (`COMMAND ...`), a `|` word with the word after it
+  (`| [--artist=ARTIST]`). Units are filled greedily into lines of at most
+  100 columns, measured in bytes as `bpaf`'s check measures them; a unit too
+  long for a line gets one of its own.
+- **Indent.** Every continuation is indented to where the derived part
+  starts, under the first item; if that is past half the width, 7 columns,
+  under `Usage: `. Each continuation is a `"\n "` hard break followed by the
+  indent as a `Doc` of its own, so `bpaf` never reads the indent as a code
+  line.
+- **Styling.** Each line is re-styled from its text by `bpaf`'s usage grammar
+  (`Doc::write_meta`): `COMMAND ...` and metavars as metavars, an option's
+  name as a literal, brackets, parentheses, `|`, `...`, `=` and spaces as
+  text.
+
+```
+Usage: mdma rekordbox export [--playlist=PLAYLIST]... [--output=OUTPUT] [--format=FORMAT]
+                             [--replace]
+```
+
+**Known mis-styles**, on wrapped lines only: a metavar that contains a space
+or a bracket, and a custom `any` metavar `Doc`, are styled by the grammar
+rather than as `bpaf` styled them. The text is always `bpaf`'s.
+
+**Removal.** The workaround is removed once `bpaf` wraps usage lines between
+items itself; W-S1 in `tests/bpaf_contract.rs` fails on that upgrade and says
+so.
 
 ## Why `argv[0]` here, when ADR-009 rejected it
 

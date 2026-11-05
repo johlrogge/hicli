@@ -51,6 +51,28 @@ snapshot tests built on it need no re-blessing.
   `any` + `adjacent` recipe keeps working; to follow the convention, replace it with
   a plain `argument` (#29).
 
+### Fixed
+
+- A usage line longer than 100 columns wraps between items, and every continuation
+  is indented under the first item, instead of `bpaf` breaking it wherever column 100
+  falls — which could split a `[` or `]` from its option and started the next line
+  at column zero (#30, ADR-013 §4). Before:
+
+  ```
+  Usage: mdma rekordbox export [--playlist=PLAYLIST]... [--output=OUTPUT] [--format=FORMAT] [--replace
+  ]
+  ```
+
+  After:
+
+  ```
+  Usage: mdma rekordbox export [--playlist=PLAYLIST]... [--output=OUTPUT] [--format=FORMAT]
+                               [--replace]
+  ```
+
+  A usage line that fits in 100 columns is unchanged, byte for byte. This is a
+  workaround for a `bpaf` rendering bug and goes away when `bpaf` fixes it.
+
 ## [0.3.0] — 2026-11-05
 
 No breaking API changes. The signature of `hicli::group_args`, flagged in 0.2.0 as

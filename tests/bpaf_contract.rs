@@ -1399,6 +1399,58 @@ fn r2_cs4_without_the_recipe_bash_and_zsh_insert_the_metavar_literally() {
     assert_eq!(comp_rev(9, p(), &["source", "l"]), "COMPLETION:\n");
 }
 
+// --- W-S1: a long usage line (#30) -------------------------------------------
+//
+// bpaf wraps a usage line per chunk, and its chunks end at style boundaries as
+// well as at spaces: `[` (text), `--name` (literal) and `]` (text) are three
+// chunks, and the line breaks between whichever two overflow column 100. The
+// continuation starts at column zero. hicli wraps long usage lines itself
+// (`help::usage_line`, ADR-013 §4); this pins bpaf's behaviour, so a fix
+// upstream shows here and the workaround can go.
+
+/// The first two lines of the help for four switches with the given names.
+fn usage_of_switches(names: [&'static str; 4]) -> Vec<String> {
+    let [a, b, c, d] = names.map(|n| long(n).switch());
+    let help = construct!(a, b, c, d)
+        .to_options()
+        .run_inner(&["--help"][..])
+        .expect_err("--help is not a parse")
+        .unwrap_stdout();
+    help.lines().take(2).map(str::to_string).collect()
+}
+
+#[test]
+fn w_s1_bpaf_wraps_a_usage_line_between_a_bracket_and_its_option() {
+    // `[` lands in column 100 and the option overflows: the line ends in `[`.
+    assert_eq!(
+        usage_of_switches([
+            "switch-number-0001-abcdefg",
+            "switch-number-0002-abcdefg",
+            "switch-number-0003-abcdef",
+            "switch-number-0004",
+        ]),
+        [
+            "Usage: [--switch-number-0001-abcdefg] [--switch-number-0002-abcdefg] \
+             [--switch-number-0003-abcdef] [",
+            "--switch-number-0004]",
+        ]
+    );
+    // The option ends in column 100 and the `]` overflows: a lone `]`.
+    assert_eq!(
+        usage_of_switches([
+            "switch-number-0001",
+            "switch-number-0002",
+            "switch-number-0003",
+            "switch-number-004-xyz",
+        ]),
+        [
+            "Usage: [--switch-number-0001] [--switch-number-0002] [--switch-number-0003] \
+             [--switch-number-004-xyz",
+            "]",
+        ]
+    );
+}
+
 // --- C-S5: errors with the guard ---------------------------------------------
 
 #[test]

@@ -95,6 +95,51 @@ mod source {
     }
 }
 
+/// What to export (mdma's `rekordbox export`, #30).
+#[derive(Debug, Clone, Bpaf, Arg)]
+pub struct Export {
+    /// A playlist to export; repeat for several
+    #[bpaf(long, argument("PLAYLIST"), many)]
+    playlist: Vec<String>,
+    /// Where to write the export
+    #[bpaf(long, argument("OUTPUT"))]
+    output: Option<String>,
+    /// The export format
+    #[bpaf(long, argument("FORMAT"))]
+    format: Option<String>,
+    /// Replace an existing export
+    #[bpaf(long, switch)]
+    replace: bool,
+}
+
+/// Rekordbox integration
+#[group]
+mod rekordbox {
+    use super::*;
+
+    /// Export playlists for rekordbox
+    #[command]
+    pub fn export(export: Export, ctx: &Ctx) {
+        let _ = ctx;
+        let Export {
+            playlist,
+            output,
+            format,
+            replace,
+        } = export;
+        println!("exporting {playlist:?} to {output:?} as {format:?} (replace: {replace})");
+    }
+}
+
+/// A tree whose usage line is too long for one line, as `mdma`.
+fn mdma() -> App<Globals, Ctx> {
+    app! {
+        globals: globals(),
+        commands: [rekordbox],
+    }
+    .bin_name("mdma")
+}
+
 /// The tree, with no binary name.
 fn nameless() -> App<Globals, Ctx> {
     app! {
@@ -179,6 +224,47 @@ fn without_a_bin_name_the_test_seams_show_none() {
     assert_no_trailing_space(&h);
     let h = help(nameless(), &["--help"]);
     assert_eq!(usage(&h), "Usage: [--node=HOST] COMMAND ...", "{h}");
+}
+
+/// The `Usage:` paragraph of a help page: every line up to the blank one.
+fn usage_paragraph(page: &str) -> &str {
+    page.split("\n\n")
+        .find(|p| p.starts_with("Usage:"))
+        .unwrap_or_else(|| panic!("no usage paragraph in:\n{page}"))
+}
+
+/// Panic unless every line of `page` fits in 100 columns and no line of its
+/// usage paragraph splits a bracket or parenthesis from what it encloses.
+fn assert_wrapped_between_items(page: &str) {
+    for line in page.lines() {
+        let columns = line.chars().count();
+        assert!(columns <= 100, "{columns} columns: {line:?}:\n{page}");
+    }
+    for line in usage_paragraph(page).lines() {
+        assert!(!line.ends_with(['[', '(']), "{line:?} ends open:\n{page}");
+        assert!(
+            !line.trim_start().starts_with([']', ')']),
+            "{line:?} starts closing:\n{page}"
+        );
+    }
+}
+
+#[test]
+fn a_long_usage_line_wraps_between_items_under_the_derived_part() {
+    // #30: bpaf split `[` from `--replace` at column 100.
+    let h = help(mdma(), &["rekordbox", "export", "--help"]);
+    // The continuation starts where the derived part does, under `[--playlist`.
+    let indent = " ".repeat("Usage: mdma rekordbox export ".len());
+    assert_eq!(
+        usage_paragraph(&h),
+        format!(
+            "Usage: mdma rekordbox export [--playlist=PLAYLIST]... [--output=OUTPUT] \
+             [--format=FORMAT]\n{indent}[--replace]"
+        ),
+        "{h}"
+    );
+    assert_wrapped_between_items(&h);
+    assert_no_trailing_space(&h);
 }
 
 #[test]
