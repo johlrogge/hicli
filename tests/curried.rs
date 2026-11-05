@@ -380,19 +380,23 @@ fn unknown_per_source_command_fails() {
 
 #[test]
 fn source_name_without_command_fails() {
+    // #27: the command is what is missing, not the value.
     let msg = usage_error(&["source", "bandcamp"]);
-    assert!(msg.contains("COMMAND"), "{msg}");
+    assert!(
+        msg.starts_with("expected a command after `bandcamp`: `sync`, `status`, "),
+        "{msg}"
+    );
     assert_eq!(run(&["source", "bandcamp"]).0, 2);
 }
 
 #[test]
 fn old_name_last_order_is_rejected() {
-    // mdma only asserts the rejection. hicli rejects it with bpaf's own
-    // message, which is misleading: `sync` *is* a command (after a value), and
-    // `resync` is not what was meant. Pinned so a better message shows up.
-    assert_eq!(
-        usage_error(&["source", "sync", "bandcamp"]),
-        "no such command or positional: `sync`, did you mean `resync`?"
+    // mdma only asserts the rejection. `sync` is read as the value and
+    // `bandcamp` is no command after it — which says what the order is.
+    let msg = usage_error(&["source", "sync", "bandcamp"]);
+    assert!(
+        msg.starts_with("expected a command after `sync`: `sync`, "),
+        "{msg}"
     );
     assert_eq!(run(&["source", "sync", "bandcamp"]).0, 2);
 }
@@ -463,6 +467,34 @@ fn source_help_lists_list_and_explains_the_name_first_form() {
         !section.lines().any(|l| l.trim_start().starts_with("list ")),
         "{section}"
     );
+}
+
+/// #20: the value's field doc is a positional item, not a command row.
+///
+/// `SourceName`'s own doc comment titles its section (bpaf's rule for a doc
+/// comment on a derived struct), so the positional section here is headed by
+/// it rather than by "Available positional items:".
+#[test]
+fn source_help_lists_the_value_with_the_positional_items() {
+    let h = help(&["source", "--help"]);
+    let paragraphs: Vec<&str> = h.split("\n\n").collect();
+    let row = |l: &&str| l.trim_start().starts_with("SOURCE-NAME ");
+    let commands = paragraphs
+        .iter()
+        .find(|p| p.starts_with("Commands for SOURCE-NAME:"))
+        .unwrap_or_else(|| panic!("no commands section in {h}"));
+    assert!(!commands.lines().any(|l| row(&l)), "{h}");
+    let positionals = paragraphs
+        .iter()
+        .find(|p| p.starts_with("A music source's name"))
+        .unwrap_or_else(|| panic!("no positional section in {h}"));
+    assert!(
+        positionals
+            .lines()
+            .any(|l| row(&l) && l.ends_with("the music source")),
+        "{h}"
+    );
+    assert_eq!(h.lines().filter(row).count(), 1, "{h}");
 }
 
 #[test]
@@ -621,11 +653,11 @@ fn known_limit_a_lone_value_match_hides_the_fixed_sibling() {
     assert_eq!(app.complete(cli! { places l }), ["local"]);
 }
 
-/// Known limit (documented in `src/lib.rs`): a typo of a curried command
-/// after a value gets no `did you mean` — bpaf blames the value instead,
-/// because the fixed sibling sits beside the curried branch.
+/// A typo of a curried command after a value gets a `did you mean` (#27).
 #[test]
-fn known_limit_a_typo_after_the_value_is_not_suggested() {
-    let msg = usage_error(&["source", "bandcamp", "snyc"]);
-    assert!(!msg.contains("did you mean"), "{msg}");
+fn a_typo_after_the_value_is_suggested() {
+    assert_eq!(
+        usage_error(&["source", "bandcamp", "snyc"]),
+        "no such command after `bandcamp`: `snyc`, did you mean `sync`?"
+    );
 }

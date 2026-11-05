@@ -21,12 +21,36 @@ use crate::arg::Candidate;
 use crate::external::ExternalCommand;
 use crate::invocation::Invocation;
 use crate::outcome::IntoOutcome;
-use bpaf::{any, construct, doc::Doc, Parser};
-use std::cell::RefCell;
+use bpaf::doc::{Doc, MetaInfo};
+use bpaf::{any, construct, Parser};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// A boxed parser producing an `O`.
 type Boxed<O> = Box<dyn Parser<O>>;
+
+/// A set of children folded into one alternative, and what its group's help
+/// page needs to know about the default among them.
+pub(crate) struct Folded<O> {
+    /// The alternative itself.
+    pub(crate) parser: Boxed<O>,
+    /// The default child's help, if there is a default.
+    pub(crate) default: Option<DefaultHelp>,
+}
+
+/// A default command's one-line help, and whether `bpaf` will print it.
+///
+/// `bpaf` prints a default's help line only as the title of its options'
+/// section, and keeps a section only when it starts with an item (#19). A
+/// default without options would be invisible; its group puts the line in
+/// its header instead.
+pub(crate) struct DefaultHelp {
+    /// The default's one-line help.
+    help: String,
+    /// Set when the default's parser has items to list — read only after
+    /// `bpaf` has asked the parser for its metadata, which is what sets it.
+    has_items: Rc<Cell<bool>>,
+}
 
 /// A deferred parser builder — see the module docs.
 type Deferred<O> = Box<dyn FnOnce(&Mount) -> Boxed<O>>;
@@ -43,18 +67,20 @@ pub(crate) struct Mount {
     /// The path from the root down to (and including) the command being
     /// mounted — command names only, what [`Invocation::path`] reports.
     path: Vec<&'static str>,
-    /// The same path as a usage line spells it: with the metavar of every
-    /// curried value on the way down (`source SOURCE-NAME sync`). Equal to
-    /// `path` unless the command sits under a curried group.
+    /// The same path as a usage line spells it: the binary's name, if there
+    /// is one to show, then the path with the metavar of every curried value
+    /// on the way down (`playr source SOURCE-NAME sync`, ADR-013).
     shown: Vec<String>,
 }
 
 impl Mount {
     /// The root mount: no path yet, one level above the top-level commands.
-    pub(crate) fn root() -> Mount {
+    /// `bin` is the binary's name, shown first in every usage line — display
+    /// only, never part of [`Invocation::path`].
+    pub(crate) fn root(bin: Option<&str>) -> Mount {
         Mount {
             path: Vec::new(),
-            shown: Vec::new(),
+            shown: bin.into_iter().map(str::to_string).collect(),
         }
     }
 
@@ -76,15 +102,6 @@ impl Mount {
             path: self.path.clone(),
             shown,
         }
-    }
-
-    /// Whether a usage line must spell this path differently from bpaf's
-    /// derived one — which drops every curried value (spike S5).
-    fn is_shifted(&self) -> bool {
-        self.shown
-            .iter()
-            .map(String::as_str)
-            .ne(self.path.iter().copied())
     }
 
     /// Where this is, for a panic message.
@@ -273,8 +290,8 @@ pub fn curried_command<T: 'static, Ctx: 'static, A: 'static, R: IntoOutcome>(
 ///   not) is that command, never the value.
 /// - `bound` are the [`Curried`] commands that run with the value.
 ///
-/// `--help` lists the bound commands, with the value, under
-/// `Commands for <METAVAR>:`, and each bound command's usage line names the
+/// `--help` lists the bound commands under `Commands for <METAVAR>:` — the
+/// value itself is a positional item — and each bound command's usage line names the
 /// value (`Usage: source SOURCE-NAME sync`). Completing a non-empty word where
 /// the value goes offers the fixed commands whose names start with it, beside
 /// whatever the value's own completer offers.
@@ -348,6 +365,16 @@ fn mount_curried<T: 'static, O: 'static, P: Parser<T> + 'static>(
     let metavar = usage_fragment(arg());
     let reserved: Vec<&'static str> = fixed.iter().flat_map(Node::spellings).collect();
     let names = listed_names(&fixed);
+    let fixed_names: Vec<&'static str> = fixed
+        .iter()
+        .filter(|c| c.is_listed())
+        .map(Node::name)
+        .collect();
+    let bound_names: Vec<&'static str> = bound
+        .iter()
+        .filter(|c| c.is_listed())
+        .map(Node::name)
+        .collect();
     let fixed_alt = fold_named(fixed, at);
     let bound_alt = fold_named(bound, &at.bound(&metavar)).unwrap_or_else(|| {
         panic!(
@@ -357,15 +384,66 @@ fn mount_curried<T: 'static, O: 'static, P: Parser<T> + 'static>(
     });
     let front = Rc::new(RefCell::new(Front::default()));
     let guard = peek(front.clone(), reserved);
-    let t = arg().complete(offer_siblings(front, names));
+    let t = arg().complete(offer_siblings(front.clone(), names));
+    // The section holds the bound commands only: the value is listed with the
+    // positional items, under its own doc (#20).
+    let bound_alt = bound_alt.group_help(format!("Commands for {metavar}:").as_str());
+    // When no bound command matches at all, bpaf would blame the value
+    // (#27). This alternative fails with hicli's own message instead: it wins
+    // over bpaf's `Missing` at the same depth, and loses to a bound command
+    // that matched and failed deeper. Its meta is `Skip`, so neither usage
+    // nor help changes.
+    let missing = bpaf::pure_with::<(), _, String>(move || {
+        let f = front.borrow();
+        Err(sibling_typo(&f, &fixed_names)
+            .unwrap_or_else(|| missing_command(&f, &metavar, &bound_names)))
+    })
+    .map(|()| -> Partial<T, O> { unreachable!("pure_with never succeeds here") });
+    let bound_alt = construct!([bound_alt, missing]);
     let branch = construct!(guard, t, bound_alt)
         .map(|((), t, f)| f.apply(t))
-        .group_help(format!("Commands for {metavar}:").as_str())
         .boxed();
     match fixed_alt {
         Some(fixed_alt) => construct!([fixed_alt, branch]).boxed(),
         None => branch,
     }
+}
+
+/// The error for a curried group given its value but none of its `names`d
+/// commands after it (#27): a typo of one of them gets a "did you mean", else
+/// they are listed. The value is shown as typed, or as `metavar` if unseen.
+fn missing_command(front: &Front, metavar: &str, names: &[&str]) -> String {
+    let value = front.word.as_deref().unwrap_or(metavar);
+    if let Some(next) = &front.next {
+        if let Some(near) = crate::app::closest(next, names.iter().copied()) {
+            return format!("no such command after `{value}`: `{next}`, did you mean `{near}`?");
+        }
+    }
+    let quoted: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+    match quoted.as_slice() {
+        [] => format!("expected a command after `{value}`, pass `--help` for usage information"),
+        [one] => format!("expected a command after `{value}`: {one}"),
+        [init @ .., last] => {
+            format!(
+                "expected a command after `{value}`: {} or {last}",
+                init.join(", ")
+            )
+        }
+    }
+}
+
+/// A lone word where a curried group's value goes that is a typo of one of
+/// its fixed siblings' `names` (`source lst`) is that typo, not a value missing
+/// its command: the error bpaf gave before [`missing_command`] took over.
+fn sibling_typo(front: &Front, names: &[&str]) -> Option<String> {
+    if front.next.is_some() {
+        return None;
+    }
+    let word = front.word.as_deref()?;
+    let near = crate::app::closest(word, names.iter().copied())?;
+    Some(format!(
+        "no such command or positional: `{word}`, did you mean `{near}`?"
+    ))
 }
 
 /// What `p`'s usage line shows for its own items — `SOURCE-NAME` — read
@@ -379,18 +457,6 @@ fn usage_fragment<T: 'static>(p: impl Parser<T> + 'static) -> String {
     seen.into_inner()
 }
 
-/// A usage line spelling the path as `shown`, then bpaf's derived fragment
-/// (spike H-S1). bpaf hands `with_usage` the fragment only.
-fn usage_prefixed(shown: &[String]) -> impl Fn(Doc) -> Doc {
-    let prefix = format!("Usage: {} ", shown.join(" "));
-    move |derived| {
-        let mut u = Doc::default();
-        u.text(&prefix);
-        u.doc(&derived);
-        u
-    }
-}
-
 /// The front of a node's remaining words, as [`peek`] last saw it.
 #[derive(Default)]
 struct Front {
@@ -398,11 +464,15 @@ struct Front {
     word: Option<String>,
     /// How many words remain, the first included.
     words: usize,
+    /// The first word after the first that is not dashed — where a curried
+    /// group's command goes, for [`missing_command`].
+    next: Option<String>,
 }
 
 /// A hidden parser that consumes nothing: it records the node's remaining
-/// words in `front` for [`offer_siblings`], and fails when the first of them
-/// is `reserved` — a fixed sibling's spelling (spike S4's guard).
+/// words in `front` for [`offer_siblings`] and [`missing_command`], and fails
+/// when the first of them is `reserved` — a fixed sibling's spelling (spike
+/// S4's guard).
 ///
 /// `bpaf` keeps only the completions of the branch that consumed the typed
 /// word (spike S6), so a sibling's name can only be offered from the value's
@@ -419,13 +489,18 @@ fn peek(front: Rc<RefCell<Front>>, reserved: Vec<&'static str>) -> Boxed<()> {
         *first.borrow_mut() = Front {
             word: Some(s),
             words: 0,
+            next: None,
         };
         hit.then_some(())
     })
     .optional()
     .guard(Option::is_none, "reserved word");
-    let every = any::<String, _, _>("", move |_: String| {
-        front.borrow_mut().words += 1;
+    let every = any::<String, _, _>("", move |s: String| {
+        let mut f = front.borrow_mut();
+        f.words += 1;
+        if f.words >= 2 && f.next.is_none() && !s.starts_with('-') {
+            f.next = Some(s);
+        }
         None::<()>
     })
     .anywhere()
@@ -631,7 +706,9 @@ impl<O> Node<O> {
     ///
     /// A default answers to no word. It is mounted at its group's own path —
     /// its [`Invocation::path`] is the group's — and its arguments are listed
-    /// in the group's `--help` under its one-line help. A named sibling is
+    /// in the group's `--help` under its one-line help. A default without
+    /// arguments has its one-line help shown under the group's `Usage:` line
+    /// instead, which then reads `[COMMAND ...]`. A named sibling is
     /// matched first; `--` escapes a value spelled like one. A default's
     /// positionals must come after its options, by `bpaf`'s rule for any
     /// command.
@@ -696,28 +773,39 @@ impl<O: 'static> Node<O> {
             kind,
         } = self;
         let at = parent.child(name);
-        let inner: Boxed<O> = match kind {
-            Kind::Leaf(build) | Kind::Curried(build) => build(&at),
-            Kind::Group(children) => alternative(children, &at).unwrap_or_else(|| {
-                panic!("hicli::group `{name}` has no commands; add at least one child")
-            }),
+        let (inner, default): (Boxed<O>, Option<DefaultHelp>) = match kind {
+            Kind::Leaf(build) | Kind::Curried(build) => (build(&at), None),
+            Kind::Group(children) => {
+                let folded = alternative(children, &at).unwrap_or_else(|| {
+                    panic!("hicli::group `{name}` has no commands; add at least one child")
+                });
+                (folded.parser, folded.default)
+            }
             Kind::Default(_) => panic!(
                 "a default command cannot be mounted on its own: `{name}` {}",
                 parent.place()
             ),
         };
-        let mut opts = inner.to_options().descr(help.as_str());
-        if let Some(d) = &details {
-            opts = opts.header(d.as_str());
+        // `with_usage` asks the parser for its metadata on the spot, which is
+        // what runs a default's probe (`mount_default`) and sets `has_items`.
+        let mut opts = inner.to_options().descr(help.as_str()).with_usage(|d| d);
+        // A default without options has no section of its own to title, so
+        // its help line goes in the group's header (#19).
+        let bare = default.filter(|d| !d.has_items.get());
+        match (&bare, &details) {
+            (Some(b), details) => {
+                opts = opts.header(crate::help::default_header(&b.help, details.as_deref()));
+            }
+            (None, Some(d)) => opts = opts.header(d.as_str()),
+            (None, None) => {}
         }
         if let Some(f) = &footer {
             opts = opts.footer(crate::help::verbatim(f));
         }
-        // Last: under a curried group bpaf's derived usage drops the curried
-        // values from the path, so spell the path out (spike H-S1).
-        if at.is_shifted() {
-            opts = opts.with_usage(usage_prefixed(&at.shown));
-        }
+        // Last: hicli spells every usage line itself (ADR-013) — bpaf's own
+        // names no binary, drops curried values from the path (spike H-S1),
+        // and ends in a space when the command has no arguments.
+        opts = opts.with_usage(crate::help::usage_line(at.shown.clone(), bare.is_some()));
         // Always `long`, never `short`: an alias is a whole word, and `long`
         // is the spelling `bpaf` matches a one-character command by too.
         let mut cmd = opts.command(name).help(help.as_str());
@@ -731,13 +819,14 @@ impl<O: 'static> Node<O> {
     }
 
     /// Mount this default command at its group's own mount point `at`,
-    /// offering the group's named siblings `names` in completion.
+    /// offering the group's named siblings `names` in completion. Also its
+    /// help, for the group's page.
     ///
     /// # Panics
     ///
     /// Panics if this default has an alias, is hidden, or has details or a
     /// footer.
-    fn mount_default(self, at: &Mount, names: Vec<Candidate>) -> Boxed<O> {
+    fn mount_default(self, at: &Mount, names: Vec<Candidate>) -> (Boxed<O>, DefaultHelp) {
         let Node {
             name,
             help,
@@ -766,10 +855,24 @@ impl<O: 'static> Node<O> {
         };
         let front = Rc::new(RefCell::new(Front::default()));
         let look = peek(front.clone(), Vec::new());
+        // `group_help` titles the options in completion; the probe around it
+        // records whether there are any to list, and gives the help section
+        // the same title (bpaf flattens a nested section into the outer one).
+        let has_items = Rc::new(Cell::new(false));
+        let seen = has_items.clone();
+        let title = help.clone();
+        let probe = move |info: MetaInfo| {
+            let mut items = Doc::default();
+            items.meta(info, false);
+            seen.set(!items.monochrome(false).is_empty());
+            Doc::from(title.as_str())
+        };
         let d = build(at)
             .complete(offer_siblings(front, names))
-            .group_help(help.as_str());
-        construct!(look, d).map(|((), o)| o).boxed()
+            .group_help(help.as_str())
+            .with_group_help(probe);
+        let parser = construct!(look, d).map(|((), o)| o).boxed();
+        (parser, DefaultHelp { help, has_items })
     }
 }
 
@@ -805,15 +908,15 @@ fn fold_named<O: 'static>(children: Vec<Node<O>>, at: &Mount) -> Option<Boxed<O>
 /// The first branch that matches wins — this is what replaces the central
 /// `match`: every child folds one more command into the alternative. A
 /// default child answers to no word: it is mounted at `at` itself, after its
-/// named siblings. `None` when there are no children; the caller decides what
-/// that means.
+/// named siblings, and its help is handed back for the group's page. `None`
+/// when there are no children; the caller decides what that means.
 ///
 /// # Panics
 ///
 /// Panics if two named children share a spelling — a name or an alias —
 /// because the second could never be reached by it, or if there are two
 /// defaults.
-pub(crate) fn alternative<O: 'static>(children: Vec<Node<O>>, at: &Mount) -> Option<Boxed<O>> {
+pub(crate) fn alternative<O: 'static>(children: Vec<Node<O>>, at: &Mount) -> Option<Folded<O>> {
     check_spellings(
         children
             .iter()
@@ -832,11 +935,18 @@ pub(crate) fn alternative<O: 'static>(children: Vec<Node<O>>, at: &Mount) -> Opt
     }
     let names = listed_names(&named);
     let named = fold_named(named, at);
-    let default = defaults.pop().map(|d| d.mount_default(at, names));
-    match (named, default) {
-        (Some(named), Some(default)) => Some(construct!([named, default]).boxed()),
-        (named, default) => named.or(default),
-    }
+    let (default, help) = match defaults.pop().map(|d| d.mount_default(at, names)) {
+        Some((parser, help)) => (Some(parser), Some(help)),
+        None => (None, None),
+    };
+    let parser = match (named, default) {
+        (Some(named), Some(default)) => construct!([named, default]).boxed(),
+        (named, default) => named.or(default)?,
+    };
+    Some(Folded {
+        parser,
+        default: help,
+    })
 }
 
 /// The parser for an external subcommand: capture the remainder verbatim, and
@@ -911,7 +1021,7 @@ mod tests {
 
     /// Mount `c` as the only top-level command and parse `args` through it.
     fn parse<Ctx: 'static>(c: Command<Ctx>, args: &[&str]) -> Invocation<Ctx> {
-        c.mount(&Mount::root())
+        c.mount(&Mount::root(None))
             .to_options()
             .run_inner(args)
             .expect("parses")
@@ -952,7 +1062,7 @@ mod tests {
     #[should_panic(expected = "has no commands")]
     fn an_empty_group_cannot_be_mounted() {
         let c: Command<()> = group("event", "manage events", Vec::new());
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1017,7 +1127,7 @@ mod tests {
                 command("ls", "list differently", pure(()), |(), _c: &()| {}),
             ],
         );
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1034,7 +1144,7 @@ mod tests {
             command("status", "show status", pure(()), |(), _c: &()| {}).alias("s"),
             command("sync", "sync up", pure(()), |(), _c: &()| {}).alias("s"),
         ];
-        let _ = alternative(children, &Mount::root());
+        let _ = alternative(children, &Mount::root(None));
     }
 
     #[test]
@@ -1042,6 +1152,83 @@ mod tests {
         let c: Command<()> =
             command("apply", "apply something", pure(()), |(), _c: &()| {}).footer("Examples:");
         assert_eq!(c.footer.as_deref(), Some("Examples:"));
+    }
+
+    fn front(word: Option<&str>, next: Option<&str>) -> Front {
+        Front {
+            word: word.map(str::to_string),
+            words: 0,
+            next: next.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_missing_command_lists_the_curried_commands() {
+        let f = front(Some("bandcamp"), None);
+        assert_eq!(
+            missing_command(&f, "SOURCE-NAME", &["sync", "status", "cancel"]),
+            "expected a command after `bandcamp`: `sync`, `status` or `cancel`"
+        );
+        assert_eq!(
+            missing_command(&f, "SOURCE-NAME", &["sync", "status"]),
+            "expected a command after `bandcamp`: `sync` or `status`"
+        );
+        assert_eq!(
+            missing_command(&f, "SOURCE-NAME", &["check-updates"]),
+            "expected a command after `bandcamp`: `check-updates`"
+        );
+    }
+
+    #[test]
+    fn a_missing_command_with_none_listed_points_at_help() {
+        assert_eq!(
+            missing_command(&front(Some("bandcamp"), None), "SOURCE-NAME", &[]),
+            "expected a command after `bandcamp`, pass `--help` for usage information"
+        );
+    }
+
+    #[test]
+    fn a_typo_of_a_curried_command_is_suggested() {
+        let names = ["sync", "status", "cancel"];
+        assert_eq!(
+            missing_command(
+                &front(Some("bandcamp"), Some("snyc")),
+                "SOURCE-NAME",
+                &names
+            ),
+            "no such command after `bandcamp`: `snyc`, did you mean `sync`?"
+        );
+        // Too far from every name: listed instead.
+        assert_eq!(
+            missing_command(&front(Some("bandcamp"), Some("zzz")), "SOURCE-NAME", &names),
+            "expected a command after `bandcamp`: `sync`, `status` or `cancel`"
+        );
+    }
+
+    #[test]
+    fn a_lone_typo_of_a_fixed_sibling_is_that_typo() {
+        assert_eq!(
+            sibling_typo(&front(Some("lst"), None), &["list"]).as_deref(),
+            Some("no such command or positional: `lst`, did you mean `list`?")
+        );
+        // A word after it makes it a value: the command is what is wrong.
+        assert_eq!(
+            sibling_typo(&front(Some("lst"), Some("sync")), &["list"]),
+            None
+        );
+        assert_eq!(
+            sibling_typo(&front(Some("bandcamp"), None), &["list"]),
+            None
+        );
+        assert_eq!(sibling_typo(&front(Some("lst"), None), &[]), None);
+    }
+
+    #[test]
+    fn an_unseen_value_is_shown_as_its_metavar() {
+        assert_eq!(
+            missing_command(&front(None, None), "SOURCE-NAME", &["sync"]),
+            "expected a command after `SOURCE-NAME`: `sync`"
+        );
     }
 
     #[test]
@@ -1156,8 +1343,9 @@ mod curried_and_default {
 
     /// Fold `nodes` as a top level.
     fn top<O: 'static>(nodes: Vec<Node<O>>) -> OptionParser<O> {
-        alternative(nodes, &Mount::root())
+        alternative(nodes, &Mount::root(None))
             .expect("has commands")
+            .parser
             .to_options()
     }
 
@@ -1231,7 +1419,49 @@ mod curried_and_default {
     fn a_missing_curried_command_is_a_usage_error() {
         assert_eq!(
             show(source_bound_only(), &["source", "bandcamp"]),
-            "STDERR: expected `COMMAND ...`, pass `--help` for usage information"
+            "STDERR: expected a command after `bandcamp`: `sync`, `status` or `cancel`"
+        );
+        // With a fixed sibling, bpaf blamed the value (#27).
+        assert_eq!(
+            show(source(), &["source", "bandcamp"]),
+            "STDERR: expected a command after `bandcamp`: `sync`, `status` or `cancel`"
+        );
+    }
+
+    #[test]
+    fn a_misspelled_curried_command_is_suggested() {
+        assert_eq!(
+            show(source(), &["source", "bandcamp", "snyc"]),
+            "STDERR: no such command after `bandcamp`: `snyc`, did you mean `sync`?"
+        );
+        assert_eq!(
+            show(source(), &["source", "bandcamp", "zzz"]),
+            "STDERR: expected a command after `bandcamp`: `sync`, `status` or `cancel`"
+        );
+    }
+
+    #[test]
+    fn a_curried_command_that_matched_keeps_its_own_error() {
+        // Depth wins: `cancel` matched, so its missing `ID` is the error.
+        assert_eq!(
+            show(source(), &["source", "bandcamp", "cancel"]),
+            "STDERR: expected `ID`, pass `--help` for usage information"
+        );
+    }
+
+    #[test]
+    fn the_missing_command_error_leaves_the_rest_alone() {
+        // No value: bpaf's own error, as before #27.
+        assert_eq!(
+            show(source(), &["source"]),
+            "STDERR: expected `COMMAND ...` or `SOURCE-NAME`, pass `--help` for usage information"
+        );
+        let help = show(source(), &["source", "bandcamp", "--help"]);
+        assert!(help.starts_with("STDOUT:\nthe node\n"), "{help}");
+        assert!(help.contains("Commands for SOURCE-NAME:\n"), "{help}");
+        assert_eq!(
+            usage_line(&show(source_bound_only(), &["source", "--help"])),
+            "Usage: source SOURCE-NAME COMMAND ...",
         );
     }
 
@@ -1312,19 +1542,88 @@ mod curried_and_default {
             show(source(), &["source", "--help"]),
             "STDOUT:\nthe node\n\n\
              Usage: source (COMMAND ... | SOURCE-NAME COMMAND ...)\n\n\
-             Commands for SOURCE-NAME:\n    SOURCE-NAME  the source\n    \
+             Commands for SOURCE-NAME:\n    \
              sync         sync a source\n    status       show a source's status\n    \
              cancel       cancel a job\n\n\
+             Available positional items:\n    SOURCE-NAME  the source\n\n\
              Available options:\n    -h, --help   Prints help information\n\n\
              Available commands:\n    list         list sources\n"
         );
+    }
+
+    /// `archive (empty [-y] | <default list>)`: a default without options
+    /// beside a named sibling (playr's `library archive`, #19).
+    fn archive(details: Option<&str>) -> Command<Log> {
+        let yes = bpaf::short('y').long("yes").help("do not ask").switch();
+        let empty = command("empty", "empty the archive", yes, |y: bool, c: &Log| {
+            log(c, format!("empty {y}"))
+        });
+        let list = command("list", "list the archive", pure(()), |(), c: &Log| {
+            log(c, "list".into())
+        })
+        .by_default();
+        let g = group("archive", "files moved aside", vec![empty, list]);
+        match details {
+            Some(d) => g.details(d),
+            None => g,
+        }
+    }
+
+    #[test]
+    fn a_default_without_options_is_described_under_the_usage() {
+        assert_eq!(
+            show(archive(None), &["archive", "--help"]),
+            "STDOUT:\nfiles moved aside\n\n\
+             Usage: archive [COMMAND ...]\n\n\
+             list the archive\n\n\
+             Available options:\n    -h, --help  Prints help information\n\n\
+             Available commands:\n    empty       empty the archive\n"
+        );
+        assert_eq!(show(archive(None), &["archive"]), "Ok(archive: list)");
+    }
+
+    #[test]
+    fn a_default_without_options_comes_before_the_groups_details() {
+        for args in [
+            &["archive", "--help"][..],
+            &["archive", "--help", "--help"][..],
+        ] {
+            let help = show(archive(Some("about")), args);
+            assert!(
+                help.contains("Usage: archive [COMMAND ...]\n\nlist the archive\n\nabout\n"),
+                "{help}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_default_with_options_is_described_once_and_keeps_its_usage() {
+        let help = show(search(), &["search", "--help"]);
+        assert_eq!(help.matches("search the library").count(), 1, "{help}");
+        assert_eq!(
+            usage_line(&help),
+            "Usage: search (COMMAND ... | [--artist=ARTIST] [QUERY])",
+            "{help}"
+        );
+    }
+
+    #[test]
+    fn a_group_of_only_a_bare_default_has_an_unbracketed_usage() {
+        let c = group(
+            "archive",
+            "files moved aside",
+            vec![command("list", "list the archive", pure(()), |(), _: &Log| {}).by_default()],
+        );
+        let help = show(c, &["archive", "--help"]);
+        assert_eq!(usage_line(&help), "Usage: archive", "{help}");
+        assert!(help.contains("\nlist the archive\n"), "{help}");
     }
 
     #[test]
     fn a_curried_commands_usage_names_the_value() {
         assert_eq!(
             show(source(), &["source", "bandcamp", "sync", "--help"]),
-            "STDOUT:\nsync a source\n\nUsage: source SOURCE-NAME sync \n\n\
+            "STDOUT:\nsync a source\n\nUsage: source SOURCE-NAME sync\n\n\
              Available options:\n    -h, --help  Prints help information\n"
         );
         assert_eq!(
@@ -1333,10 +1632,10 @@ mod curried_and_default {
              Available positional items:\n    ID          job id\n\n\
              Available options:\n    -h, --help  Prints help information\n"
         );
-        // A fixed sibling's usage is untouched.
+        // A fixed sibling's usage names no value.
         assert_eq!(
             show(source(), &["source", "list", "--help"]),
-            "STDOUT:\nlist sources\n\nUsage: source list \n\n\
+            "STDOUT:\nlist sources\n\nUsage: source list\n\n\
              Available options:\n    -h, --help  Prints help information\n"
         );
     }
@@ -1392,7 +1691,7 @@ mod curried_and_default {
         let help = show(nested(), &["x", "A", "y", "--help"]);
         assert_eq!(usage_line(&help), "Usage: x A y B COMMAND ...", "{help}");
         let help = show(nested(), &["x", "A", "y", "B", "f", "--help"]);
-        assert_eq!(usage_line(&help), "Usage: x A y B f ", "{help}");
+        assert_eq!(usage_line(&help), "Usage: x A y B f", "{help}");
     }
 
     #[test]
@@ -1553,7 +1852,7 @@ mod curried_and_default {
     fn a_fixed_and_a_curried_command_cannot_share_a_spelling() {
         let clash = curried_command("list", "x", pure(()), |(), _: String, _: &Log| {});
         let c = group_args("source", "the node", source_name, vec![list()], vec![clash]);
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1566,7 +1865,7 @@ mod curried_and_default {
             vec![list().by_default()],
             bound(),
         );
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1574,7 +1873,7 @@ mod curried_and_default {
     fn a_curried_default_cannot_live_in_a_curried_group() {
         let d = curried_command("sync", "x", pure(()), |(), _: String, _: &Log| {}).by_default();
         let c = group_args("source", "the node", source_name, vec![list()], vec![d]);
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1582,7 +1881,7 @@ mod curried_and_default {
     fn a_group_has_at_most_one_default() {
         let d = || command("q", "q", pure(()), |(), _: &Log| {}).by_default();
         let c = group("search", "s", vec![d(), d()]);
-        let _ = c.mount(&Mount::root());
+        let _ = c.mount(&Mount::root(None));
     }
 
     #[test]
@@ -1608,25 +1907,25 @@ mod curried_and_default {
     #[test]
     #[should_panic(expected = "a default command answers to no word")]
     fn a_default_takes_no_alias() {
-        let _ = with_default(default_leaf().alias("x")).mount(&Mount::root());
+        let _ = with_default(default_leaf().alias("x")).mount(&Mount::root(None));
     }
 
     #[test]
     #[should_panic(expected = "a default command is never listed")]
     fn a_default_cannot_be_hidden() {
-        let _ = with_default(default_leaf().hide()).mount(&Mount::root());
+        let _ = with_default(default_leaf().hide()).mount(&Mount::root(None));
     }
 
     #[test]
     #[should_panic(expected = "a default command has no help page of its own")]
     fn a_default_takes_no_details() {
-        let _ = with_default(default_leaf().details("d")).mount(&Mount::root());
+        let _ = with_default(default_leaf().details("d")).mount(&Mount::root(None));
     }
 
     #[test]
     #[should_panic(expected = "a default command has no help page of its own")]
     fn a_default_takes_no_footer() {
-        let _ = with_default(default_leaf().footer("f")).mount(&Mount::root());
+        let _ = with_default(default_leaf().footer("f")).mount(&Mount::root(None));
     }
 
     #[test]

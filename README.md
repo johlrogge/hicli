@@ -101,7 +101,7 @@ fn main() -> ExitCode {
 
 ```console
 $ playr --help
-Usage: [--node=HOST] COMMAND ...
+Usage: playr [--node=HOST] COMMAND ...
 
 Global options
         --node=HOST  The node to talk to
@@ -117,7 +117,7 @@ Available commands:
 $ playr playback --help
 Playback control
 
-Usage: playback COMMAND ...
+Usage: playr playback COMMAND ...
 
 Available options:
     -h, --help  Prints help information
@@ -328,7 +328,7 @@ localhost: search Some("fact-values-for") artist=None bpm=None unplayed=false ad
 $ playr search --help
 Search the library
 
-Usage: search (COMMAND ... | [--added=DAYS] [--artist=NAME] [--bpm=BPM] [--unplayed] [QUERY])
+Usage: playr search (COMMAND ... | [--added=DAYS] [--artist=NAME] [--bpm=BPM] [--unplayed] [QUERY])
 
 Search by text and filters
         --added=DAYS   Only tracks added in the last DAYS days, e.g. -7
@@ -391,11 +391,26 @@ $ echo $?
 2
 $ playr library archive empty --yes
 localhost: archive emptied
+$ playr library archive --help
+Files that duplicate merges moved aside
+
+Usage: playr library archive [COMMAND ...]
+
+List the archive
+
+Available options:
+    -h, --help  Prints help information
+
+Available commands:
+    empty       Permanently delete everything in the archive
 ```
 
 Limits: one default per group; none at the top level or in an `args`/`curried`
 group; a default takes no `name`, `alias` or `hide`, and its doc comment is one
-line (it has no help page of its own). See
+line (it has no help page of its own). That line titles the default's options in
+the group's `--help`, as with `search` above; a default without options, like
+`list` here, has its line shown under `Usage:`, and the usage reads
+`[COMMAND ...]` because naming a command is optional. See
 [ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
 
 ### Object, then verb: `source <name> check-updates`
@@ -408,7 +423,11 @@ each command that receives the value, which must be its first parameter:
 ```rust
 #[derive(Debug, Clone, Bpaf, Arg)]
 #[arg(complete = complete_sources)]
-pub struct SourceName(#[bpaf(positional("SOURCE"))] pub Name);
+pub struct SourceName(
+    /// A source on the node: bandcamp, beatport or upload
+    #[bpaf(positional("SOURCE"))]
+    pub Name,
+);
 
 /// Music sources
 #[group(args = SourceName)]
@@ -437,10 +456,13 @@ localhost: bandcamp, beatport, upload
 $ playr source --help
 Music sources
 
-Usage: source (COMMAND ... | SOURCE COMMAND ...)
+Usage: playr source (COMMAND ... | SOURCE COMMAND ...)
 
 Commands for SOURCE:
     check-updates  Check the source's collection for stale items
+
+Available positional items:
+    SOURCE         A source on the node: bandcamp, beatport or upload
 
 Available options:
     -h, --help     Prints help information
@@ -449,16 +471,21 @@ Available commands:
     list           List the sources on the node
 ```
 
+A source with no command says what is missing, and lists the commands that can
+follow it; a misspelled one gets a "did you mean":
+
+```console
+$ playr source bandcamp
+expected a command after `bandcamp`: `check-updates`
+```
+
 Commands without the `curried` mark, like `list`, are matched first, so a source
 can't be named `list`. A curried command whose first parameter has a different type
 is a compile error. A nested group that also receives the value is
 `#[group(curried = SourceName)]`. One known limit is surprising: `source <TAB>` with
 nothing typed also offers the curried command names, which are not valid until a
-source is typed. Another: a source with no command, `source bandcamp`, fails with
-``expected `COMMAND ...`, got `bandcamp` ``, which reads as if the source name were
-wrong ([#27](https://github.com/johlrogge/hicli/issues/27)). For the others, such as
-`source NAME --help` showing the group's page, see
-[ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
+source is typed. For the others, such as `source NAME --help` showing the group's
+page, see [ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
 
 ### Errors and `?`
 
@@ -563,7 +590,7 @@ fn sort(desc: Descending, by: SortBy) {
 $ playr sort --help
 Sort track ids read from stdin
 
-Usage: sort [-d] KEY
+Usage: playr sort [-d] KEY
 
 Reads one track id per line and prints them sorted.
 
@@ -705,10 +732,9 @@ mod tests {
   the error that would be printed. `App::run_with_args` runs everything and returns the exit code
   that `main` would. `App::complete` returns what the shell would offer.
 - Commands are ordinary functions, so you can call them directly.
-- If you do snapshot help pages, note that the usage line of a command without
-  arguments ends in a space (`Usage: playback stop `). Editors and linters that strip
-  trailing whitespace will break such a snapshot
-  ([#28](https://github.com/johlrogge/hicli/issues/28)).
+- `App::run` starts every usage line with the binary's name (`Usage: playr playback
+  stop`); the test seams don't know it, so `.bin_name("playr")` makes snapshot tests
+  show what `run` prints.
 
 ## Rules and papercuts
 

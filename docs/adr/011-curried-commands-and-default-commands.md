@@ -99,6 +99,17 @@ build, if they do not; hicli renders `--help` once at fold time in debug builds,
 so the mistake surfaces on the first debug run or test (see #11). A group holds at most one default; a
 default takes no alias, `hide`, details or footer.
 
+**Amended (0.3.0, #19).** A default *without options* was invisible in
+`--help`: bpaf keeps a section only when it starts with an item, so its title —
+the default's help line — was never printed, and bpaf's `Meta::or` drops an
+alternative with no items, so the usage read `COMMAND ...` as if a command were
+required. The default's section is now wrapped in a `with_group_help` probe
+that records whether it has items. When it has none, the group's header is the
+default's help line (then a blank line and the group's details, if any — the
+line comes first because plain `--help` prints only a header's first paragraph,
+ADR-008), and the usage brackets the derived part: `Usage: playr library
+archive [COMMAND ...]`. A default with options is unchanged.
+
 ### 3. Runtime: one node type, generic over what it parses to
 
 `Command<Ctx>` becomes an alias for `Node<Invocation<Ctx>>`, and
@@ -119,12 +130,31 @@ children; it mirrors `#[group(args = T)]`, and "curried" only ever means "receiv
 - A per-mount shared cell carries the first remaining word to the value's
   completer, for completion only; parsed values never travel through it.
 
+**Amended (0.3.0, #20).** The `Commands for SOURCE-NAME:` title was applied to
+the value and the bound commands together, so a value with a field doc was
+listed as a row of that section, as if it were a command. The title now covers
+the bound commands only; the value is listed with the positional items, under
+`Available positional items:` (or under its type's doc heading, if the type has
+one).
+
+**Amended (0.3.0, #27).** A value with no bound command after it was blamed
+itself: both alternatives failed with bpaf's `Missing`, merged into
+``expected `COMMAND ...`, got `bandcamp` ``. The bound commands now sit beside a
+`pure_with` alternative that fails with hicli's own message, which wins over
+`Missing` at the same depth and loses to a bound command that matched and
+failed deeper (`source bandcamp cancel` still reports its missing `ID`). The
+peeked words carry the first undashed word after the value, so the message
+either suggests the closest bound command (``no such command after
+`bandcamp`: `snyc`, did you mean `sync`?``, the same Levenshtein rule as
+ADR-002's top-level suggestion) or lists the listed ones (``expected a command
+after `bandcamp`: `sync`, `status` or `cancel` ``). A lone word that is a typo
+of a fixed sibling (`source lst`) keeps bpaf's `did you mean `list``. The
+alternative's meta is `Skip`, so usage and help are unchanged.
+
 ## Known limits (bpaf 0.9.27)
 
 - `source <TAB>` with nothing typed also offers the curried commands, which are
   not valid until a value is typed; picking one leads to a confusing error.
-- Typo suggestions inside curried groups are lost when a fixed sibling exists
-  (ADR-002's scope is unchanged: top-level names only).
 - `source NAME --help` shows the group's page, not the command's.
 - A misspelled sibling under a default reads as the default's query.
 - zsh/bash may be offered the metavar as the sole candidate when nothing
@@ -133,9 +163,9 @@ children; it mirrors `#[group(args = T)]`, and "curried" only ever means "receiv
   (`source l` → only `local`): bpaf drops the metavariable item when an inner
   completer returns exactly one suggestion. A future non-breaking fix could
   expose the type's completer via a defaulted `Arg` method.
-- The old name-last order `source sync bandcamp` gives a misleading "did you
-  mean `resync`". Reserving bound names at the value position is unsound,
-  since `sync` is a legal value.
+- The old name-last order `source sync bandcamp` reads `sync` as the value
+  (``expected a command after `sync`: …``). Reserving bound names at the value
+  position is unsound, since `sync` is a legal value.
 
 ## Deferred
 
@@ -146,7 +176,8 @@ children; it mirrors `#[group(args = T)]`, and "curried" only ever means "receiv
 - A default that also answers to its own name. Recipe: a second `#[command]`
   calling the same function.
 - A dedicated `source NAME --help` page.
-- Suggestions inside curried groups.
+- Suggestions inside curried groups, beyond the command right after the value
+  (covered since 0.3.0, #27).
 
 ## Alternatives considered
 

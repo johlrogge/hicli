@@ -426,6 +426,10 @@ fn s5_node_help_flattens_fixed_and_bound_commands_into_one_list() {
 
 #[test]
 fn s5_a_bound_commands_usage_omits_the_curried_positional() {
+    // Raw bpaf, pinned as is: its derived line drops the curried value and,
+    // for a command without arguments, ends in a space (`sync `). Both are
+    // why hicli now renders every usage line itself (ADR-013, #28); re-run
+    // this on a bpaf upgrade.
     assert_eq!(
         show(
             source_with_sibling(true),

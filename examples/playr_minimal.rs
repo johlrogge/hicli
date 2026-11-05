@@ -152,7 +152,7 @@ mod tests {
     use hicli::cli;
 
     const TOP_HELP: &str = "\
-Usage: [--node=HOST] COMMAND ...
+Usage: playr [--node=HOST] COMMAND ...
 
 Global options
         --node=HOST  The node to talk to
@@ -169,7 +169,7 @@ Available commands:
     const PLAYBACK_HELP: &str = "\
 Playback control
 
-Usage: playback COMMAND ...
+Usage: playr playback COMMAND ...
 
 Available options:
     -h, --help  Prints help information
@@ -182,16 +182,19 @@ Available commands:
 
     // The only test in this binary, so nothing else reads the environment while
     // it is changed: with `PLAYR_NODE` set, `--help` prints its value instead of
-    // `N/A`, and the README shows the unset case.
+    // `N/A`, and the README shows the unset case. `bin_name("playr")` makes the
+    // seam print what `run` prints for a binary named `playr`.
     #[test]
     fn help_matches_the_readme() {
         std::env::remove_var("PLAYR_NODE");
         let top = app()
+            .bin_name("playr")
             .parse(cli! { --help })
             .err()
             .expect("--help short-circuits");
         assert_eq!(top.unwrap_stdout(), TOP_HELP);
         let playback = app()
+            .bin_name("playr")
             .parse(cli! { playback --help })
             .err()
             .expect("--help short-circuits");

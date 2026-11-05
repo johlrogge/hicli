@@ -190,7 +190,11 @@ pub struct Yes(
 
 #[derive(Debug, Clone, Bpaf, Arg)]
 #[arg(complete = complete_sources)]
-pub struct SourceName(#[bpaf(positional("SOURCE"))] pub Name);
+pub struct SourceName(
+    /// A source on the node: bandcamp, beatport or upload
+    #[bpaf(positional("SOURCE"))]
+    pub Name,
+);
 
 /// Runs on every TAB: never fails, and filters by what was typed.
 fn complete_sources(typed: &SourceName) -> Vec<Candidate> {
@@ -452,6 +456,125 @@ mod tests {
         assert_eq!(
             app().run_with_args(cli! { library archive empty --yes }, mk_ctx),
             0
+        );
+    }
+
+    /// `args`' help page as `playr` prints it.
+    fn page(args: &[&str]) -> String {
+        app()
+            .bin_name("playr")
+            .parse(args.iter().copied())
+            .err()
+            .expect("--help short-circuits")
+            .unwrap_stdout()
+    }
+
+    // The README pastes these pages; these keep them true.
+
+    #[test]
+    fn search_help_matches_the_readme() {
+        assert_eq!(
+            page(&["search", "--help"]),
+            "\
+Search the library
+
+Usage: playr search (COMMAND ... | [--added=DAYS] [--artist=NAME] [--bpm=BPM] [--unplayed] [QUERY])
+
+Search by text and filters
+        --added=DAYS   Only tracks added in the last DAYS days, e.g. -7
+        --artist=NAME  Only tracks by this artist
+        --bpm=BPM      Only tracks at this tempo
+        --unplayed     Only tracks that were never played
+    QUERY              Free-text query over title, artist and album
+
+Available options:
+    -h, --help         Prints help information
+
+Available commands:
+    fact-values-for    List every value stored for a fact type
+"
+        );
+    }
+
+    #[test]
+    fn library_archive_help_matches_the_readme() {
+        assert_eq!(
+            page(&["library", "archive", "--help"]),
+            "\
+Files that duplicate merges moved aside
+
+Usage: playr library archive [COMMAND ...]
+
+List the archive
+
+Available options:
+    -h, --help  Prints help information
+
+Available commands:
+    empty       Permanently delete everything in the archive
+"
+        );
+    }
+
+    #[test]
+    fn source_help_matches_the_readme() {
+        assert_eq!(
+            page(&["source", "--help"]),
+            "\
+Music sources
+
+Usage: playr source (COMMAND ... | SOURCE COMMAND ...)
+
+Commands for SOURCE:
+    check-updates  Check the source's collection for stale items
+
+Available positional items:
+    SOURCE         A source on the node: bandcamp, beatport or upload
+
+Available options:
+    -h, --help     Prints help information
+
+Available commands:
+    list           List the sources on the node
+"
+        );
+    }
+
+    #[test]
+    fn a_source_without_a_command_matches_the_readme() {
+        let e = app()
+            .bin_name("playr")
+            .parse(["source", "bandcamp"])
+            .err()
+            .expect("a usage error");
+        assert_eq!(exit_code_for(&e), 2);
+        assert_eq!(
+            e.unwrap_stderr(),
+            "expected a command after `bandcamp`: `check-updates`"
+        );
+    }
+
+    #[test]
+    fn sort_help_matches_the_readme() {
+        assert_eq!(
+            page(&["sort", "--help"]),
+            "\
+Sort track ids read from stdin
+
+Usage: playr sort [-d] KEY
+
+Reads one track id per line and prints them sorted.
+
+Available positional items:
+    KEY               What to sort by: bpm, title or artist
+
+Available options:
+    -d, --descending  Sort descending (Z→A, high→low)
+    -h, --help        Prints help information
+
+Examples:
+  playr search --artist CBL | playr sort bpm --descending
+"
         );
     }
 
