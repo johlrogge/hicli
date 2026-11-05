@@ -9,6 +9,39 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
 
 ## [Unreleased]
 
+### Added
+
+- A default feature, `color`: `App::run` prints help and errors in colour when stdout
+  and stderr are both terminals. `NO_COLOR` turns it off and `FORCE_COLOR` forces it
+  on; `hicli = { version = "0.4", default-features = false }` never colours; bpaf's
+  `bright-color` feature gives bright colours. `App::parse`, `App::complete` and
+  `App::into_parser` are unchanged and never colour (#31, ADR-015).
+
+### Changed (output, not API)
+
+`App::run` and `App::run_with_args` now print through bpaf's `print_message`, its
+only coloured path (#31, ADR-015). Piped, or with `NO_COLOR`, the text changes in
+three ways:
+
+- Usage errors **and command failures** start with `Error: `, so the two look the
+  same:
+
+  ```
+  $ playr playbak stop
+  Error: no such command or positional: `playbak`, did you mean `playback`?
+  $ playr upload missing.flac
+  Error: uploading missing.flac: reading the file: No such file or directory (os error 2)
+  ```
+
+  A `Failure`'s message is still printed line for line as written, with its indents,
+  but a trailing newline is dropped and a line longer than 100 columns now wraps.
+- `--help` and `--version` are followed by a blank line.
+- hicli's `did you mean` line is part of bpaf's error, so on a terminal the suggested
+  name is styled like the rest of it.
+
+`App::parse` returns the same messages as before, without the `Error: ` prefix, so
+snapshot tests built on it need no re-blessing.
+
 ### Changed (docs)
 
 - The `Arg` docs no longer teach accepting `--since -7`. A value that starts with `-`

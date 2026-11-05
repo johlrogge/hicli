@@ -4,6 +4,10 @@
 
 Accepted (2026-11-05)
 
+Corrected (#31), 2026-11-05: in 0.3 `run` printed no coloured output; the
+coloured path arrived with ADR-015. The last of the "Alternatives considered"
+is reworded accordingly.
+
 Closes johlrogge/hicli#21 (usage lines name no binary) and johlrogge/hicli#28
 (a trailing space after a command without arguments). Keeps ADR-009 §3: hicli
 still never hands `bpaf` the program name. Generalises what ADR-011 §4 did for
@@ -76,8 +80,10 @@ hicli. `bpaf` never sees it, so `--bpaf-complete-style-*` stays an unknown flag
   the broken line.
 - **Trim `bpaf`'s trailing space from rendered output.** Rejected: help reaches
   hicli as a `ParseFailure`, and there is nothing public to trim before it is
-  rendered. Trimming the rendered string would only fix plain-text output, not
-  the coloured one `run` prints to a terminal.
+  rendered. Trimming the rendered string would fix only the monochrome text
+  `unwrap_stdout` returns. `bpaf`'s one coloured path,
+  `ParseFailure::print_message`, renders and prints in a single call and gives
+  hicli no string to trim.
 
 ## Consequences
 

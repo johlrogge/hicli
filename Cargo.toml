@@ -36,8 +36,16 @@ exclude = [
   "docs/sketches/",
 ]
 
+[features]
+default = ["color"]
+# Coloured help and errors from `App::run` (ADR-015). Forwards `bpaf/color`, not
+# `bpaf/dull-color`: bpaf's `Color::default` lets `dull-color` win whenever it is
+# on, so forwarding it would silently override a consumer's own
+# `bpaf = { version = "0.9", features = ["bright-color"] }`.
+color = ["bpaf/color"]
+
 [dependencies]
-bpaf = { version = "0.9.27", features = ["derive", "autocomplete"] }
+bpaf ={ version = "0.9.27", features = ["derive", "autocomplete"] }
 strsim = "0.11"
 # Exact-pinned: `#[command]` expands to calls into this crate's
 # private-by-contract expansion shape, so the two versions move together and are

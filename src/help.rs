@@ -9,6 +9,30 @@
 
 use bpaf::doc::Doc;
 
+/// The width hicli renders at when it prints through
+/// `ParseFailure::print_message`: `bpaf`'s default `Info::max_width`
+/// (`info.rs`), which hicli never changes — so a printed message wraps where
+/// `bpaf`'s own `monochrome` rendering, and therefore every test, wraps it.
+pub(crate) const WIDTH: usize = 100;
+
+/// `msg`, then `did you mean `<name>`?` on a line of its own — the
+/// suggestion gap-closer's hint appended to `bpaf`'s error as a [`Doc`], so it
+/// is printed through the same (possibly coloured) path, the name styled as a
+/// literal.
+///
+/// `msg` goes in through its own `doc.doc(..)`, so its last token never merges
+/// with the `"\n "` after it, and `"\n "` is `bpaf`'s hard line break: a lone
+/// `"\n"` would be reflowed into a space. Rendered monochrome, the result is
+/// byte for byte `"<msg>\ndid you mean `<name>`?"`.
+pub(crate) fn with_suggestion(msg: &Doc, name: &str) -> Doc {
+    let mut doc = Doc::default();
+    doc.doc(msg);
+    doc.text("\n did you mean `");
+    doc.literal(name);
+    doc.text("`?");
+    doc
+}
+
 /// `text` as a `bpaf` [`Doc`] that renders line for line: every line on its
 /// own output line, its leading spaces kept, blank lines kept as blank lines,
 /// in plain `--help` and in `--help --help` alike.
@@ -165,5 +189,40 @@ mod tests {
     #[test]
     fn verbatim_of_one_line_is_that_line() {
         assert_eq!(verbatim("Examples:").monochrome(false), "Examples:");
+    }
+
+    #[test]
+    fn with_suggestion_puts_the_hint_on_its_own_line() {
+        let doc = with_suggestion(&Doc::from("no such command"), "status");
+        assert_eq!(
+            doc.monochrome(true),
+            "no such command\ndid you mean `status`?"
+        );
+    }
+
+    /// A command's `Failure` message is printed through `verbatim` (ADR-015):
+    /// a newline, a blank line, leading and inner runs of spaces, and a
+    /// four-space indent — `bpaf`'s code-line syntax — all come out as
+    /// written, in the rendering `print_message` uses for stderr (`full`).
+    #[test]
+    fn a_failure_message_renders_exactly_as_written() {
+        let msg = "could not load the library:\n  /music: no such directory\n\n    \
+                   try `playr init`\nfields:  a  b";
+        assert_eq!(verbatim(msg).monochrome(true), msg);
+        assert_eq!(verbatim("boom").monochrome(true), "boom");
+    }
+
+    /// The two ways a printed `Failure` differs from its message: a trailing
+    /// newline is dropped (`print_message` ends the line itself), and a line
+    /// longer than `WIDTH` wraps at a space, its continuation at column zero.
+    #[test]
+    fn a_failure_message_loses_a_trailing_newline_and_wraps_long_lines() {
+        assert_eq!(verbatim("boom\n").monochrome(true), "boom");
+        let long = ["word"; 30].join(" "); // 149 columns
+        let rendered = verbatim(&long).monochrome(true);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines.len(), 2, "{rendered}");
+        assert!(lines.iter().all(|l| l.len() <= WIDTH), "{rendered}");
+        assert_eq!(lines.join(" "), long);
     }
 }
