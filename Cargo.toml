@@ -51,6 +51,9 @@ trybuild = "1"
 # prove it end to end (`tests/errors.rs`).
 anyhow = "1"
 eyre = "0.6"
+# `examples/playr.rs` shows a command returning `color_eyre::Result` (README).
+# It uses only `Result` and `WrapErr`, so the span-trace defaults stay off.
+color-eyre = { version = "0.6", default-features = false }
 
 [lints]
 workspace = true
@@ -65,3 +68,17 @@ path = "examples/demo.rs"
 [[example]]
 name = "files"
 path = "examples/files/main.rs"
+
+# The README's running example, and its Quick start. `test = true` so
+# `cargo test --workspace` runs the tests inside them: playr's tests are the
+# README's Testing section, and playr_minimal's checks that the Quick start's
+# pasted `--help` output is what the app prints.
+[[example]]
+name = "playr"
+path = "examples/playr.rs"
+test = true
+
+[[example]]
+name = "playr_minimal"
+path = "examples/playr_minimal.rs"
+test = true
