@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>hicli: CLI-enable your code</title>
+  <meta name="description" content="hicli is a Rust subcommand framework built on bpaf. A command is a documented function, a group is a module, an argument is a type. No dispatch match, and the whole CLI tests in-process.">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#7fae3c">
+
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="hicli: CLI-enable your code">
+  <meta property="og:description" content="Write a subcommand as a documented function. hicli adds the command line. A Rust crate built on bpaf.">
+  <meta property="og:url" content="https://johlrogge.github.io/hicli/">
+  <meta property="og:image" content="https://johlrogge.github.io/hicli/assets/hicli-logo.png">
+  <meta property="og:image:width" content="1536">
+  <meta property="og:image:height" content="1024">
+  <meta property="og:image:alt" content="The hicli logo: a girl with a red hair bow typing on a beige computer inside a yellow heart, above the word hicli.">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&amp;family=Courier+Prime:wght@400;700&amp;family=Patrick+Hand&amp;family=Rubik:ital,wght@0,400;0,500;0,700;0,800;0,900&amp;display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Shared SVG definitions: coffee rings. Decorative only. -->
+<svg class="defs" aria-hidden="true" focusable="false" width="0" height="0">
+  <defs>
+    <filter id="rough-a" x="-25%" y="-25%" width="150%" height="150%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.021" numOctaves="2" seed="7" result="t"/>
+      <feDisplacementMap in="SourceGraphic" in2="t" scale="18" xChannelSelector="R" yChannelSelector="G" result="d"/>
+      <feGaussianBlur in="d" stdDeviation="0.7"/>
+    </filter>
+    <filter id="rough-b" x="-25%" y="-25%" width="150%" height="150%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.028" numOctaves="3" seed="31" result="t"/>
+      <feDisplacementMap in="SourceGraphic" in2="t" scale="14" xChannelSelector="G" yChannelSelector="R" result="d"/>
+      <feGaussianBlur in="d" stdDeviation="0.6"/>
+    </filter>
+    <radialGradient id="stain-fill" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#9a6a35" stop-opacity="0.05"/>
+      <stop offset="70%" stop-color="#9a6a35" stop-opacity="0.09"/>
+      <stop offset="93%" stop-color="#86562a" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#86562a" stop-opacity="0"/>
+    </radialGradient>
+    <symbol id="ring-a" viewBox="0 0 200 200">
+      <g filter="url(#rough-a)">
+        <circle cx="100" cy="100" r="78" fill="url(#stain-fill)"/>
+        <circle cx="100" cy="100" r="78" fill="none" stroke="#6f4320" stroke-opacity="0.5" stroke-width="3.2"/>
+        <circle cx="100" cy="100" r="74" fill="none" stroke="#8a5a2c" stroke-opacity="0.16" stroke-width="7"/>
+        <circle cx="106" cy="97" r="81" fill="none" stroke="#6f4320" stroke-opacity="0.28" stroke-width="1.6" stroke-dasharray="120 40 70 90 160 30"/>
+      </g>
+    </symbol>
+    <symbol id="ring-b" viewBox="0 0 200 200">
+      <g filter="url(#rough-b)">
+        <circle cx="100" cy="100" r="70" fill="url(#stain-fill)"/>
+        <circle cx="100" cy="100" r="70" fill="none" stroke="#6f4320" stroke-opacity="0.45" stroke-width="2.6"/>
+        <circle cx="100" cy="100" r="66" fill="none" stroke="#8a5a2c" stroke-opacity="0.14" stroke-width="6"/>
+        <circle cx="152" cy="150" r="9" fill="#86562a" fill-opacity="0.16"/>
+        <circle cx="166" cy="162" r="4" fill="#86562a" fill-opacity="0.14"/>
+      </g>
+    </symbol>
+    <!-- the teacher's gold-foil star sticker -->
+    <linearGradient id="star-foil" x1="0.15" y1="0.05" x2="0.85" y2="0.95">
+      <stop offset="0" stop-color="#fff3a6"/>
+      <stop offset="0.35" stop-color="#f6cf3a"/>
+      <stop offset="0.7" stop-color="#d9a514"/>
+      <stop offset="1" stop-color="#b07e0a"/>
+    </linearGradient>
+    <linearGradient id="star-sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.42" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.75"/>
+      <stop offset="0.58" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="star-shadow" x="-20%" y="-20%" width="150%" height="150%">
+      <feDropShadow dx="0.6" dy="1.4" stdDeviation="0.9" flood-color="#5a3d05" flood-opacity="0.45"/>
+    </filter>
+    <symbol id="star" viewBox="0 0 48 48">
+      <g filter="url(#star-shadow)">
+        <path d="M24 3.5 L29.6 17.2 L44.4 18.3 L33.1 27.9 L36.6 42.3 L24 34.5 L11.4 42.3 L14.9 27.9 L3.6 18.3 L18.4 17.2 Z" fill="url(#star-foil)" stroke="#9a6d06" stroke-width="1.1" stroke-linejoin="round"/>
+        <path d="M24 3.5 L29.6 17.2 L44.4 18.3 L33.1 27.9 L36.6 42.3 L24 34.5 L11.4 42.3 L14.9 27.9 L3.6 18.3 L18.4 17.2 Z" fill="url(#star-sheen)"/>
+        <!-- a corner that has started to lift off the page -->
+        <path d="M36.6 42.3 L33.9 33.6 L31.6 37.9 Z" fill="#fff6c8" fill-opacity="0.85" stroke="#9a6d06" stroke-width="0.6" stroke-linejoin="round"/>
+        <path d="M24 8.5 L27.6 17.6 M8.5 19.6 L17.6 19" fill="none" stroke="#fffbe0" stroke-width="1.2" stroke-linecap="round" stroke-opacity="0.8"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<a class="skip" href="#chapter-1">Skip to the first chapter</a>
+
+<!-- ============ THE DESK: the worn book cover (the logo is its art) + contents page ============ -->
+<header class="desk">
+
+  <div class="cover-wrap">
+    <div class="cover">
+      <svg class="stain stain--cover" aria-hidden="true" focusable="false"><use href="#ring-a"/></svg>
+
+      <div class="cover__corner cover__corner--tl" aria-hidden="true"></div>
+      <div class="cover__corner cover__corner--br" aria-hidden="true"></div>
+
+      <div class="cover__top">
+        <p class="cover__grade">v0.2</p>
+        <p class="cover__pencil" aria-hidden="true">name: <span class="cover__scrawl">playr</span></p>
+      </div>
+
+      <div class="cover__art">
+        <img src="assets/hicli-logo.png" width="1536" height="1024" fetchpriority="high"
+             alt="hicli logo: a smiling girl with a red hair bow and a gingham dress types on a beige computer inside a yellow heart. Below her, the word hicli in bold navy letters on a red swoosh.">
+      </div>
+
+      <div class="cover__text">
+        <h1 class="cover__title">CLI-enable <span class="green">your code.</span></h1>
+        <p class="lede">
+          Write ordinary, well-typed, well-documented Rust functions. Get a command-line
+          interface for them (help, completion, exit codes, tests) without writing a CLI.
+        </p>
+        <p>
+          hicli is a subcommand framework for Rust, built on <a href="https://docs.rs/bpaf">bpaf</a>.
+          It doesn’t stand between your program and the command line: a command is a function
+          with a doc comment, a group of commands is a module, and the functions stay plain Rust
+          that you can call and test directly.
+        </p>
+
+        <figure class="answer answer--install">
+          <figcaption>Cargo.toml</figcaption>
+<pre><code><span class="t-h">[dependencies]</span>
+hicli = <span class="t-s">"0.2"</span>
+bpaf = <span class="t-s">"0.9"</span>   <span class="t-c"># needed for #[derive(Bpaf)] on your own argument types</span></code></pre>
+        </figure>
+
+        <ul class="links" aria-label="Project links">
+          <li><a class="btn btn--primary" href="https://docs.rs/hicli">Read the docs</a></li>
+          <li><a class="btn" href="https://crates.io/crates/hicli">crates.io</a></li>
+          <li><a class="btn" href="https://github.com/johlrogge/hicli">GitHub</a></li>
+        </ul>
+        <p class="fineprint">0.2, pre-1.0: a minor version may break things, and every break is listed in the changelog. MSRV: Rust 1.99.</p>
+      </div>
+
+      <p class="cover__authors">#[command] <span aria-hidden="true">•</span> #[group] <span aria-hidden="true">•</span> app!</p>
+    </div>
+  </div>
+
+  <div class="sheet sheet--blue sheet--contents">
+    <div class="sheet__frame">
+      <nav class="toc" aria-labelledby="toc-title">
+        <h2 id="toc-title" class="toc__title">Contents</h2>
+        <ol>
+          <li><a href="#chapter-1"><span class="num">1</span> Your program, CLI-enabled</a></li>
+          <li><a href="#chapter-2"><span class="num">2</span> One function, one command</a></li>
+          <li><a href="#chapter-3"><span class="num">3</span> Opinionated, on purpose</a></li>
+          <li><a href="#chapter-4"><span class="num">4</span> Testing without a terminal</a></li>
+        </ol>
+      </nav>
+    </div>
+    <p class="sheet__folio" aria-hidden="true">1</p>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============================== CHAPTER 1 ============================== -->
+  <section class="sheet sheet--green sheet--kid" id="chapter-1" aria-labelledby="k1-title">
+    <div class="sheet__kid stamp-wrap" aria-hidden="true">
+      <div class="stamp stamp--print">
+        <img src="assets/hicli-logo.png" width="1536" height="1024" alt="" loading="lazy" decoding="async">
+      </div>
+    </div>
+    <div class="sheet__frame">
+      <header class="chapter__head">
+        <p class="chapter__label">Chapter 1</p>
+        <h2 id="k1-title">Your program, CLI-enabled</h2>
+      </header>
+
+      <div class="prose">
+        <p>
+          A command-line tool is code first and interface second. Most CLI frameworks invert
+          that: you describe the interface in their vocabulary, as a derive enum, a builder or
+          a central dispatch <code>match</code>, and hang your code off it. Then you translate
+          the parsed struct back into calls to the code you actually wanted to run.
+        </p>
+      </div>
+
+      <div class="versus">
+        <div class="versus__col versus__col--them">
+          <h3>A parser between you and your program</h3>
+          <ul>
+            <li>An <code>enum Commands</code> that every new command has to edit.</li>
+            <li>A <code>match</code> that dispatches it, growing with every command.</li>
+            <li>Each command’s name and help text written down twice.</li>
+          </ul>
+        </div>
+        <div class="versus__col versus__col--us">
+          <h3>hicli: your program, CLI-enabled</h3>
+          <ul>
+            <li><code>#[command]</code> leaves the function exactly as written and adds a handle.</li>
+            <li>A <code>#[group]</code> module’s commands are discovered in source order. No list to keep in sync.</li>
+            <li>The doc comment <em>is</em> the help text, so it can’t go stale.</li>
+          </ul>
+        </div>
+      </div>
+
+      <article class="worked" aria-labelledby="ex-1-title">
+        <header class="worked__head">
+          <p class="worked__kicker">Example 1.1</p>
+          <h3 id="ex-1-title">Worked example: a group of commands</h3>
+          <p>Three functions in a module. The <mark>doc comments</mark> become the help.</p>
+        </header>
+
+        <div class="worked__body">
+          <figure class="answer">
+            <figcaption>src/main.rs</figcaption>
+<pre><code><span class="t-doc">/// Playback control</span>
+<span class="t-a">#[group]</span>
+<span class="t-k">mod</span> playback {
+    <span class="t-k">use</span> super::*;
+
+    <span class="t-doc">/// Start playback from the queue</span>
+    <span class="t-a">#[command]</span>
+    <span class="t-k">pub fn</span> <span class="t-f">start</span>(ctx: &amp;Ctx) {
+        println!(<span class="t-s">"{}: playing"</span>, ctx.node);
+    }
+
+    <span class="t-doc">/// Stop playback</span>
+    <span class="t-a">#[command]</span>
+    <span class="t-k">pub fn</span> <span class="t-f">stop</span>(ctx: &amp;Ctx) {
+        println!(<span class="t-s">"{}: stopped"</span>, ctx.node);
+    }
+
+    <span class="t-doc">/// Select an audio output device</span>
+    <span class="t-a">#[command]</span>
+    <span class="t-k">pub fn</span> <span class="t-f">set_output</span>(output: Output, ctx: &amp;Ctx) {
+        println!(<span class="t-s">"{}: output is now {}"</span>, ctx.node, output.<span class="t-n">0</span>);
+    }
+}</code></pre>
+          </figure>
+
+          <figure class="screen">
+            <figcaption>terminal</figcaption>
+<pre><code><span class="t-p">$ playr playback --help</span>
+<span class="t-hl">Playback control</span>
+
+Usage: playback COMMAND ...
+
+Available options:
+    -h, --help  Prints help information
+
+Available commands:
+    <span class="t-cmd">start</span>       <span class="t-hl">Start playback from the queue</span>
+    <span class="t-cmd">stop</span>        <span class="t-hl">Stop playback</span>
+    <span class="t-cmd">set-output</span>  <span class="t-hl">Select an audio output device</span>
+
+<span class="t-p">$ playr --node pi.local playback set-output hdmi</span>
+pi.local: output is now hdmi</code></pre>
+          </figure>
+        </div>
+
+        <ol class="worked__steps">
+          <li><span>The name comes from the function name, with <code>_</code> turned into <code>-</code>: <code>set_output</code> becomes <code>set-output</code>.</span></li>
+          <li><span>The first line of the doc comment is the help. A command or group without one is a compile error.</span></li>
+          <li><span>The function itself is unchanged: <code>playback::stop(&amp;ctx)</code> still works.</span></li>
+        </ol>
+      </article>
+
+      <aside class="exercise" aria-labelledby="exercise-1-title">
+        <h3 id="exercise-1-title"><span class="num">1.2</span> Exercise</h3>
+        <p>Wire up a command line for the three functions above. Write the dispatcher, the help text and the argument struct.</p>
+        <details class="key">
+          <summary>Answer <span class="key__hint">(no peeking)</span></summary>
+          <p class="key__answer">
+            You already did. It’s your functions. There is no dispatcher to write and no help
+            text to repeat: list the group in <code>app!</code> and you’re done.
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </p>
+        </details>
+      </aside>
+    </div>
+    <p class="sheet__folio" aria-hidden="true">2</p>
+  </section>
+
+  <!-- ============================== CHAPTER 2 ============================== -->
+  <section class="sheet sheet--blue" id="chapter-2" aria-labelledby="k2-title">
+    <div class="sheet__frame">
+      <header class="chapter__head">
+        <p class="chapter__label">Chapter 2</p>
+        <h2 id="k2-title">One function, one command</h2>
+        <p class="chapter__intro">
+          Everything about a command is in one place, in the language you already write,
+          checked by the compiler you already run.
+        </p>
+      </header>
+
+      <ul class="stamps" aria-label="The three concepts">
+        <li class="stamp-wrap"><div class="stamp stamp--blue"><span class="stamp__big">fn</span><span class="stamp__small">a command</span></div></li>
+        <li class="stamp-wrap"><div class="stamp stamp--green"><span class="stamp__big">mod</span><span class="stamp__small">a group</span></div></li>
+        <li class="stamp-wrap"><div class="stamp stamp--orange"><span class="stamp__big">type</span><span class="stamp__small">an argument</span></div></li>
+      </ul>
+
+      <div class="lesson">
+        <div class="lesson__text">
+          <h3><span class="num">2.1</span> A command is a documented function</h3>
+          <p>
+            Put <code>#[command]</code> on a function and it becomes a subcommand. Its first doc
+            line is the summary, the following paragraphs are the description, and an
+            <code># Examples</code> section is printed at the end of its <code>--help</code>.
+          </p>
+          <p>
+            Use <code>#[command(alias = "ls")]</code> for another name and
+            <code>#[command(hide)]</code> to keep a command out of help and completion.
+          </p>
+        </div>
+        <figure class="answer lesson__code">
+<pre><code><span class="t-doc">/// Check that the node answers</span>
+<span class="t-a">#[command]</span>
+<span class="t-k">fn</span> <span class="t-f">ping</span>(ctx: &amp;Ctx) {
+    println!(<span class="t-s">"pong from {}"</span>, ctx.node);
+}</code></pre>
+          <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+        </figure>
+      </div>
+
+      <div class="lesson lesson--flip">
+        <div class="lesson__text">
+          <h3><span class="num">2.2</span> A group is a module, inline or in its own file</h3>
+          <p>
+            <code>#[group]</code> on a module makes it a group. Its commands are the
+            <code>#[command]</code> functions and <code>#[group]</code> modules inside it, in
+            source order. Groups nest, so one module can hold another.
+          </p>
+          <p>
+            A big group can live in its own file: <code>#[group] pub mod x;</code>
+            (MSRV 1.99, which made attribute macros on file-module declarations stable).
+          </p>
+        </div>
+        <p class="pencil-note">no list to keep in sync&nbsp;✎</p>
+      </div>
+
+      <div class="lesson">
+        <div class="lesson__text">
+          <h3><span class="num">2.3</span> An argument is a type</h3>
+          <p>
+            <code>set_output</code> takes an <code>Output</code>, a newtype that derives
+            <code>Bpaf</code> (how it is spelled) and <code>Arg</code> (so hicli can use it).
+            Define it once and use it in every command that needs it.
+          </p>
+          <p>
+            The type inside says what a valid value is. bpaf parses it with that type’s
+            <code>FromStr</code>, so bad values never reach a command: a value that doesn’t parse
+            is a usage error, and no command runs.
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+<pre><code><span class="t-a">#[derive(Debug, Clone, Bpaf, Arg)]</span>
+<span class="t-k">pub struct</span> <span class="t-f">Output</span>(
+    <span class="t-doc">/// An audio output device</span>
+    <span class="t-a">#[bpaf(positional("NAME"))]</span>
+    <span class="t-k">pub</span> Name,
+);</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+          <figure class="screen screen--small">
+<pre><code><span class="t-p">$ playr playback set-output HDMI</span>
+couldn't parse `HDMI`: a name uses only a-z, 0-9 and -
+<span class="t-p">$ echo $?</span>
+2</code></pre>
+          </figure>
+        </div>
+      </div>
+
+      <div class="lesson lesson--flip">
+        <div class="lesson__text">
+          <h3><span class="num">2.4</span> The tree is composed, not dispatched</h3>
+          <p>
+            <code>app!</code> lists the top-level commands and groups by name. You don’t write a
+            central <code>enum Commands</code> or a <code>match</code> that dispatches it. The
+            context is built once from the globals, by the closure you pass to <code>run</code>,
+            and handed to every command that takes <code>&amp;Ctx</code>.
+          </p>
+          <p>
+            Exit codes: <code>0</code> on success, <code>1</code> for a runtime failure,
+            <code>2</code> for a usage error. <code>run</code> returns the <code>ExitCode</code>;
+            it never calls <code>process::exit</code>.
+          </p>
+        </div>
+        <figure class="answer lesson__code">
+<pre><code><span class="t-k">fn</span> <span class="t-f">app</span>() -&gt; App&lt;Globals, Ctx&gt; {
+    app! {
+        globals: globals(),
+        commands: [ping, playback, search, library, source, upload, sort, generate_completions],
+    }
+    .about(<span class="t-s">"playr: control the music player"</span>)
+    .version(env!(<span class="t-s">"CARGO_PKG_VERSION"</span>))
+}
+
+<span class="t-k">fn</span> <span class="t-f">main</span>() -&gt; ExitCode {
+    app().run(|g| Ok(Ctx { node: g.node }))
+}</code></pre>
+          <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+        </figure>
+      </div>
+
+      <div class="lesson">
+        <div class="lesson__text">
+          <h3><span class="num">2.5</span> Object, then verb, and a default command</h3>
+          <p>
+            <code>playr source bandcamp check-updates</code> puts a value between the group and
+            the command. Use <code>#[group(args = T)]</code> for the group and
+            <code>#[command(curried)]</code> for each command that receives the value as its
+            first parameter.
+          </p>
+          <p>
+            When a group has a <code>#[command(default)]</code>, that command runs if no other
+            command in the group is named: <code>playr library archive</code> lists the archive,
+            <code>playr library archive empty</code> empties it.
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+<pre><code><span class="t-doc">/// Music sources</span>
+<span class="t-a">#[group(args = SourceName)]</span>
+<span class="t-k">mod</span> source {
+    <span class="t-k">use</span> super::*;
+
+    <span class="t-doc">/// Check the source's collection for stale items</span>
+    <span class="t-a">#[command(curried)]</span>
+    <span class="t-k">pub fn</span> <span class="t-f">check_updates</span>(s: SourceName, apply: Apply, ctx: &amp;Ctx) {
+        println!(<span class="t-s">"{}: checking {} (apply: {})"</span>, ctx.node, s.<span class="t-n">0</span>, apply.<span class="t-n">0</span>);
+    }
+}</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+          <figure class="screen screen--small">
+<pre><code><span class="t-p">$ playr source bandcamp check-updates --apply</span>
+localhost: checking bandcamp (apply: true)
+<span class="t-p">$ playr library archive</span>
+localhost: 3 files in the archive</code></pre>
+          </figure>
+        </div>
+      </div>
+
+      <div class="lesson lesson--flip">
+        <div class="lesson__text">
+          <h3><span class="num">2.6</span> <span><code>?</code> on the errors you already have</span></h3>
+          <p>
+            A command can return whatever it already returns: <code>()</code>,
+            <code>Outcome</code>, <code>io::Result&lt;()&gt;</code>, <code>anyhow::Result&lt;()&gt;</code>,
+            <code>color_eyre::Result&lt;()&gt;</code>, <code>Result&lt;(), Box&lt;dyn Error&gt;&gt;</code>.
+            Any error becomes a runtime failure (exit 1), and the message is the whole error
+            chain, outermost first.
+          </p>
+          <p>
+            hicli never inspects an error to choose an exit code. It is a usage error (exit 2)
+            only when it says so, with <code>Failure::usage(..)</code>.
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+<pre><code><span class="t-doc">/// Upload an audio file to the library</span>
+<span class="t-a">#[command]</span>
+<span class="t-k">fn</span> <span class="t-f">upload</span>(file: AudioFile, ctx: &amp;Ctx) -&gt; color_eyre::Result&lt;()&gt; {
+    <span class="t-k">let</span> bytes = std::fs::read(&amp;file.<span class="t-n">0</span>)
+        .wrap_err(<span class="t-s">"reading the file"</span>)
+        .wrap_err_with(|| format!(<span class="t-s">"uploading {}"</span>, file.<span class="t-n">0</span>.display()))?;
+    println!(<span class="t-s">"{}: uploaded {} bytes"</span>, ctx.node, bytes.len());
+    Ok(())
+}</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+          <figure class="screen screen--small">
+<pre><code><span class="t-p">$ playr upload missing.flac</span>
+uploading missing.flac: reading the file: No such file or directory (os error 2)
+<span class="t-p">$ echo $?</span>
+1</code></pre>
+          </figure>
+        </div>
+      </div>
+
+      <div class="lesson">
+        <div class="lesson__text">
+          <h3><span class="num">2.7</span> Completion lives on the type</h3>
+          <p>
+            Completion is attached to the argument type, so every command that takes a
+            <code>SourceName</code> completes source names. For paths, use
+            <code>#[arg(complete = files)]</code> or <code>#[arg(complete = dirs)]</code>.
+            Command names complete automatically.
+          </p>
+          <p>
+            <code>hicli::completion_script</code> renders the install script for bash, zsh or
+            fish, typically from a hidden command:
+          </p>
+          <figure class="screen screen--small">
+<pre><code><span class="t-p">$ playr generate-completions zsh &gt; ~/.zfunc/_playr</span></code></pre>
+          </figure>
+        </div>
+        <figure class="answer lesson__code">
+<pre><code><span class="t-a">#[derive(Debug, Clone, Bpaf, Arg)]</span>
+<span class="t-a">#[arg(complete = complete_sources)]</span>
+<span class="t-k">pub struct</span> <span class="t-f">SourceName</span>(<span class="t-a">#[bpaf(positional("SOURCE"))]</span> <span class="t-k">pub</span> Name);
+
+<span class="t-doc">/// Runs on every TAB: never fails, and filters by what was typed.</span>
+<span class="t-k">fn</span> <span class="t-f">complete_sources</span>(typed: &amp;SourceName) -&gt; Vec&lt;Candidate&gt; {
+    [<span class="t-s">"bandcamp"</span>, <span class="t-s">"beatport"</span>, <span class="t-s">"upload"</span>]
+        .into_iter()
+        .filter(|s| s.starts_with(&amp;typed.<span class="t-n">0</span>.to_string()))
+        .map(|s| (s.to_string(), None))
+        .collect()
+}</code></pre>
+          <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+        </figure>
+      </div>
+
+      <div class="lesson lesson--flip">
+        <div class="lesson__text">
+          <h3><span class="num">2.8</span> External subcommands, git style</h3>
+          <p>
+            Mount a separate binary as a command by absolute path. It still appears in help
+            and completion, and hicli never scans <code>$PATH</code>. That is a trust boundary,
+            not a convenience default. Everything after the external’s name is forwarded to
+            the binary verbatim.
+          </p>
+        </div>
+        <p class="pencil-note pencil-note--red">allowlist by absolute path.<br>no <code>$PATH</code> scan!</p>
+      </div>
+    </div>
+    <p class="sheet__folio" aria-hidden="true">3</p>
+  </section>
+
+  <!-- ============================== CHAPTER 3 ============================== -->
+  <section class="sheet sheet--green" id="chapter-3" aria-labelledby="k3-title">
+    <svg class="stain stain--corner" aria-hidden="true" focusable="false"><use href="#ring-b"/></svg>
+    <div class="sheet__frame">
+      <header class="chapter__head">
+        <p class="chapter__label">Chapter 3</p>
+        <h2 id="k3-title">Opinionated, on purpose</h2>
+      </header>
+
+      <div class="stance">
+        <p class="stance__big">Programmer ergonomics over fancy CLI compatibility. <span class="redline">Always.</span></p>
+        <blockquote class="stance__quote">
+          <p>
+            Where CLI expressiveness and a natural programming experience conflict, the
+            programming experience wins. If a parsing feature would cost the function its
+            ordinary shape, we leave the feature out.
+          </p>
+          <footer>from hicli’s <a href="https://github.com/johlrogge/hicli/blob/master/VISION.md">VISION.md</a></footer>
+        </blockquote>
+        <p>
+          hicli is not a <code>clap</code> replacement for everyone. It is for people who want
+          their CLI to be a thin, typed, documented skin over code they would write anyway. So
+          it says no to some things, and says so up front. Here are the rules of this book:
+        </p>
+      </div>
+
+      <ol class="rules">
+        <li>
+          <h3>Every argument is a newtype.</h3>
+          <p>There are no <code>Arg</code> impls for <code>String</code>, <code>u64</code> and so on. A primitive in a command’s signature is a compile error, so the type carries its spelling, help, validation and completion once, for every command.</p>
+        </li>
+        <li>
+          <h3>No doc comment, no command.</h3>
+          <p>A command or group without a doc comment is a compile error. Help can’t be forgotten.</p>
+        </li>
+        <li>
+          <h3>Positionals go last in the signature.</h3>
+          <p>Parameters are parsed in the order they are declared, and bpaf requires the types that contain positionals to come last. On the command line, flags can still go anywhere.</p>
+        </li>
+        <li>
+          <h3><code>-7</code> is a flag, unless you glue it.</h3>
+          <p>Write <code>--added=-7</code>. hicli keeps to the standard rule rather than special-casing hyphen values: a parser that sometimes takes <code>-7</code> as a value and sometimes as a flag surprises users.</p>
+        </li>
+        <li>
+          <h3>Globals are parsed once.</h3>
+          <p>They are accepted before or after the subcommand, but can’t be overridden per subcommand.</p>
+        </li>
+        <li>
+          <h3>The help looks like bpaf’s, not clap’s.</h3>
+          <p>Argument spelling uses bpaf’s attributes too: one dialect to learn. <code>--help</code> exits 0 and usage errors exit 2.</p>
+        </li>
+        <li>
+          <h3>One default command per group.</h3>
+          <p>None at the top level, and none in a curried group.</p>
+        </li>
+        <li>
+          <h3>Completers filter their own candidates.</h3>
+          <p>bpaf passes your completer’s results to the shell unchanged, and a completer only sees values that parsed.</p>
+        </li>
+      </ol>
+      <p class="pencil-note pencil-note--red pencil-note--end">every rule here buys you a plain function. <svg class="star star--inline" aria-hidden="true" focusable="false"><use href="#star"/></svg></p>
+    </div>
+    <p class="sheet__folio" aria-hidden="true">4</p>
+  </section>
+
+  <!-- ============================== CHAPTER 4 ============================== -->
+  <section class="sheet sheet--blue" id="chapter-4" aria-labelledby="k4-title">
+    <div class="sheet__frame">
+      <header class="chapter__head">
+        <p class="chapter__label">Chapter 4</p>
+        <h2 id="k4-title">Testing without a terminal</h2>
+      </header>
+
+      <div class="testing">
+        <div class="testing__text">
+          <p>
+            The parser has no side effects, so the whole CLI can be tested in-process. You
+            don’t need a subprocess or golden files.
+          </p>
+          <ul class="checklist">
+            <li><code>cli! { … }</code> turns the words you would type into an argv, and <code>cli_test!</code> writes one <code>#[test]</code> per line.</li>
+            <li><code>App::parse</code> returns the parsed globals and the selected command, or the error that would be printed.</li>
+            <li><code>App::run_with_args</code> runs everything and returns the exit code that <code>main</code> would.</li>
+            <li><code>App::complete</code> returns what the shell would offer.</li>
+            <li>Commands are ordinary functions, so you can call them directly.</li>
+          </ul>
+        </div>
+
+        <figure class="answer testing__code">
+          <figcaption>src/main.rs, tests</figcaption>
+<pre><code><span class="t-a">#[cfg(test)]</span>
+<span class="t-k">mod</span> tests {
+    <span class="t-k">use</span> super::*;
+    <span class="t-k">use</span> hicli::{cli, cli_test, exit_code_for};
+
+    cli_test! {
+        app: app();
+
+        stop_is_under_playback: { playback stop } =&gt; |r| {
+            <span class="t-k">let</span> (_globals, invocation) = r.expect(<span class="t-s">"parses"</span>);
+            assert_eq!(invocation.path(), [<span class="t-s">"playback"</span>, <span class="t-s">"stop"</span>]);
+        },
+        set_output_needs_a_name: { playback <span class="t-s">"set-output"</span> } =&gt; |r| {
+            <span class="t-k">let</span> e = r.err().expect(<span class="t-s">"a usage error"</span>);
+            assert_eq!(exit_code_for(&amp;e), <span class="t-n">2</span>);
+            assert!(e.unwrap_stderr().contains(<span class="t-s">"NAME"</span>));
+        },
+    }
+
+    <span class="t-a">#[test]</span>
+    <span class="t-k">fn</span> <span class="t-f">source_names_complete</span>() {
+        assert_eq!(app().complete(cli! { source b }), [<span class="t-s">"bandcamp"</span>, <span class="t-s">"beatport"</span>]);
+    }
+}</code></pre>
+          <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+        </figure>
+      </div>
+
+      <aside class="exercise exercise--small" aria-labelledby="exercise-4-title">
+        <h3 id="exercise-4-title"><span class="num">4.1</span> Exercise</h3>
+        <p>How many processes does the test module above spawn?</p>
+        <details class="key">
+          <summary>Answer</summary>
+          <p class="key__answer">
+            None. Parsing, running and completion are all driven in-process, with the words you
+            would type. <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </p>
+        </details>
+      </aside>
+    </div>
+    <p class="sheet__folio" aria-hidden="true">5</p>
+  </section>
+
+</main>
+
+<footer class="colophon">
+  <div class="colophon__grid">
+    <div>
+      <p class="colophon__mark">hicli</p>
+      <p>CLI-enable your code.</p>
+    </div>
+    <ul class="colophon__links">
+      <li><a href="https://github.com/johlrogge/hicli">GitHub</a></li>
+      <li><a href="https://crates.io/crates/hicli">crates.io</a></li>
+      <li><a href="https://docs.rs/hicli">docs.rs</a></li>
+      <li><a href="https://github.com/johlrogge/hicli/blob/master/CHANGELOG.md">Changelog</a></li>
+    </ul>
+    <p class="colophon__fine">
+      Licensed under either of Apache-2.0 or MIT, at your option.
+      Made in the open at <a href="https://github.com/johlrogge/hicli">github.com/johlrogge/hicli</a>.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
