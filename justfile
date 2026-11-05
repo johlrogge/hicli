@@ -24,8 +24,13 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
+# The crate must build with its default `color` feature off (ADR-015).
 [group: 'qa']
-ci: fmt-check clippy test
+check-no-default:
+    cargo check --workspace --all-targets --no-default-features
+
+[group: 'qa']
+ci: fmt-check clippy check-no-default test
     @echo "checks passed"
 
 # Re-record the compile-fail snapshots (tests/ui/*.stderr) after an

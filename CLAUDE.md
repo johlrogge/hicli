@@ -40,7 +40,8 @@ Task runner: `just` (see `justfile` for the full list; `just --list` to enumerat
 | `just fmt` | `cargo fmt --all` |
 | `just fmt-check` | `cargo fmt --all -- --check` |
 | `just doc` | `cargo doc --no-deps` |
-| `just ci` | `fmt-check` + `clippy` + `test` — mirrors what CI runs |
+| `just check-no-default` | `cargo check --workspace --all-targets --no-default-features` |
+| `just ci` | `fmt-check` + `clippy` + `check-no-default` + `test` — mirrors what CI runs |
 | `just clean` | `cargo clean` |
 
 Run `just ci` before considering any change done.

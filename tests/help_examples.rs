@@ -40,7 +40,7 @@ pub struct Query {
 ///
 /// Examples:
 ///     mdma search --artist Bowie
-///     mdma search --added -7 --genre jazz
+///     mdma search --added=-7 --genre jazz
 #[command]
 fn indented(_q: Query, _ctx: &Ctx) {}
 
@@ -51,7 +51,7 @@ fn indented(_q: Query, _ctx: &Ctx) {}
 /// # Examples
 ///
 ///     mdma search --artist Bowie
-///     mdma search --added -7 --genre jazz
+///     mdma search --added=-7 --genre jazz
 #[command]
 fn heading(_q: Query, _ctx: &Ctx) {}
 
@@ -63,7 +63,7 @@ fn heading(_q: Query, _ctx: &Ctx) {}
 ///
 /// ```sh
 /// mdma search --artist Bowie
-/// mdma search --added -7 --genre jazz
+/// mdma search --added=-7 --genre jazz
 /// ```
 #[command]
 fn fenced(_q: Query, _ctx: &Ctx) {}
@@ -88,7 +88,7 @@ fn help_of(args: &[&str]) -> String {
 /// What every spelling's footer renders as: the heading, then each example
 /// on its own line, indented by two, at the very end of the help.
 const FOOTER: &str =
-    "Examples:\n  mdma search --artist Bowie\n  mdma search --added -7 --genre jazz\n";
+    "Examples:\n  mdma search --artist Bowie\n  mdma search --added=-7 --genre jazz\n";
 
 /// Assert the footer contract on one command's help, rendered with `extra`
 /// (`[]` for plain `--help`, `["--help"]` for `--help --help`).

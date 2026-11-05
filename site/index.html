@@ -366,7 +366,7 @@ pi.local: output is now hdmi</code></pre>
           </figure>
           <figure class="screen screen--small">
 <pre><code><span class="t-p">$ playr playback set-output HDMI</span>
-couldn't parse `HDMI`: a name uses only a-z, 0-9 and -
+Error: couldn't parse `HDMI`: a name uses only a-z, 0-9 and -
 <span class="t-p">$ echo $?</span>
 2</code></pre>
           </figure>
@@ -474,7 +474,7 @@ localhost: 3 files in the archive</code></pre>
           </figure>
           <figure class="screen screen--small">
 <pre><code><span class="t-p">$ playr upload missing.flac</span>
-uploading missing.flac: reading the file: No such file or directory (os error 2)
+Error: uploading missing.flac: reading the file: No such file or directory (os error 2)
 <span class="t-p">$ echo $?</span>
 1</code></pre>
           </figure>

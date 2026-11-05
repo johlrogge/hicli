@@ -635,14 +635,14 @@ impl<O> Node<O> {
     /// # use hicli::App;
     /// # use hicli::bpaf::pure;
     /// let search = hicli::command("search", "search the library", pure(()), |(), _: &()| {})
-    ///     .footer("Examples:\n  mdma search --artist Bowie\n  mdma search --added -7");
+    ///     .footer("Examples:\n  mdma search --artist Bowie\n  mdma search --added=-7");
     /// let help = App::new(pure(()))
     ///     .command(search)
     ///     .parse(["search", "--help"])
     ///     .err()
     ///     .expect("--help short-circuits")
     ///     .unwrap_stdout();
-    /// assert!(help.ends_with("Examples:\n  mdma search --artist Bowie\n  mdma search --added -7\n"));
+    /// assert!(help.ends_with("Examples:\n  mdma search --artist Bowie\n  mdma search --added=-7\n"));
     /// ```
     pub fn footer(mut self, footer: impl Into<String>) -> Self {
         self.footer = Some(footer.into());

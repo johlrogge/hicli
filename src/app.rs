@@ -1,7 +1,7 @@
 //! The composition builder: [`App`] and exit-code handling.
 
 use crate::command::{alternative, Command, IntoCommand, Mount};
-use crate::help::usage_line;
+use crate::help::{self, usage_line};
 use crate::invocation::Invocation;
 use crate::outcome::{Failure, Success};
 use bpaf::{construct, OptionParser, ParseFailure, Parser};
@@ -303,6 +303,26 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     /// with is the file name of `argv[0]` — what the user typed, a symlink's
     /// name included. It is display only (ADR-013).
     ///
+    /// # Output
+    ///
+    /// Everything is printed by `bpaf`'s `ParseFailure::print_message`
+    /// (ADR-015), so:
+    ///
+    /// - A usage error **and** a [`Failure`]'s message go to stderr prefixed
+    ///   `Error: `. The `did you mean` hint is a line of its own below
+    ///   `bpaf`'s message. A `Failure`'s message is printed line for line as
+    ///   written; a line longer than 100 columns wraps.
+    /// - Help and `--version` go to stdout, followed by a blank line.
+    /// - With the default `color` feature, help and errors are styled (bold,
+    ///   underline, the `Error: ` prefix bold red) — but only when stdout
+    ///   **and** stderr are both terminals, so `app --help | less` and
+    ///   `app --help 2>/dev/null` print plain text. The environment is the
+    ///   only control (`NO_COLOR`, `FORCE_COLOR`, … — see the crate docs'
+    ///   *Features*); there is no `--color` flag.
+    ///
+    /// [`App::parse`] returns the same message without the `Error: ` prefix,
+    /// never coloured.
+    ///
     /// Otherwise equivalent to `ExitCode::from(run_with_args(std::env::args().skip(1),
     /// mk_ctx))`; use [`App::run_with_args`] in tests, since `ExitCode` is not
     /// comparable and a test seam must be assertable.
@@ -335,9 +355,11 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
     /// `std::env::args().skip(1)`.
     ///
     /// Only the returned code is assertable: help, usage errors and a
-    /// [`Failure`]'s message still go to the process's real stdout/stderr, which
-    /// this method does not capture or redirect. Assert rendered text through
-    /// [`App::parse`] (which returns the `ParseFailure` instead of printing it).
+    /// [`Failure`]'s message still go to the process's real stdout/stderr —
+    /// printed exactly as [`App::run`] prints them, `Error: ` prefix and
+    /// colour included — which this method does not capture or redirect.
+    /// Assert rendered text through [`App::parse`] (which returns the
+    /// `ParseFailure` instead of printing it, plain).
     ///
     /// ```
     /// # use hicli::{App, cli};
@@ -449,48 +471,51 @@ pub fn exit_code_for(f: &ParseFailure) -> u8 {
 
 /// Print a parse failure to the right stream, appending a suggestion when
 /// `bpaf` produced none, and return the remapped exit code.
+///
+/// Printed by `bpaf`'s `print_message` — its one coloured path (ADR-015) —
+/// which also covers shell completion: it prints a `Completion` payload with
+/// `print!`, as is.
 fn report_failure(failure: ParseFailure, registry: &Registry, args: &[String]) -> u8 {
     let code = exit_code_for(&failure);
-    if matches!(failure, ParseFailure::Stderr(..)) {
-        eprintln!(
-            "{}",
-            augment_stderr(failure.unwrap_stderr(), registry, args)
-        );
-    } else {
-        // Verified against bpaf 0.9.27: `unwrap_stdout()` does not panic on
-        // `ParseFailure::Completion` — it returns the completion payload — so
-        // this branch covers help/version *and* shell completion.
-        print!("{}", failure.unwrap_stdout());
-    }
+    suggested(failure, registry, args).print_message(help::WIDTH);
     code
 }
 
 /// Print a command's outcome and return its process exit code.
 ///
-/// A [`Failure`]'s message goes to stderr; a [`Success`] prints nothing at all,
-/// not even a blank line. It is produced by a command that has already said
-/// whatever there was to say (an external subcommand's child writes its own
-/// stdout/stderr), so anything hicli added would be noise.
+/// A [`Failure`]'s message goes to stderr the way a usage error does —
+/// through `bpaf`'s `print_message`, so it reads `Error: <message>`, coloured
+/// on a terminal (ADR-015) — and line for line as written (`help::verbatim`).
+/// A [`Success`] prints nothing at all, not even a blank line. It is produced
+/// by a command that has already said whatever there was to say (an external
+/// subcommand's child writes its own stdout/stderr), so anything hicli added
+/// would be noise.
 fn report_outcome(outcome: Result<Success, Failure>) -> u8 {
     match outcome {
         Ok(s) => s.get(),
         Err(e) => {
-            eprintln!("{}", e.message());
+            ParseFailure::Stderr(help::verbatim(e.message())).print_message(help::WIDTH);
             e.code()
         }
     }
 }
 
-/// The stderr text to print for a usage error: `msg`, plus a `did you mean`
-/// line when `bpaf` produced no suggestion of its own.
-fn augment_stderr(msg: String, registry: &Registry, args: &[String]) -> String {
-    let mut msg = msg;
-    if !msg.to_lowercase().contains("did you mean") {
-        if let Some(name) = suggest(registry, args) {
-            msg.push_str(&format!("\ndid you mean `{name}`?"));
+/// A usage error with a `did you mean` line appended when `bpaf` produced no
+/// suggestion of its own; every other failure — help, version, completion —
+/// untouched.
+fn suggested(failure: ParseFailure, registry: &Registry, args: &[String]) -> ParseFailure {
+    match failure {
+        ParseFailure::Stderr(doc) => {
+            if doc.monochrome(true).to_lowercase().contains("did you mean") {
+                return ParseFailure::Stderr(doc);
+            }
+            match suggest(registry, args) {
+                Some(name) => ParseFailure::Stderr(help::with_suggestion(&doc, &name)),
+                None => ParseFailure::Stderr(doc),
+            }
         }
+        other => other,
     }
-    msg
 }
 
 /// The suggestion gap-closer: a Levenshtein pass (edit distance 1..=2) over the
@@ -701,16 +726,30 @@ mod tests {
     }
 
     #[test]
-    fn augment_stderr_appends_when_bpaf_was_silent() {
-        let out = augment_stderr(
-            "no such command".into(),
+    fn suggested_appends_a_line_when_bpaf_was_silent() {
+        let out = suggested(
+            ParseFailure::Stderr(bpaf::doc::Doc::from("no such command")),
             &all(&["status"]),
             &argv(&["stauts"]),
         );
-        assert!(
-            out.ends_with("did you mean `status`?"),
-            "expected an appended hint, got:\n{out}"
+        assert_eq!(
+            out.unwrap_stderr(),
+            "no such command\ndid you mean `status`?"
         );
+    }
+
+    #[test]
+    fn suggested_passes_help_and_completion_through() {
+        let r = all(&["status"]);
+        let typo = argv(&["stauts"]);
+        let help = suggested(
+            ParseFailure::Stdout(bpaf::doc::Doc::from("Usage: stauts"), false),
+            &r,
+            &typo,
+        );
+        assert_eq!(help.unwrap_stdout(), "Usage: stauts");
+        let completion = suggested(ParseFailure::Completion("stauts\n".into()), &r, &typo);
+        assert_eq!(completion.unwrap_stdout(), "stauts\n");
     }
 
     #[test]
@@ -799,12 +838,14 @@ mod tests {
     }
 
     #[test]
-    fn augment_stderr_keeps_an_existing_suggestion() {
+    fn suggested_keeps_bpafs_own_suggestion() {
         // Capital `D`: detection is case-insensitive.
-        let msg = "No such command: `stauts`. Did you mean `status`?".to_string();
-        assert_eq!(
-            augment_stderr(msg.clone(), &all(&["status"]), &argv(&["stauts"])),
-            msg
+        let msg = "No such command: `stauts`. Did you mean `status`?";
+        let out = suggested(
+            ParseFailure::Stderr(bpaf::doc::Doc::from(msg)),
+            &all(&["status"]),
+            &argv(&["stauts"]),
         );
+        assert_eq!(out.unwrap_stderr(), msg);
     }
 }
