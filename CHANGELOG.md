@@ -7,7 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Before 1.0, a minor version may carry breaking changes; they are listed under
 "Breaking" with what to change.
 
-## [Unreleased]
+## [0.4.0] — 2026-11-05
+
+No breaking API changes. Output changed: parse errors and command failures start
+with `Error: `, help and errors are coloured on a terminal, and long usage lines wrap
+between items. Re-bless transcripts of `run` output; `App::parse`-based snapshots are
+unchanged.
 
 ### Added
 
@@ -181,6 +186,7 @@ because snapshot tests of help pages need re-blessing.
 First release: help metadata and the doc comment's `# Examples` footer (ADR-008),
 completion scripts (ADR-009) and groups in files (ADR-010).
 
+[0.4.0]: https://github.com/johlrogge/hicli/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/johlrogge/hicli/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/johlrogge/hicli/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/johlrogge/hicli/compare/v0.1.0...v0.2.0

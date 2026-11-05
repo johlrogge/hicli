@@ -12,7 +12,7 @@ in-process, without spawning a binary.
 [![crates.io](https://img.shields.io/crates/v/hicli.svg)](https://crates.io/crates/hicli)
 [![docs.rs](https://docs.rs/hicli/badge.svg)](https://docs.rs/hicli)
 
-> 0.3.0, pre-1.0: a minor version may break things. Every break is listed in
+> 0.4.0, pre-1.0: a minor version may break things. Every break is listed in
 > [`CHANGELOG.md`](CHANGELOG.md). MSRV: Rust 1.99.
 
 ## Quick start
@@ -23,7 +23,7 @@ First, three commands and a global option:
 
 ```toml
 [dependencies]
-hicli = "0.3"
+hicli = "0.4"
 bpaf = "0.9"   # needed for #[derive(Bpaf)] on your own argument types
 ```
 
