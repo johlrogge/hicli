@@ -326,7 +326,7 @@ pub use bpaf;
 /// ///
 /// /// ```sh
 /// /// mdma search --artist Bowie
-/// /// mdma search --added -7 --genre jazz
+/// /// mdma search --added=-7 --genre jazz
 /// /// ```
 /// #[command(alias = "s")]
 /// pub fn search(q: Query, ctx: &Ctx) -> Outcome { /* … */ }
@@ -337,7 +337,7 @@ pub use bpaf;
 /// ```text
 /// Examples:
 ///   mdma search --artist Bowie
-///   mdma search --added -7 --genre jazz
+///   mdma search --added=-7 --genre jazz
 /// ```
 ///
 /// The body loses its code fences, its common indentation and its leading and

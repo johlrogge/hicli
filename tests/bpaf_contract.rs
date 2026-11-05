@@ -162,15 +162,6 @@ fn source_guarded(fixed_first: bool) -> OptionParser<Source> {
     }
 }
 
-/// The `tests/hyphen_values.rs` recipe: `--name -7` and `--name=-7`.
-fn hyphen_value(name: &'static str, metavar: &'static str) -> impl Parser<String> {
-    let flag = long(name).req_flag(());
-    let value = any::<String, _, _>(metavar, Some);
-    let separate = construct!(flag, value).adjacent().map(|((), v)| v).hide();
-    let joined = long(name).argument::<String>(metavar);
-    construct!([separate, joined])
-}
-
 /// The named subcommand `fact-values-for <TYPE>`.
 fn fact_values_for() -> impl Parser<Search> {
     positional::<String>("TYPE")
@@ -195,7 +186,7 @@ fn default_branch() -> impl Parser<Search> {
                 .collect::<Vec<_>>()
         })
         .optional();
-    let added = hyphen_value("added", "DAYS").optional();
+    let added = long("added").argument::<String>("DAYS").optional();
     let query = positional::<String>("QUERY").help("free text").optional();
     construct!(artist, added, query)
         .map(|(artist, added, query)| Search::Default {
@@ -327,14 +318,16 @@ fn s3_default_branch_outcomes_are_order_independent() {
             show(p(), &["search", "--", "fact-values-for"]),
             r#"Ok(Default { query: Some("fact-values-for"), artist: None, added: None })"#
         );
-        // (g) the hyphen-value recipe works inside the default branch.
-        assert_eq!(
-            show(p(), &["search", "--added", "-7"]),
-            r#"Ok(Default { query: None, artist: None, added: Some("-7") })"#
-        );
+        // (g) a dash-led value is written glued inside the default branch; the
+        // two-word form is a usage error naming the glued form (#29).
         assert_eq!(
             show(p(), &["search", "--added=-7", "jazz"]),
             r#"Ok(Default { query: Some("jazz"), artist: None, added: Some("-7") })"#
+        );
+        assert_eq!(
+            show(p(), &["search", "--added", "-7"]),
+            "STDERR: `--added` requires an argument `DAYS`, got a flag `-7`, \
+             try `--added=-7` to use it as an argument"
         );
         // (h) a typo of the named command is silently a query — no suggestion.
         assert_eq!(
@@ -783,7 +776,7 @@ fn search_r2(guard: Option<Box<dyn Parser<()>>>, fixed: Fixed) -> OptionParser<S
         .help("by artist")
         .argument::<String>("ARTIST")
         .optional();
-    let added = hyphen_value("added", "DAYS").optional();
+    let added = long("added").argument::<String>("DAYS").optional();
     let query = positional::<String>("QUERY")
         .help("free text")
         .complete(move |s: &String| {

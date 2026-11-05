@@ -19,7 +19,7 @@ The mdma-cli evaluation (2026-11-03) filed issues #1–#18 against hicli as a cl
 replacement. The essentials are split across three releases:
 
 - **0.1.0:** help metadata and examples (#2, #9: ADR-008), completion scripts
-  (#12: ADR-009), values starting with `-` (#5: documented recipe), and the
+  (#12: ADR-009), values starting with `-` (#5; since 0.4 the glued `--added=-7` only, #29), and the
   release itself (#3).
 - **0.2.0:** group-level arguments (#1) and a group's default command (#4),
   designed together (ADR-011: they reshape the group node), plus `?` on

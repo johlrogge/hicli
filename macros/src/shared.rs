@@ -505,7 +505,7 @@ mod tests {
 
     /// The body every examples test below is expected to produce.
     const MDMA: &str =
-        "Examples:\n  mdma search --artist Bowie\n  mdma search --added -7 --genre jazz";
+        "Examples:\n  mdma search --artist Bowie\n  mdma search --added=-7 --genre jazz";
 
     #[test]
     fn a_heading_with_a_sh_fenced_body_is_the_footer() {
@@ -516,7 +516,7 @@ mod tests {
              ///\n\
              /// ```sh\n\
              /// mdma search --artist Bowie\n\
-             /// mdma search --added -7 --genre jazz\n\
+             /// mdma search --added=-7 --genre jazz\n\
              /// ```\n\
              fn search() {}",
         );
@@ -532,7 +532,7 @@ mod tests {
                  ///\n\
                  /// Examples:\n\
                  ///     mdma search --artist Bowie\n\
-                 ///     mdma search --added -7 --genre jazz\n\
+                 ///     mdma search --added=-7 --genre jazz\n\
                  fn search() {}",
             )
             .as_deref(),
@@ -565,14 +565,14 @@ mod tests {
                  ///\n\
                  /// mdma search --artist Bowie\n\
                  ///\n\
-                 /// mdma search --added -7 --genre jazz\n\
+                 /// mdma search --added=-7 --genre jazz\n\
                  ///\n\
                  ///\n\
                  fn search() {}",
             )
             .as_deref(),
             Some(
-                "Examples:\n  mdma search --artist Bowie\n\n  mdma search --added -7 --genre jazz"
+                "Examples:\n  mdma search --artist Bowie\n\n  mdma search --added=-7 --genre jazz"
             )
         );
     }
@@ -617,7 +617,7 @@ mod tests {
              ///\n\
              /// ```sh\n\
              /// mdma search --artist Bowie\n\
-             /// mdma search --added -7 --genre jazz\n\
+             /// mdma search --added=-7 --genre jazz\n\
              /// ```\n\
              fn search() {}",
         );

@@ -154,7 +154,7 @@ mod tests {
     /// A footer exercising every hazard: a heading, a two-space indent, a
     /// blank line, and a line indented by more than four spaces.
     const TEXT: &str =
-        "Examples:\n  demo search --artist Bowie\n\n      demo search --added -7\nend";
+        "Examples:\n  demo search --artist Bowie\n\n      demo search --added=-7\nend";
 
     #[test]
     fn verbatim_renders_back_to_its_lines_in_both_renderings() {

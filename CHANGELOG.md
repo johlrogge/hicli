@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Before 1.0, a minor version may carry breaking changes; they are listed under
 "Breaking" with what to change.
 
+## [Unreleased]
+
+### Changed (docs)
+
+- The `Arg` docs no longer teach accepting `--since -7`. A value that starts with `-`
+  is written glued, `--since=-7`, and a plain `argument` reads it; the two-word form
+  is a usage error, and bpaf's message says to write `--since=-7` instead. This keeps
+  the standard rule that a word starting with `-` is an option. Code that copied the
+  `any` + `adjacent` recipe keeps working; to follow the convention, replace it with
+  a plain `argument` (#29).
+
 ## [0.3.0] — 2026-11-05
 
 No breaking API changes. The signature of `hicli::group_args`, flagged in 0.2.0 as
