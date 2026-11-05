@@ -24,8 +24,14 @@ replacement. The essentials are split across three releases:
 - **0.2.0:** group-level arguments (#1) and a group's default command (#4),
   designed together (ADR-011: they reshape the group node), plus `?` on
   application errors (#6, ADR-012).
-- **0.3.0:** `mk_ctx` seeing the selected command (#7), pending mdma-cli's
-  review of the proposed answer: a lazy context (`ctx.node()?`) and no new API.
+- **0.3.0:** what the user sees in help and errors: usage lines name the
+  binary with no trailing space (#21, #28, ADR-013), a group's bare default and
+  a curried value on group help pages (#19, #20), and the missing-command
+  error after a curried value (#27). The promo site ships with it.
+- **Next:** `mk_ctx` seeing the selected command (#7), pending mdma-cli's
+  review of the proposed answer: a lazy context (`ctx.node()?`) and no new API
+  (ADR-014 once accepted). Parse errors naming the failed option (#26) need a
+  bpaf change and are on hold.
 - **Unscheduled:** choice enums (#8), owned command names (#10), the
   positionals-last check (#11), globals-aware completion (#13), and the
   nice-to-haves #14–#18.
@@ -49,6 +55,9 @@ replacement. The essentials are split across three releases:
 
 <!-- Completed milestones -->
 
+- 0.3.0, help and errors (ADR-013, 2026-11-05, #19 #20 #21 #27 #28):
+  `App::bin_name`, hicli-rendered usage lines, bare defaults and curried values
+  on group help pages, a named missing curried command; plus the promo site
 - `?` on application errors (ADR-012, 2026-11-04, #6): a command returns its
   own `Result<_, E>` for any `E: Into<Failure>` (std errors, anyhow, eyre,
   `String`), the source chain rendered `outer: mid: root`
