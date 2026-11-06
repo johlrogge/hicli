@@ -20,7 +20,7 @@ use std::process::ExitCode;
 use std::str::FromStr;
 
 use bpaf::Bpaf;
-use hicli::{app, command, group, App, Arg, Candidate, Failure, Outcome};
+use hicli::{app, command, group, App, Arg, Candidate, Choice, Failure, Outcome};
 
 // ---- globals and context -------------------------------------------------
 
@@ -220,46 +220,32 @@ pub struct AudioFile(
     pub PathBuf,
 );
 
-// A choice value: an ordinary enum with `FromStr`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+// The types below are spelled by `#[arg(…)]` itself, with no `#[derive(Bpaf)]`:
+// the doc comment's first paragraph is the help row.
+
+/// What to sort by: bpm, title or artist
+//
+// A choice is the argument: its names parse, complete and appear in errors.
+#[derive(Debug, Clone, Copy, PartialEq, Choice, Arg)]
+#[arg(positional = "KEY")]
 pub enum SortKey {
+    /// Beats per minute
     Bpm,
+    /// Track title
     Title,
+    /// Artist name
     Artist,
 }
 
-impl FromStr for SortKey {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "bpm" => Ok(Self::Bpm),
-            "title" => Ok(Self::Title),
-            "artist" => Ok(Self::Artist),
-            other => Err(format!("`{other}` is not one of: bpm, title, artist")),
-        }
-    }
-}
+/// Sort descending (Z→A, high→low)
+#[derive(Debug, Clone, Arg)]
+#[arg(short = 'd', long = "descending")]
+pub struct Descending(pub bool);
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct SortBy(
-    /// What to sort by: bpm, title or artist
-    #[bpaf(positional("KEY"))]
-    pub SortKey,
-);
-
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct Descending(
-    /// Sort descending (Z→A, high→low)
-    #[bpaf(short('d'), long("descending"), switch)]
-    pub bool,
-);
-
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct ShellArg(
-    /// A shell to print completions for: bash, zsh or fish
-    #[bpaf(positional("SHELL"))]
-    pub hicli::Shell,
-);
+/// A shell to print completions for: bash, zsh or fish
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "SHELL")]
+pub struct ShellArg(pub hicli::Shell);
 
 // ---- commands -------------------------------------------------------------
 
@@ -385,8 +371,8 @@ fn upload(file: AudioFile, ctx: &Ctx) -> color_eyre::Result<()> {
 /// playr search --artist CBL | playr sort bpm --descending
 /// ```
 #[command]
-fn sort(desc: Descending, by: SortBy) {
-    println!("sorting by {:?}, descending: {}", by.0, desc.0);
+fn sort(desc: Descending, by: SortKey) {
+    println!("sorting by {by}, descending: {}", desc.0);
 }
 
 /// Print the shell completion script
@@ -575,6 +561,27 @@ Available options:
 Examples:
   playr search --artist CBL | playr sort bpm --descending
 "
+        );
+    }
+
+    #[test]
+    fn sort_keys_complete_and_a_wrong_one_names_them() {
+        // The empty word also offers the flag not given yet.
+        assert_eq!(
+            app().complete(cli! { sort "" }),
+            ["--descending", "bpm", "title", "artist"]
+        );
+        assert_eq!(app().complete(cli! { sort t }), ["title"]);
+        let e = app().parse(cli! { sort key }).err().expect("a usage error");
+        assert_eq!(exit_code_for(&e), 2);
+        assert_eq!(
+            e.unwrap_stderr(),
+            "couldn't parse `key`: expected `bpm`, `title` or `artist`"
+        );
+        let e = app().parse(cli! { sort bmp }).err().expect("a usage error");
+        assert_eq!(
+            e.unwrap_stderr(),
+            "couldn't parse `bmp`: expected `bpm`, `title` or `artist`; did you mean `bpm`?"
         );
     }
 

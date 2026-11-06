@@ -41,8 +41,21 @@ use crate::fs::Fs;
 use crate::resolve::{resolve as resolve_file, show, Load};
 use crate::shared::{
     cfg_attrs, dashed, handle_doc, handle_ident, parse_keys, path_attr, read_doc, unraw_name,
-    CommandMeta, GROUP_NEEDS_DOC,
+    CommandMeta, DocParts, GROUP_NEEDS_DOC,
 };
+
+/// The message for an `# Arguments` section on a group.
+const GROUP_ARGUMENTS: &str = "a group has no parameters: `# Arguments` belongs on a command";
+
+/// A group's doc comment: [`read_doc`]'s slots, without an `# Arguments`
+/// section, which only a command's parameters can answer.
+fn group_doc(item_attrs: &[Attribute], ident: &Ident) -> Result<DocParts> {
+    let doc = read_doc(item_attrs, ident, GROUP_NEEDS_DOC)?;
+    if let Some(a) = &doc.arguments {
+        return Err(Error::new_spanned(&a.heading, GROUP_ARGUMENTS));
+    }
+    Ok(doc)
+}
 
 /// The message for an argument `#[group]` does not take (D10).
 const UNKNOWN_ARG: &str = "#[group] takes `ctx = <Type>`, `args = <Type>`, `curried = <Type>`, \
@@ -297,7 +310,7 @@ fn inline_form(args: GroupArgs, item: ItemMod) -> Result<TokenStream> {
         .as_ref()
         .expect("an inline module has a body")
         .1;
-    let doc = read_doc(&item.attrs, &item.ident, GROUP_NEEDS_DOC)?;
+    let doc = group_doc(&item.attrs, &item.ident)?;
     let name = dashed(&item.ident);
     args.meta.check_name(&name, "group")?;
     let children = children_of(items);
@@ -377,7 +390,7 @@ fn file_form(
     args: GroupArgs,
     mut item: ItemMod,
 ) -> Result<TokenStream> {
-    let doc = read_doc(&item.attrs, &item.ident, GROUP_NEEDS_DOC)?;
+    let doc = group_doc(&item.attrs, &item.ident)?;
     let name = dashed(&item.ident);
     args.meta.check_name(&name, "group")?;
     let source = match source {
@@ -517,7 +530,7 @@ pub(crate) struct Handle<'a> {
     pub(crate) module: &'a Ident,
     /// The group's name on the command line.
     pub(crate) name: String,
-    /// The one-line help: the doc comment's first line.
+    /// The help: the doc comment's first paragraph, joined into one line.
     pub(crate) help: String,
     /// The rest of the doc comment up to an examples heading, if any.
     pub(crate) details: Option<String>,

@@ -21,8 +21,8 @@ use crate::arg::Candidate;
 ///   [`UnknownChoice`] for anything else;
 /// - [`Display`](fmt::Display), printing the name;
 /// - this trait: [`VARIANTS`](Choice::VARIANTS), [`name`](Choice::name) and
-///   [`description`](Choice::description) (the first line of the variant's doc
-///   comment).
+///   [`description`](Choice::description) (the first paragraph of the
+///   variant's doc comment, joined into one line).
 ///
 /// A hand-written impl must agree with them: `FromStr` accepts exactly the
 /// names of `VARIANTS`, and `Display` prints the name.
@@ -104,8 +104,8 @@ pub trait Choice: FromStr<Err = UnknownChoice> + fmt::Display + Sized + 'static 
     /// `#[choice(name = "…")]`.
     fn name(&self) -> &'static str;
 
-    /// The first line of the variant's doc comment, offered beside it when
-    /// completing.
+    /// The first paragraph of the variant's doc comment, offered beside it
+    /// when completing.
     fn description(&self) -> Option<&'static str>;
 }
 

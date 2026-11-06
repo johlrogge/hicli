@@ -197,6 +197,54 @@ pub trait Arg: Sized + 'static {
     fn parser() -> impl Parser<Self>;
 }
 
+/// An argument type whose row help can be replaced where it is used.
+///
+/// A type spelled by `#[derive(Arg)]` with `#[arg(positional|long|short …)]`
+/// builds its own help row, so it implements this trait: [`Arg::parser`] is
+/// `parser_with_help` with the type's doc comment, and a command whose doc
+/// comment has an `# Arguments` entry for the parameter calls
+/// `parser_with_help` with that entry instead.
+///
+/// It is a trait of its own, not a defaulted method on [`Arg`], so that an
+/// override on a type that cannot honour it — one spelled by
+/// `#[derive(Bpaf)]`, whose help `bpaf` builds — is a compile error instead of
+/// silently ignored. A hand-written [`Arg`] may implement it too:
+///
+/// ```
+/// use hicli::bpaf::{positional, Parser};
+/// use hicli::{Arg, ArgHelp};
+///
+/// struct Title(String);
+///
+/// impl ArgHelp for Title {
+///     fn parser_with_help(help: &'static str) -> impl Parser<Self> {
+///         positional::<String>("TITLE").help(help).map(Title)
+///     }
+/// }
+///
+/// impl Arg for Title {
+///     fn parser() -> impl Parser<Self> {
+///         <Title as ArgHelp>::parser_with_help("The event's title")
+///     }
+/// }
+///
+/// let t = <Title as ArgHelp>::parser_with_help("x")
+///     .to_options()
+///     .run_inner(&["Summer Party"][..])
+///     .expect("parses");
+/// assert_eq!(t.0, "Summer Party");
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}`'s help cannot be overridden",
+    label = "named in this command's `# Arguments`",
+    note = "only a type spelled by `#[arg(positional|long|short …)]` builds its own help; one spelled by `#[derive(Bpaf)]` keeps bpaf's",
+    note = "spell the type with `#[arg(…)]`, or remove its entry from `# Arguments`"
+)]
+pub trait ArgHelp: Arg {
+    /// This type's parser, with `help` as its row's help.
+    fn parser_with_help(help: &'static str) -> impl Parser<Self>;
+}
+
 /// Attach a dynamic completer to `parser`.
 ///
 /// `candidates` is handed the value that **already parsed** and returns what to

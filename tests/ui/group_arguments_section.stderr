@@ -1,0 +1,5 @@
+error: a group has no parameters: `# Arguments` belongs on a command
+ --> tests/ui/group_arguments_section.rs:7:1
+  |
+7 | /// # Arguments
+  | ^^^^^^^^^^^^^^^

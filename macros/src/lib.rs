@@ -116,7 +116,7 @@ impl CallSite {
 /// - `default` — the command runs when its group is invoked without naming a
 ///   command; the handle ends in `.by_default()`. It has no name of its own to
 ///   spell or hide, so `name`, `alias` and `hide` are refused with it, and its
-///   doc comment is one line (details and examples belong to the group).
+///   doc comment is one paragraph (details and examples belong to the group).
 ///
 /// ```ignore
 /// /// cancel a download

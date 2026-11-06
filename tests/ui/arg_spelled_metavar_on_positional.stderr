@@ -1,0 +1,5 @@
+error: a positional's metavar is its own value: write `positional = "…"` instead of `metavar`
+ --> tests/ui/arg_spelled_metavar_on_positional.rs:7:19
+  |
+7 | #[arg(positional, metavar = "ID")]
+  |                   ^^^^^^^

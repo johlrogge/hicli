@@ -210,7 +210,8 @@
 //! positional, and its [`Invocation::path`] is the group's (`["search"]`). A
 //! named sibling wins its own word; `search -- fact-values-for` searches for
 //! that word. Its arguments are listed in the group's `--help` under its
-//! one-line help (see below for a default without any). The usual ordering rule applies with full force: a default's
+//! help — its doc comment, one paragraph (see below for a default without
+//! any). The usual ordering rule applies with full force: a default's
 //! **positionals must come last**, after every option — so a default with a
 //! positional is still a command that ends in its positional. Broken, it
 //! still parses, but rendering `--help` anywhere in the group panics with
@@ -334,8 +335,9 @@ pub use bpaf;
 /// | From | Becomes |
 /// |---|---|
 /// | the ident, `_` → `-` (`add_admin` → `add-admin`) | the command's name; override it with `#[command(name = "…")]` |
-/// | the doc comment's first line | the one-line `help` **and** the heading of `app <cmd> --help` |
-/// | the rest of the doc comment, up to an examples heading | [`Node::details`] — prose, reflowed by `bpaf` |
+/// | the doc comment's first paragraph, its lines joined by a space | the `help` **and** the heading of `app <cmd> --help` |
+/// | the rest of the doc comment, after the first blank line, up to an `# Arguments` or examples heading | [`Node::details`] — prose, reflowed by `bpaf` |
+/// | an `# Arguments` section | per-parameter help overrides; see [below](#overriding-an-arguments-help) |
 /// | a trailing `# Examples` / `Examples:` section | [`Node::footer`] — printed verbatim after the options |
 /// | `#[command(alias = "…")]`, repeatable | [`Node::alias`] — another spelling; not listed, path stays canonical |
 /// | `#[command(hide)]` | [`Node::hide`] — left out of help, completion and suggestions; still parses |
@@ -350,10 +352,12 @@ pub use bpaf;
 ///
 /// # The doc comment has three slots
 ///
-/// All of a command's help text lives in its doc comment (ADR-008): the first
-/// line is the **help**, the prose after it the **details**, and a trailing
-/// section headed by a line that is exactly `# Examples` or `Examples:` the
-/// **footer**:
+/// All of a command's help text lives in its doc comment (ADR-008, ADR-016):
+/// the first paragraph is the **help** — its lines joined by a space, so a
+/// long help may wrap onto a second `///` line — the prose after the first
+/// blank line the **details**, and a trailing section headed by a line that is
+/// exactly `# Examples` or `Examples:` the **footer**. Put a blank `///` line
+/// between the help and the details:
 ///
 /// ````ignore
 /// /// search the library
@@ -388,6 +392,42 @@ pub use bpaf;
 /// code block as a doctest — on private items too — and a shell command line
 /// is not Rust. Keep each example under 100 columns: `bpaf` wraps longer
 /// lines, and the continuation loses its indentation.
+///
+/// # Overriding an argument's help
+///
+/// A parameter whose type is spelled by `#[arg(positional|long|short …)]`
+/// shows its type's help — the type's doc comment's first paragraph — in
+/// every command that takes it. One command can say something else in an
+/// `# Arguments` section, between the details and the examples:
+///
+/// ```ignore
+/// /// List tracks
+/// ///
+/// /// Prints one track per line.
+/// ///
+/// /// # Arguments
+/// ///
+/// /// * `by` - Order for this listing
+/// #[command]
+/// fn list(by: SortOpt, ctx: &Ctx) { /* … */ }
+/// ```
+///
+/// Each entry is `` * `name` - help `` (or `` - `name` - help ``), named after
+/// the parameter, and may continue on lines indented past its bullet, which
+/// are joined with a space; a blank line, the next bullet or the end of the
+/// section ends it. The section is not part of the details. Only the help row
+/// changes — usage, completion and errors are the type's — and the handle
+/// builds that parameter with [`ArgHelp::parser_with_help`] instead of
+/// [`Arg::parser`](trait@Arg). A heading written *after* the examples heading
+/// is examples text, printed verbatim.
+///
+/// Rejected, each pointing at its doc line: a line that is not an entry, a
+/// name that is not a parameter, the context, a curried parameter (its group
+/// parses it), a name given twice, an empty section, the section on a
+/// `#[group]` or on a `#[command(default)]` — and, as E0277, an entry for a
+/// type that is not [`ArgHelp`], such as one spelled by `#[derive(Bpaf)]`.
+///
+/// # Argument order
 ///
 /// The parameters are composed with `bpaf`'s `construct!` in declaration
 /// order, so `bpaf`'s rule applies: every argument struct containing a
@@ -589,8 +629,8 @@ pub use hicli_macros::command;
 /// | From | Becomes |
 /// |---|---|
 /// | the ident, `_` → `-` (`add_admin` → `add-admin`) | the group's name. There is no `name = "…"` override |
-/// | the doc comment's first line | the one-line `help` **and** the heading of `app <group> --help` |
-/// | the rest of the doc comment, up to an examples heading | [`Node::details`] |
+/// | the doc comment's first paragraph, its lines joined by a space | the `help` **and** the heading of `app <group> --help` |
+/// | the rest of the doc comment, after the first blank line, up to an examples heading | [`Node::details`] |
 /// | a trailing `# Examples` / `Examples:` section | [`Node::footer`], exactly as for [`#[command]`](macro@command) |
 /// | `#[group(alias = "…")]`, repeatable | [`Node::alias`] — another spelling of the group |
 /// | `#[group(hide)]` | [`Node::hide`] — left out of its parent's help, completion and suggestions; still parses |
@@ -957,6 +997,13 @@ pub mod arg;
 pub mod outcome;
 pub mod testing;
 
+#[doc(hidden)]
+pub mod __private {
+    //! Named by `#[derive(Arg)]`'s spelled expansion only; not API.
+    pub use crate::private::{choice, no_candidates, ChoiceCompleter, NoCompleter, Probe};
+}
+mod private;
+
 pub use app::{exit_code_for, App};
 #[doc(hidden)]
 pub use command::__CurriedOver;
@@ -975,7 +1022,7 @@ pub use outcome::{Failure, IntoOutcome, Outcome, Success};
 // share the name `Arg` across the type and macro namespaces, so one
 // `use hicli::Arg;` imports both. The blank lines are a fence — rustfmt
 // reorders within a contiguous block, and would otherwise sort them apart.
-pub use arg::{complete_dirs, complete_files, complete_with, Arg, Candidate};
+pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candidate};
 
 /// Implement [`Arg`](trait@Arg) for an argument type — and leave the type
 /// exactly as it is.
@@ -1011,9 +1058,55 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, Candidate};
 /// are read as paths, so a function of your own that is genuinely called `files`
 /// has to be named as one: `self::files`.
 ///
-/// The derive says nothing about spelling — the metavar, positional-vs-option,
-/// guards and fallbacks all stay in `#[derive(Bpaf)]`, which needs a direct
-/// `bpaf = "0.9"` dependency because its expansion names `::bpaf::…` paths.
+/// Without a spelling key (below) the derive says nothing about spelling — the
+/// metavar, positional-vs-option, guards and fallbacks all stay in
+/// `#[derive(Bpaf)]`, which needs a direct `bpaf = "0.9"` dependency because its
+/// expansion names `::bpaf::…` paths.
+///
+/// # Spelled mode
+///
+/// With `positional`, `long` or `short`, the derive spells the argument itself
+/// — no `#[derive(Bpaf)]`, no direct `bpaf` dependency:
+///
+/// ```
+/// use hicli::{Arg, Choice};
+/// # use hicli::bpaf::Parser;
+///
+/// /// The field a listing is sorted by.
+/// #[derive(Debug, Clone, Copy, PartialEq, Choice)]
+/// pub enum SortField { Bpm, Title }
+///
+/// /// Sort the listing by this field
+/// #[derive(Debug, Clone, Arg)]
+/// #[arg(long = "sort", short = 's', metavar = "FIELD")]
+/// pub struct SortOpt(pub Option<SortField>);
+///
+/// /// Sort descending
+/// #[derive(Debug, Clone, Arg)]
+/// #[arg(long, short = 'd')]
+/// pub struct Descending(pub bool);
+///
+/// let s = <SortOpt as Arg>::parser().to_options().run_inner(&["-s", "bpm"][..]).unwrap();
+/// assert_eq!(s.0, Some(SortField::Bpm));
+/// ```
+///
+/// | key | meaning |
+/// |---|---|
+/// | `positional` / `positional = "KEY"` | a positional; its metavar is the value, or the type's ident in SCREAMING-KEBAB (`SortBy` → `SORT-BY`) |
+/// | `long` / `long = "name"` | an option; a bare `long` is the ident in kebab-case (`SortBy` → `--sort-by`) |
+/// | `short = 'c'` | an option's short name, alone or with `long` |
+/// | `metavar = "M"` | an option's value name — required unless the value is a `bool`, which is a switch |
+/// | `complete = f` / `files` / `dirs` | `f` is `fn(&str) -> Vec<Candidate>`, handed the raw word |
+///
+/// The type is a newtype, a struct with one named field, or a fieldless enum
+/// that derives [`Choice`](trait@Choice). `Option<T>` is optional, `Vec<T>`
+/// repeats. The help row is the type's doc comment's **first paragraph**,
+/// joined into one line; the rest is rustdoc only. A [`Choice`](trait@Choice)
+/// value completes its names without a `complete` key. The derive writes
+/// three items: the snake_case constructor `#[derive(Bpaf)]` would have
+/// written (so `#[bpaf(external(sort_opt))]` finds it), the [`Arg`](trait@Arg)
+/// impl, and an [`ArgHelp`] impl, through which a command's `# Arguments`
+/// entry replaces the help row.
 ///
 /// # What it writes
 ///
@@ -1058,8 +1151,14 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, Candidate};
 ///
 /// Each of these is a compile error pointing at the token to change:
 ///
-/// - **any `#[arg(…)]` key but `complete`** — there is only one thing to say
-///   here;
+/// - **any `#[arg(…)]` key but `positional`, `long`, `short`, `metavar` and
+///   `complete`**, or one of them twice;
+/// - in spelled mode: **no doc comment**; `positional` with `long`/`short`; a
+///   positional `bool`; `metavar` on a `bool` or with `positional`; an option
+///   with a value but no `metavar`; `Option<bool>` / `Vec<bool>`; `complete` on
+///   a `bool`; a bad `short` or `long`; a multi-field struct (spell it with
+///   `#[derive(Bpaf)]`); any `#[bpaf(…)]` attribute; an enum that is not a
+///   [`Choice`](trait@Choice) (E0277);
 /// - **a second `#[arg(…)]` attribute** — one attribute, one answer; two would
 ///   leave *which completer is this?* unanswerable from the source;
 /// - **`complete` on a struct with more than one field, or on an enum** — a
@@ -1115,7 +1214,7 @@ pub use choice::{complete_choice, Choice, UnknownChoice};
 /// |---|---|
 /// | each variant's ident, kebab-cased (`PlayCount` → `play-count`, `HTTPServer` → `http-server`, `Mp3` → `mp3`) | the word that spells it — [`Choice::name`], matched by `FromStr`, printed by `Display` |
 /// | `#[choice(name = "…")]` on a variant | that word instead |
-/// | the first non-blank line of a variant's doc comment, trimmed | [`Choice::description`] — shown beside the name when completing; `None` without one |
+/// | the first paragraph of a variant's doc comment, its lines trimmed and joined by a space | [`Choice::description`] — shown beside the name when completing; `None` without one |
 /// | the variants, in declaration order | [`Choice::VARIANTS`] — the order the error lists them and [`complete_choice`] offers them |
 ///
 /// Matching is **exact and case-sensitive**: `Bpm` is not `bpm`. The error's

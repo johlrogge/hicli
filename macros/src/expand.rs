@@ -34,6 +34,7 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
         default,
         curried,
         arg_tys,
+        helps,
         bindings,
         slots,
         ctx_ty,
@@ -47,7 +48,7 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
         None => (quote!(<Ctx: 'static>), quote!(Ctx), quote!(_ctx)),
     };
 
-    let (parser, args_pat) = parser_for(&arg_tys, &bindings);
+    let (parser, args_pat) = parser_for(&arg_tys, &helps, &bindings);
 
     // The function is called with its arguments in the order it declared them,
     // and the context wherever it put it — a curried parameter included, which
@@ -143,11 +144,15 @@ pub(crate) fn metadata(
 /// The locals are not an accident of style: `bpaf`'s `construct!` accepts only
 /// a single-segment `ident()` call as an element, so `<T as Arg>::parser()`
 /// cannot be inlined into it.
-fn parser_for(arg_tys: &[Type], bindings: &[Ident]) -> (TokenStream, TokenStream) {
+fn parser_for(
+    arg_tys: &[Type],
+    helps: &[Option<String>],
+    bindings: &[Ident],
+) -> (TokenStream, TokenStream) {
     match bindings {
         [] => (quote!(::hicli::bpaf::pure(())), quote!(())),
-        [one] => (parser_block(arg_tys, bindings), quote!(#one)),
-        many => (parser_block(arg_tys, bindings), quote!((#(#many),*))),
+        [one] => (parser_block(arg_tys, helps, bindings), quote!(#one)),
+        many => (parser_block(arg_tys, helps, bindings), quote!((#(#many),*))),
     }
 }
 
@@ -156,12 +161,23 @@ fn parser_for(arg_tys: &[Type], bindings: &[Ident]) -> (TokenStream, TokenStream
 /// Each `<T as ::hicli::Arg>::parser()` is spanned at the **parameter's
 /// type**, so a type that is not an argument type reports `Arg`'s
 /// `on_unimplemented` message on `t: Title` in the signature the author wrote,
-/// not somewhere inside a generated handle.
-fn parser_block(arg_tys: &[Type], bindings: &[Ident]) -> TokenStream {
-    let lets = bindings.iter().zip(arg_tys).map(|(binding, ty)| {
-        let parser = quote_spanned!(ty.span()=> <#ty as ::hicli::Arg>::parser());
-        quote!(let #binding = #parser;)
-    });
+/// not somewhere inside a generated handle. A parameter with an `# Arguments`
+/// entry is `<T as ::hicli::ArgHelp>::parser_with_help("…")` instead, spanned
+/// the same way, so a type that cannot take an override says so there.
+fn parser_block(arg_tys: &[Type], helps: &[Option<String>], bindings: &[Ident]) -> TokenStream {
+    let lets = bindings
+        .iter()
+        .zip(arg_tys)
+        .zip(helps)
+        .map(|((binding, ty), help)| {
+            let parser = match help {
+                None => quote_spanned!(ty.span()=> <#ty as ::hicli::Arg>::parser()),
+                Some(h) => quote_spanned!(ty.span()=>
+                    <#ty as ::hicli::ArgHelp>::parser_with_help(#h)
+                ),
+            };
+            quote!(let #binding = #parser;)
+        });
     quote! {
         {
             #(#lets)*
@@ -237,6 +253,64 @@ mod tests {
         }
         .to_string();
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn an_arguments_entry_builds_that_parameter_with_its_help() {
+        // The section is read and left out of the details; only the named
+        // parameter changes, and the function is emitted as written.
+        let got = expansion(
+            "",
+            "/// list tracks\n\
+             ///\n\
+             /// Prints one track per line.\n\
+             ///\n\
+             /// # Arguments\n\
+             ///\n\
+             /// * `by` - Order for\n\
+             ///   this listing\n\
+             pub fn list(d: Descending, by: SortOpt, ctx: &Ctx) {}",
+        );
+        let want = quote! {
+            #[doc = " list tracks"]
+            #[doc = ""]
+            #[doc = " Prints one track per line."]
+            #[doc = ""]
+            #[doc = " # Arguments"]
+            #[doc = ""]
+            #[doc = " * `by` - Order for"]
+            #[doc = "   this listing"]
+            pub fn list(d: Descending, by: SortOpt, ctx: &Ctx) {}
+
+            #[doc = "`hicli` registration handle for [`list`]."]
+            #[doc(hidden)]
+            #[allow(unreachable_pub)]
+            pub fn __hicli_list() -> ::hicli::Command<Ctx> {
+                ::hicli::command(
+                    "list",
+                    "list tracks",
+                    {
+                        let a0 = <Descending as ::hicli::Arg>::parser();
+                        let a1 = <SortOpt as ::hicli::ArgHelp>::parser_with_help("Order for this listing");
+                        ::hicli::bpaf::construct!(a0, a1,)
+                    },
+                    |(a0, a1), ctx: &Ctx| list(a0, a1, ctx),
+                )
+                .details("Prints one track per line.")
+            }
+        }
+        .to_string();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn without_an_arguments_section_the_expansion_is_unchanged() {
+        let plain = expansion("", "/// list tracks\npub fn list(by: SortOpt) {}");
+        assert!(
+            plain.contains("< SortOpt as :: hicli :: Arg > :: parser ()"),
+            "{plain}"
+        );
+        assert!(!plain.contains("ArgHelp"), "{plain}");
     }
 
     #[test]

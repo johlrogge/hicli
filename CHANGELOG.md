@@ -15,12 +15,32 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
   fields is a fixed set of words. The derive writes `Choice`, `FromStr` (exact,
   case-sensitive) and `Display` from the variants: each is spelled as its ident in
   kebab-case (`PlayCount` → `play-count`) or its `#[choice(name = "…")]`, and the first
-  line of its doc comment is its completion description. A word that is none of them
+  paragraph of its doc comment is its completion description. A word that is none of them
   fails with `UnknownChoice`, which lists the names and suggests a close one:
   ``expected `bpm`, `title` or `by-artist`; did you mean `bpm`?`` (#8).
 - `complete_choice::<C>(typed)`: the names of a choice that start with `typed`, with
   their descriptions — a completer for a string-level parser, completed before it is
   parsed (`.complete(|w: &String| complete_choice::<C>(w)).parse(|w: String| w.parse::<C>())`).
+- Spelled `#[derive(Arg)]`: `#[arg(positional)]`, `#[arg(positional = "KEY")]`,
+  `#[arg(long)]`, `#[arg(long = "sort", short = 's', metavar = "FIELD")]` spell the
+  argument on the type itself, with no `#[derive(Bpaf)]` and no direct `bpaf`
+  dependency. The type is a newtype, a struct with one named field, or a fieldless
+  enum that derives `Choice`; `Option<T>` is optional, `Vec<T>` repeats, `bool` with a
+  name is a switch. The help row is the type's doc comment's first paragraph. A
+  `Choice` inside completes its names with no `complete` key;
+  `complete = f` takes `fn(&str) -> Vec<Candidate>` and is handed the raw word (so it
+  fires on the empty word, even for a `u16`); `files`/`dirs` work as before, and a
+  `PathBuf`/`OsString` value still accepts a non-UTF-8 word. The derive also writes
+  the snake_case constructor `#[derive(Bpaf)]` would have, so
+  `#[bpaf(external(sort_opt))]` still finds it. Types without these keys are derived
+  exactly as before (#8).
+- `ArgHelp`: an argument type whose help row can be replaced where it is used,
+  through `ArgHelp::parser_with_help(help)`. Spelled types implement it; a
+  hand-written `Arg` may.
+- `# Arguments` in a `#[command]`'s doc comment: `` * `by` - Order for this listing ``
+  replaces that parameter's help row in this command only (its type must be
+  `ArgHelp`). An entry may continue on indented lines. The section is not part of
+  the details (#23).
 
 ### Deprecated
 
@@ -35,6 +55,20 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
   longer repeated, because bpaf already prints ``couldn't parse `tcsh`: `` in front of
   it. `UnknownShell` was a tuple struct; code that built or destructured
   `UnknownShell(…)` no longer compiles.
+- **A help is the doc comment's first paragraph, everywhere** (ADR-016, replacing
+  ADR-001/ADR-008's "first line"). For a `#[command]` or `#[group]`, consecutive
+  lines up to the first blank line are joined with a space into the help; the
+  details start after that blank line. A doc comment whose second line directly
+  followed the first used to show that line as the start of the details; now it is
+  part of the help. **Fix: put a blank `///` line between the help and the
+  details.** A `#[command(default)]`'s doc comment is one paragraph (was one line).
+  A `Choice` variant's description is likewise its first paragraph.
+- `#[arg(…)]` on a type whose parser `#[derive(Bpaf)]` writes now rejects
+  `complete = f, complete = g` with ``"`complete` is given twice"`` (was the
+  unknown-key message), and the unknown-key message lists the new keys.
+  `#[arg(metavar = …)]` without `positional`, `long` or `short` is rejected.
+- A `# Arguments` or `Arguments:` line in a command's details (before any examples
+  heading) now starts the arguments section instead of being prose.
 
 ### Changed
 

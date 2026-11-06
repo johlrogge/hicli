@@ -1,0 +1,5 @@
+error: #[arg(positional…)] spells this type: remove #[derive(Bpaf)] and its #[bpaf(…)] attributes
+ --> tests/ui/arg_spelled_bpaf_attrs.rs:9:15
+  |
+9 | pub struct Id(#[bpaf(positional("ID"))] String);
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^

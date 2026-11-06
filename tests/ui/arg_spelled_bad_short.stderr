@@ -1,0 +1,5 @@
+error: `short` is one character that is not `-` or whitespace: `short = 'c'`
+ --> tests/ui/arg_spelled_bad_short.rs:7:15
+  |
+7 | #[arg(short = '-')]
+  |               ^^^

@@ -1,0 +1,5 @@
+error: this # Arguments section is empty: give at least one `* `name` - help`, or remove the heading
+ --> tests/ui/command_arguments_empty.rs:7:1
+  |
+7 | /// # Arguments
+  | ^^^^^^^^^^^^^^^

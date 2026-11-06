@@ -1,0 +1,5 @@
+error: a switch takes no value, so it has no metavar: remove `metavar` from this `bool`
+ --> tests/ui/arg_spelled_metavar_on_bool.rs:7:23
+  |
+7 | #[arg(long = "quiet", metavar = "Q")]
+  |                       ^^^^^^^

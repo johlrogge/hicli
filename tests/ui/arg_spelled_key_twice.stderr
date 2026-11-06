@@ -1,0 +1,5 @@
+error: `long` is given twice
+ --> tests/ui/arg_spelled_key_twice.rs:7:23
+  |
+7 | #[arg(long = "quiet", long = "silent")]
+  |                       ^^^^
