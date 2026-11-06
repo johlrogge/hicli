@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Before 1.0, a minor version may carry breaking changes; they are listed under
 "Breaking" with what to change.
 
-## [Unreleased]
+## [0.5.0] — 2026-11-06
 
 ### Added
 
@@ -298,6 +298,7 @@ because snapshot tests of help pages need re-blessing.
 First release: help metadata and the doc comment's `# Examples` footer (ADR-008),
 completion scripts (ADR-009) and groups in files (ADR-010).
 
+[0.5.0]: https://github.com/johlrogge/hicli/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/johlrogge/hicli/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/johlrogge/hicli/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/johlrogge/hicli/compare/v0.2.0...v0.2.1

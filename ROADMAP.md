@@ -66,6 +66,10 @@ replacement. The essentials are split across these releases:
 
 <!-- Completed milestones -->
 
+- 0.5.0, spelled argument types (ADR-016, ADR-017, 2026-11-06, #8 #22 #23):
+  `#[derive(Choice)]`, a spelled `#[derive(Arg)]` whose type doc is its help,
+  `# Arguments` overrides through `ArgHelp`, the first-paragraph help rule, and
+  `cli!` words split at whitespace
 - 0.4.0, colour and wrapping (ADR-015, 2026-11-05, #29 #30 #31): a default
   `color` feature, `Error: ` on parse errors and command failures, long usage
   lines wrapped between items
