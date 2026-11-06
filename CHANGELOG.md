@@ -33,18 +33,55 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
   `PathBuf`/`OsString` value still accepts a non-UTF-8 word. The derive also writes
   the snake_case constructor `#[derive(Bpaf)]` would have, so
   `#[bpaf(external(sort_opt))]` still finds it. Types without these keys are derived
-  exactly as before (#8).
+  exactly as before (#8, ADR-016).
+- A `Choice` enum can be the argument itself: `#[derive(Choice, Arg)]` with
+  `#[arg(positional = "KEY")]` parses, completes and reports its names, so
+  `fn sort(by: SortKey)` takes the enum directly (#8).
 - `ArgHelp`: an argument type whose help row can be replaced where it is used,
   through `ArgHelp::parser_with_help(help)`. Spelled types implement it; a
-  hand-written `Arg` may.
+  hand-written `Arg` may; a `#[derive(Bpaf, Arg)]` type does not.
 - `# Arguments` in a `#[command]`'s doc comment: `` * `by` - Order for this listing ``
   replaces that parameter's help row in this command only (its type must be
   `ArgHelp`). An entry may continue on indented lines. The section is not part of
-  the details (#23).
+  the details. Naming a parameter that is not parsed (the context, a curried value),
+  naming one twice, an empty section, and the section on a `#[group]` or a
+  `#[command(default)]` are compile errors (#23, ADR-016).
+
+### Changed
+
+- `cli!` splits words where the source has whitespace, as a shell does, and nowhere
+  else: tokens that touch are one word. `cli! { playback set-output --dry-run }` is
+  `["playback", "set-output", "--dry-run"]`, and `--since=-7`, `--name="My Event"`,
+  `email,phone`, `a/b/c` and `./ev` need no quotes. Quoted words still work. `cli!` is
+  now a proc macro in `hicli-macros`, re-exported as `hicli::cli` (#22, ADR-017).
+  Edge cases that read differently:
+  - `-- foo` is `["--", "foo"]` (was `["--foo"]`);
+  - `--` is `["--"]` (was a compile error);
+  - `a - b` is `["a", "-", "b"]` (was `["a", "-b"]`);
+  - `- 5` is `["-", "5"]` (was `["-5"]`);
+  - `"a""b"` is `["ab"]` (was `["a", "b"]`);
+  - a number literal is kept as written: `0x10`, `1.50` and `5u8` stay `0x10`, `1.50`
+    and `5u8` (were `16`, `1.5` and `5`).
+
+  `#[macro_use] extern crate hicli;` still imports `cli!`. `hicli::testing::to_arg` is
+  no longer used by `cli!` and is now `#[doc(hidden)]`.
+- The "not a hicli argument type" error (a primitive or a bare `Choice` as a command
+  parameter) now suggests the spelled form first,
+  ``/// An event id` above `#[derive(Arg)] #[arg(positional = "ID")] struct Id(String);``,
+  and names `#[derive(Choice, Arg)]` and `#[derive(Bpaf, Arg)]`. Re-bless trybuild
+  `.stderr` files that record it.
+- Docs: the README, `examples/playr.rs` and its Quick start spell every one-value
+  argument type with `#[arg(…)]`; `examples/demo.rs` stays in bpaf mode, so both forms
+  remain documented. A direct `bpaf` dependency is now needed only by a crate that
+  uses `#[derive(Bpaf)]`.
 
 ### Deprecated
 
 - `UnknownShell` is now an alias of `UnknownChoice`; use `UnknownChoice`.
+
+### Removed
+
+- The hidden `__cli_munch!` macro, which `cli!` used to expand through.
 
 ### Breaking
 
@@ -68,23 +105,11 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
   unknown-key message), and the unknown-key message lists the new keys.
   `#[arg(metavar = …)]` without `positional`, `long` or `short` is rejected.
 - A `# Arguments` or `Arguments:` line in a command's details (before any examples
-  heading) now starts the arguments section instead of being prose.
-
-### Changed
-
-- `cli!` splits words where the source has whitespace, as a shell does, and nowhere
-  else: tokens that touch are one word. `cli! { playback set-output --dry-run }` is
-  `["playback", "set-output", "--dry-run"]`, and `--since=-7`, `--name="My Event"`,
-  `email,phone`, `a/b/c` and `./ev` need no quotes. Quoted words still work. `cli!` is
-  now a proc macro in `hicli-macros`, re-exported as `hicli::cli` (#22, ADR-017).
-  Edge cases that read differently:
-  - `-- foo` is `["--", "foo"]` (was `["--foo"]`);
-  - `--` is `["--"]` (was a compile error);
-  - `a - b` is `["a", "-", "b"]` (was `["a", "-b"]`);
-  - `- 5` is `["-", "5"]` (was `["-5"]`);
-  - `"a""b"` is `["ab"]` (was `["a", "b"]`);
-  - a number literal is kept as written: `0x10`, `1.50` and `5u8` stay `0x10`, `1.50`
-    and `5u8` (were `16`, `1.5` and `5`).
+  heading) now starts the arguments section instead of being prose, and its
+  entries must name the command's parameters. A rustdoc-style `# Arguments` section
+  you already had is now read: an entry for a `#[derive(Bpaf)]` type is E0277, and
+  any other line is rejected. **Fix: remove the section, or spell the types with
+  `#[arg(…)]` and keep the entries as help overrides.**
 
 ### Breaking (tests only)
 
@@ -92,10 +117,7 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
   (`b"a"`, `c"a"`) with a compile error; quote the word as a `"string literal"`
   instead. Before, a bracketed group was stringified (`[a]` was `"[a]"`, `(a b)` was
   `"(a b)"`), and a byte string failed with a type error about `Display`.
-- The hidden `__cli_munch!` macro is removed.
-
-`#[macro_use] extern crate hicli;` still imports `cli!`. `hicli::testing::to_arg` is
-no longer used by `cli!` and is now `#[doc(hidden)]`.
+- The `cli!` edge cases listed under Changed read differently.
 
 ## [0.4.0] — 2026-11-05
 

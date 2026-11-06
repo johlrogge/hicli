@@ -2,8 +2,8 @@
 
 **CLI-enable your code.** A standalone, crates.io-publishable Rust framework for
 building modular CLIs: one subcommand = one documented function (`#[command]`),
-groups are annotated modules (`#[group]`, inline or file), arguments are types (`#[derive(Bpaf, Arg)]`, completion attached to
-the type), composed into a command tree with `app!` instead of a central
+groups are annotated modules (`#[group]`, inline or file), arguments are types (`#[derive(Arg)] #[arg(positional = "…")]`, or
+`#[derive(Bpaf, Arg)]`; completion attached to the type), composed into a command tree with `app!` instead of a central
 hand-written dispatch `match`. Built on [`bpaf`](https://docs.rs/bpaf).
 
 The crate and its vocabulary were renamed by
@@ -52,10 +52,12 @@ Run `just ci` before considering any change done.
   stable-toolchain CLIs pin.
 - **`bpaf` is re-exported, not wrapped opaquely.** Don't hide `bpaf` types behind
   newtypes without a reason spelled out in `docs/PLAN.md`. Consumers using
-  `#[derive(Bpaf)]` for their argument structs also add `bpaf = "0.9"` directly
-  (the derive expands to `::bpaf::…` paths that don't resolve through a
-  re-export) — hicli states the required version, cargo unifies it; see
-  ADR-004.
+  `#[derive(Bpaf)]` (for `Globals` or a multi-field argument struct) also add
+  `bpaf = "0.9"` directly (the derive expands to `::bpaf::…` paths that don't
+  resolve through a re-export) — hicli states the required version, cargo
+  unifies it; see ADR-004. A type spelled by hicli's `#[derive(Arg)]
+  #[arg(positional|long|short …)]` expands to `::hicli::bpaf::…` only and needs
+  no direct dependency (ADR-016).
 - **Testability is first-class and in-process.** No subprocess spawning in tests —
   drive parsers with an arg slice via `App::parse` / the `cli!` / `cli_test!` macros.
 - **An argument is a type.** hicli ships no `Arg` impls — a primitive in a
@@ -77,10 +79,21 @@ Run `just ci` before considering any change done.
   `#[command(curried)]`) and a group's `#[command(default)]` (ADR-011),
   and `Into<Failure>` error returns, so `?` works (ADR-012), and
   hicli-rendered usage lines with `App::bin_name` (ADR-013), and the default
-  `color` feature printing through bpaf's `print_message` (ADR-015).
+  `color` feature printing through bpaf's `print_message` (ADR-015), and —
+  for mdma-cli's choices and shared argument types (ADR-016) — `Choice` +
+  `#[derive(Choice)]` (a fieldless enum is a fixed set of words that parses,
+  completes and names itself in errors), spelled `#[derive(Arg)]` with
+  `#[arg(positional|long|short, metavar, complete)]` on a one-value type
+  (hicli writes the bpaf chain; the type's doc comment's first paragraph is its
+  help; a `Choice` inside completes via an autoref probe; keys are added only
+  when a consumer earns them), and `ArgHelp` + a command's `# Arguments`
+  doc-comment section (a per-command help override, no parameter attributes).
+  The help is a doc comment's **first paragraph** everywhere (ADR-016). `cli!`
+  is a proc macro whose words are runs of touching tokens (ADR-017).
   Deferred until the next real consumer's pain justifies them: nested `args`
   groups, a default in a curried group or at the top level, a field-composing
-  `#[derive(Arg)]` for composites, `#[arg(parser = …)]`, completion masks,
+  `#[derive(Arg)]` for composites (a field's doc would be its override),
+  spelling keys beyond ADR-016's five, `#[arg(parser = …)]`, completion masks,
   globals-aware completion, `inventory`-style auto-registration (rejected
   outright, not just deferred).
 - **No implicit `$PATH` scanning** for external subcommand discovery — allowlist by

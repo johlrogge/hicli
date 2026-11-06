@@ -4,6 +4,11 @@
 //! The module is private; its items are re-exported at the crate root, and the
 //! consumer-facing story is on [`Choice`], where rustdoc shows it. The derive
 //! is `hicli_macros::Choice`, re-exported beside the trait under the same name.
+//!
+//! A choice is a value. It is also an argument when `#[derive(Arg)]` spells it
+//! (`#[derive(Choice, Arg)] #[arg(positional = "KEY")]`); the chain that
+//! expansion ends in is `crate::private::choice`, which completes with
+//! [`complete_choice`] and parses with the `FromStr` the derive wrote.
 
 use std::fmt;
 use std::str::FromStr;
@@ -27,13 +32,43 @@ use crate::arg::Candidate;
 /// A hand-written impl must agree with them: `FromStr` accepts exactly the
 /// names of `VARIANTS`, and `Display` prints the name.
 ///
-/// # A choice is not an argument
+/// # Where a choice goes on the command line
 ///
-/// A choice is a **value**, not an [`Arg`](trait@crate::Arg): it says what the
-/// words are, not where they go on the command line, so the metavar and
-/// positional-vs-option are still yours. Complete at the **string** level, so
-/// the completer fires on the empty word and on a half-typed one, and parse
-/// after:
+/// A choice says what the words are, not where they go on the command line,
+/// so the metavar and positional-vs-option are still yours to name.
+/// [`#[derive(Arg)]`](derive@crate::Arg) in spelled mode names them, and a
+/// choice it spells completes its names with no `complete` key — either the
+/// enum itself is the argument, or a spelled newtype holds it:
+///
+/// ```
+/// use hicli::{Arg, Choice};
+/// # use hicli::bpaf::Parser;
+///
+/// /// What to sort by
+/// #[derive(Debug, Clone, Copy, PartialEq, Choice, Arg)]
+/// #[arg(positional = "KEY")]
+/// pub enum SortKey {
+///     /// Beats per minute
+///     Bpm,
+///     /// Track title
+///     Title,
+/// }
+///
+/// /// Sort the listing by this field
+/// #[derive(Debug, Clone, Arg)]
+/// #[arg(long = "sort", short = 's', metavar = "FIELD")]
+/// pub struct SortOpt(pub Option<SortKey>);
+///
+/// let k = <SortKey as Arg>::parser().to_options().run_inner(&["title"][..]).unwrap();
+/// assert_eq!(k, SortKey::Title);
+/// let s = <SortOpt as Arg>::parser().to_options().run_inner(&[] as &[&str]).unwrap();
+/// assert_eq!(s.0, None);
+/// ```
+///
+/// Without `#[derive(Arg)]` a choice is only a value, and a command cannot
+/// take it as a parameter. By hand, complete at the **string** level, so the
+/// completer fires on the empty word and on a half-typed one, and parse after —
+/// the chain spelled mode writes:
 ///
 /// ```
 /// use hicli::bpaf::{positional, Parser};

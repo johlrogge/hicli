@@ -49,8 +49,12 @@
 //!   `bpaf`'s own suggestions, never hicli's hint.
 //!
 //! `hicli` re-exports [`bpaf`] for its builder API (`hicli::bpaf::positional`
-//! and friends). A crate that uses `#[derive(Bpaf)]` also depends on `bpaf`
-//! directly — the derive expands to `::bpaf::…` paths that do not resolve
+//! and friends). An argument type spelled by [`#[derive(Arg)]`](derive@Arg)'s
+//! `#[arg(positional|long|short …)]` expands to `::hicli::bpaf::…` paths only,
+//! so a crate whose argument types are all spelled that way needs no `bpaf`
+//! dependency of its own. A crate that uses `#[derive(Bpaf)]` — for a `Globals`
+//! struct, or an argument type with several fields — also depends on `bpaf`
+//! directly: that derive expands to `::bpaf::…` paths that do not resolve
 //! through a re-export. `hicli` states the version it needs, and cargo unifies
 //! the two into one.
 //!
@@ -82,9 +86,9 @@
 //!     home: String,
 //! }
 //!
-//! /// An argument type. A consumer normally writes `#[derive(Bpaf, Arg)]`
-//! /// here; this example spells the impl out so it needs no extra dependency —
-//! /// and shows what the derive writes.
+//! /// An argument type. A consumer normally derives it —
+//! /// `#[derive(Arg)] #[arg(positional = "TITLE")]` — and this example writes
+//! /// the impl by hand to show that an `Arg` is one constructor.
 //! struct Title(String);
 //!
 //! impl Arg for Title {
@@ -229,8 +233,9 @@
 //!   `Available positional items:`, and the fixed siblings under
 //!   `Available commands:`; `source bandcamp sync --help` reads
 //!   `Usage: source SOURCE-NAME sync …`.
-//! - A default's one-line help titles its options in the group's `--help`. A
-//!   default without options has none to title, so its line is shown under
+//! - A default's help — its one-paragraph doc comment — titles its options in
+//!   the group's `--help`. A default without options has none to title, so its
+//!   help is shown under
 //!   `Usage:` instead, and the usage reads `archive [COMMAND ...]`: naming a
 //!   command is optional.
 //! - Completing a non-empty word where the value — or the default's first
@@ -277,7 +282,7 @@
 //! because `bpaf` keeps its colour choice private.
 //!
 //! To print plain text always, turn the feature off:
-//! `hicli = { version = "0.4", default-features = false }`. Bright colours
+//! `hicli = { version = "0.5", default-features = false }`. Bright colours
 //! instead of the dull default come from `bpaf` itself: add
 //! `bpaf = { version = "0.9", features = ["bright-color"] }` beside `hicli`.
 //!
@@ -297,8 +302,9 @@ pub use bpaf;
 /// /// The shared context — built once, handed to every command.
 /// struct Ctx { home: String }
 ///
-/// /// An argument type. A consumer normally writes `#[derive(Bpaf, Arg)]`
-/// /// here; this example spells the impl out so it needs no extra dependency.
+/// /// An argument type. A consumer normally derives it —
+/// /// `#[derive(Arg)] #[arg(positional = "TITLE")]` — and this example writes
+/// /// the impl by hand.
 /// struct Title(String);
 ///
 /// impl Arg for Title {
@@ -438,8 +444,11 @@ pub use bpaf;
 ///
 /// `#[command]` has no parameter attributes and never sees an argument's
 /// spelling: positionals, switches, help, guards and defaults all live in the
-/// argument type, written with `#[derive(Bpaf)]` (which needs a direct
-/// `bpaf = "0.9"` dependency, because the derive expands to `::bpaf::…` paths).
+/// argument type — spelled by [`#[derive(Arg)]`](derive@Arg)'s
+/// `#[arg(positional|long|short …)]`, or by `#[derive(Bpaf)]` (which needs a
+/// direct `bpaf = "0.9"` dependency, because that derive expands to
+/// `::bpaf::…` paths). The one thing a command may say about an argument is a
+/// different help row, in its `# Arguments` section (above).
 ///
 /// # A parameter's type is resolved through [`Arg`](trait@Arg)
 ///
@@ -450,8 +459,21 @@ pub use bpaf;
 /// spelling is the derive:
 ///
 /// ```ignore
+/// /// The event's title
+/// #[derive(Debug, Clone, Arg)]
+/// #[arg(positional = "TITLE")]
+/// pub struct Title(pub String);
+///
+/// // or, for a type with several fields, bpaf mode:
 /// #[derive(Debug, Clone, Bpaf, Arg)]
-/// pub struct Title(#[bpaf(positional("TITLE"))] pub String);
+/// pub struct Filters {
+///     /// Only tracks by this artist
+///     #[bpaf(long, argument("NAME"))]
+///     pub artist: Option<String>,
+///     /// Only tracks that were never played
+///     #[bpaf(long)]
+///     pub unplayed: bool,
+/// }
 /// ```
 ///
 /// A **primitive** parameter is a compile error, deliberately: `hicli` ships
@@ -462,8 +484,9 @@ pub use bpaf;
 /// question are yours, and a blanket impl would have to invent both.
 ///
 /// The snake_case rule that used to live here — `EventRef` → `event_ref()` —
-/// is now [`#[derive(Arg)]`](derive@Arg)'s, which is the one place that calls
-/// the constructor `#[derive(Bpaf)]` writes. A type whose parser outgrows that
+/// is now [`#[derive(Arg)]`](derive@Arg)'s, which in bpaf mode calls the
+/// constructor `#[derive(Bpaf)]` writes and in spelled mode writes that
+/// constructor itself. A type whose parser outgrows both
 /// writes [`Arg::parser`] by hand, and `#[command]` cannot
 /// tell the difference.
 ///
@@ -531,8 +554,9 @@ pub use bpaf;
 /// calls *itself*, and a command can call its neighbour by name — `create(dir,
 /// name, ctx)` is just a function call.
 ///
-/// What still shares the value namespace is the constructor
-/// `#[derive(Bpaf)]` writes for an argument type: a struct `Create` gets
+/// What still shares the value namespace is the snake_case constructor of an
+/// argument type — written by `#[derive(Bpaf)]`, or by
+/// [`#[derive(Arg)]`](derive@Arg) in spelled mode: a struct `Create` gets
 /// `fn create()`, which collides with `#[command] fn create` with an ordinary
 /// *"name defined multiple times"* error. `#[command]` no longer names that
 /// constructor — [`#[derive(Arg)]`](derive@Arg) does — but the clash is between
@@ -541,9 +565,12 @@ pub use bpaf;
 /// or `CreateArgs` when it is genuinely the bag of arguments for `create`.
 /// `tests/cli.rs` uses `CreateArgs` for this reason.
 ///
-/// The doc comment on an argument type — and on a `Globals` struct — is
-/// rendered by `bpaf` as a header in `--help`, so keep it to a single
-/// user-facing line and leave developer prose to `//` comments beside it.
+/// The doc comment on a `#[derive(Bpaf)]` argument type — and on a `Globals`
+/// struct — is rendered by `bpaf` as a header in `--help`, so keep it to a
+/// single user-facing line and leave developer prose to `//` comments beside
+/// it. That is bpaf mode only: on a type spelled by `#[arg(positional|long|short
+/// …)]`, the doc comment's first paragraph is the argument's help row, and the
+/// rest is rustdoc only.
 ///
 /// # Rejections
 ///
@@ -1027,41 +1054,10 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// Implement [`Arg`](trait@Arg) for an argument type — and leave the type
 /// exactly as it is.
 ///
-/// ```
-/// use hicli::bpaf::{Bpaf, Parser};
-/// // One import, two namespaces: the trait and this derive share the name
-/// // `Arg` the way `group` the function and `#[group]` the attribute do, so a
-/// // single `use hicli::Arg;` brings both into scope.
-/// use hicli::Arg;
-///
-/// /// An event id.
-/// #[derive(Debug, Clone, Bpaf, Arg)]
-/// pub struct Id(#[bpaf(positional("ID"))] String);
-///
-/// let id = <Id as Arg>::parser()
-///     .to_options()
-///     .run_inner(&["e-17"][..])
-///     .expect("parses");
-/// assert_eq!(id.0, "e-17");
-/// ```
-///
-/// # What it reads
-///
-/// | From | Becomes |
-/// |---|---|
-/// | the type's ident, snake_cased (`EventRef` → `event_ref`, `HTTPServer` → `http_server`) | the constructor the impl calls — the one `#[derive(Bpaf)]` wrote |
-/// | `#[arg(complete = <path>)]` | a dynamic completer, through [`complete_with`] |
-/// | `#[arg(complete = files)]` / `#[arg(complete = dirs)]` | the shell's own completion, through [`complete_files`] / [`complete_dirs`] |
-/// | `#[arg]`, or no attribute at all | nothing — the constructor, unwrapped |
-///
-/// The bare words `files` and `dirs` are read as the shorthands **before** they
-/// are read as paths, so a function of your own that is genuinely called `files`
-/// has to be named as one: `self::files`.
-///
-/// Without a spelling key (below) the derive says nothing about spelling — the
-/// metavar, positional-vs-option, guards and fallbacks all stay in
-/// `#[derive(Bpaf)]`, which needs a direct `bpaf = "0.9"` dependency because its
-/// expansion names `::bpaf::…` paths.
+/// It has two modes, chosen by the keys of `#[arg(…)]` (ADR-016): **spelled
+/// mode**, where hicli spells a one-value type from `positional`, `long`,
+/// `short` and its doc comment, and **bpaf mode**, where `#[derive(Bpaf)]` on
+/// the same type spells it and this derive calls the constructor that wrote.
 ///
 /// # Spelled mode
 ///
@@ -1069,6 +1065,9 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// — no `#[derive(Bpaf)]`, no direct `bpaf` dependency:
 ///
 /// ```
+/// // One import, two namespaces: the trait and this derive share the name
+/// // `Arg` the way `group` the function and `#[group]` the attribute do, so a
+/// // single `use hicli::Arg;` brings both into scope.
 /// use hicli::{Arg, Choice};
 /// # use hicli::bpaf::Parser;
 ///
@@ -1086,8 +1085,15 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// #[arg(long, short = 'd')]
 /// pub struct Descending(pub bool);
 ///
+/// /// An event id
+/// #[derive(Debug, Clone, Arg)]
+/// #[arg(positional = "ID")]
+/// pub struct Id(pub String);
+///
 /// let s = <SortOpt as Arg>::parser().to_options().run_inner(&["-s", "bpm"][..]).unwrap();
 /// assert_eq!(s.0, Some(SortField::Bpm));
+/// let id = <Id as Arg>::parser().to_options().run_inner(&["e-17"][..]).unwrap();
+/// assert_eq!(id.0, "e-17");
 /// ```
 ///
 /// | key | meaning |
@@ -1096,19 +1102,102 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// | `long` / `long = "name"` | an option; a bare `long` is the ident in kebab-case (`SortBy` → `--sort-by`) |
 /// | `short = 'c'` | an option's short name, alone or with `long` |
 /// | `metavar = "M"` | an option's value name — required unless the value is a `bool`, which is a switch |
-/// | `complete = f` / `files` / `dirs` | `f` is `fn(&str) -> Vec<Candidate>`, handed the raw word |
+/// | `complete = f` / `files` / `dirs` | `f` is `fn(&str) -> Vec<Candidate>`, handed the raw word; `files`/`dirs` are the shell's own completion |
+///
+/// These keys are all there is: a key is added when a consumer's real CLI
+/// needs it, not before. A type that needs more — a fallback, an `env`, a
+/// guard — is spelled in bpaf mode, or by hand.
 ///
 /// The type is a newtype, a struct with one named field, or a fieldless enum
 /// that derives [`Choice`](trait@Choice). `Option<T>` is optional, `Vec<T>`
-/// repeats. The help row is the type's doc comment's **first paragraph**,
-/// joined into one line; the rest is rustdoc only. A [`Choice`](trait@Choice)
-/// value completes its names without a `complete` key. The derive writes
-/// three items: the snake_case constructor `#[derive(Bpaf)]` would have
-/// written (so `#[bpaf(external(sort_opt))]` finds it), the [`Arg`](trait@Arg)
-/// impl, and an [`ArgHelp`] impl, through which a command's `# Arguments`
-/// entry replaces the help row.
+/// repeats, and a `bool` with a name is a switch. The value is parsed with its
+/// `FromStr`, after completion, so a half-typed word still completes; a
+/// `PathBuf` or `OsString` without a dynamic completer keeps `bpaf`'s own
+/// conversion and accepts a non-UTF-8 word.
 ///
-/// # What it writes
+/// **The help row is the type's doc comment's first paragraph**, its lines
+/// joined by a space. Everything after the first blank line is rustdoc only and
+/// never printed. A doc comment where the type is *used* — on a field that
+/// embeds it through `#[bpaf(external(…))]` — is never rendered either: a
+/// command changes the row only through its `# Arguments` section (see
+/// [`#[command]`](macro@command#overriding-an-arguments-help)).
+///
+/// **A [`Choice`](trait@Choice) completes itself.** A choice inside the type —
+/// or the enum itself, `#[derive(Choice, Arg)]` — offers its names, with each
+/// variant's description, with no `complete` key.
+///
+/// The derive writes three items: the snake_case constructor `#[derive(Bpaf)]`
+/// would have written (`SortOpt` → `sort_opt()`, so `#[bpaf(external(sort_opt))]`
+/// in a bpaf-mode struct still finds it), the [`Arg`](trait@Arg) impl calling
+/// it, and an [`ArgHelp`] impl that builds the parser around a given help:
+///
+/// ```ignore
+/// #[doc(hidden)]
+/// pub fn sort_opt() -> impl ::hicli::bpaf::Parser<SortOpt> {
+///     <SortOpt as ::hicli::ArgHelp>::parser_with_help("Sort the listing by this field")
+/// }
+/// #[automatically_derived]
+/// impl ::hicli::Arg for SortOpt {
+///     fn parser() -> impl ::hicli::bpaf::Parser<Self> { sort_opt() }
+/// }
+/// #[automatically_derived]
+/// impl ::hicli::ArgHelp for SortOpt {
+///     fn parser_with_help(help: &'static str) -> impl ::hicli::bpaf::Parser<Self> {
+///         // `long("sort").short('s').help(help).argument::<String>("FIELD")`,
+///         // completed with `SortField`'s names, parsed into a `SortField`,
+///         // `.optional()`, `.map(SortOpt)`
+///     }
+/// }
+/// ```
+///
+/// A spelled type that also derives `Bpaf` defines that constructor twice
+/// (E0428); remove `#[derive(Bpaf)]`.
+///
+/// # bpaf mode
+///
+/// Without `positional`, `long` or `short`, the derive says nothing about
+/// spelling — the metavar, positional-vs-option, guards and fallbacks all stay
+/// in `#[derive(Bpaf)]`, which needs a direct `bpaf = "0.9"` dependency because
+/// its expansion names `::bpaf::…` paths. This is the form for a type with
+/// several fields:
+///
+/// ```
+/// use hicli::bpaf::{Bpaf, Parser};
+/// use hicli::Arg;
+///
+/// #[derive(Debug, Clone, Bpaf, Arg)]
+/// pub struct Filters {
+///     /// Only tracks by this artist
+///     #[bpaf(long, argument("NAME"))]
+///     pub artist: Option<String>,
+///     /// Only tracks that were never played
+///     #[bpaf(long)]
+///     pub unplayed: bool,
+/// }
+///
+/// let f = <Filters as Arg>::parser()
+///     .to_options()
+///     .run_inner(&["--unplayed"][..])
+///     .expect("parses");
+/// assert!(f.unplayed);
+/// ```
+///
+/// | From | Becomes |
+/// |---|---|
+/// | the type's ident, snake_cased (`EventRef` → `event_ref`, `HTTPServer` → `http_server`) | the constructor the impl calls — the one `#[derive(Bpaf)]` wrote |
+/// | `#[arg(complete = <path>)]` | a dynamic completer, through [`complete_with`] |
+/// | `#[arg(complete = files)]` / `#[arg(complete = dirs)]` | the shell's own completion, through [`complete_files`] / [`complete_dirs`] |
+/// | `#[arg]`, or no attribute at all | nothing — the constructor, unwrapped |
+///
+/// The bare words `files` and `dirs` are read as the shorthands **before** they
+/// are read as paths, so a function of your own that is genuinely called `files`
+/// has to be named as one: `self::files`.
+///
+/// In bpaf mode the help is `bpaf`'s: a field's doc comment is its row, and
+/// the type's own doc comment is a section heading. The type does not
+/// implement [`ArgHelp`], so a command cannot override its help.
+///
+/// ## What it writes
 ///
 /// **Your type, untouched**, and one impl beside it:
 ///
@@ -1125,27 +1214,30 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// **function**, never as a method — so a type whose parser outgrows the derive
 /// writes the same impl by hand and loses nothing.
 ///
-/// # The completer filters
+/// ## The completer filters
 ///
 /// `bpaf` passes a completer's output through unfiltered: it filters its own
-/// flag names, not your candidates. `complete_ids` above is handed the value
-/// that already parsed and must drop everything that does not match it. The
-/// [`arg`] module docs spell out when it is called at all — for a
-/// `String` on every keystroke, for a validated type never on the empty word.
+/// flag names, not your candidates, in both modes. In bpaf mode `complete_ids`
+/// above is handed the value that **already parsed** and must drop everything
+/// that does not match it. The [`arg`] module docs spell out when it is called
+/// at all — for a `String` on every keystroke, for a validated type never on
+/// the empty word. (A spelled type's completer is handed the raw word, so it
+/// fires on every keystroke.)
 ///
-/// # A missing `#[derive(Bpaf)]` looks like this
+/// ## A missing `#[derive(Bpaf)]` looks like this
 ///
 /// The impl calls `id()`, and nothing else writes that function, so a type that
-/// derives `Arg` without `Bpaf` fails with rustc's ordinary
+/// derives `Arg` without `Bpaf` (and without a spelling key) fails with rustc's
+/// ordinary
 ///
 /// ```text
 /// error[E0425]: cannot find function `id` in this scope
 /// ```
 ///
 /// pointing at the type's own ident — because that is where the call is spanned.
-/// Deliberate: the answer is to add `#[derive(Bpaf)]` (or write `fn id()`
-/// yourself), and rustc says which name is missing better than any wrapper
-/// message would.
+/// Deliberate: the answer is to add `#[derive(Bpaf)]`, spell the type with
+/// `#[arg(positional|long|short …)]`, or write `fn id()` yourself, and rustc
+/// says which name is missing better than any wrapper message would.
 ///
 /// # Rejections
 ///
@@ -1153,19 +1245,22 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 ///
 /// - **any `#[arg(…)]` key but `positional`, `long`, `short`, `metavar` and
 ///   `complete`**, or one of them twice;
-/// - in spelled mode: **no doc comment**; `positional` with `long`/`short`; a
-///   positional `bool`; `metavar` on a `bool` or with `positional`; an option
-///   with a value but no `metavar`; `Option<bool>` / `Vec<bool>`; `complete` on
-///   a `bool`; a bad `short` or `long`; a multi-field struct (spell it with
-///   `#[derive(Bpaf)]`); any `#[bpaf(…)]` attribute; an enum that is not a
-///   [`Choice`](trait@Choice) (E0277);
+/// - in spelled mode: **no doc comment, or a blank one**; `positional` with
+///   `long`/`short`; a positional `bool`; `metavar` on a `bool` or with
+///   `positional`; an option with a value but no `metavar`; `Option<bool>` /
+///   `Vec<bool>`; `complete` on a `bool`; a bad `short` or an empty `long`; a
+///   multi-field struct (spell it with `#[derive(Bpaf)]`); any `#[bpaf(…)]`
+///   attribute; an enum that is not a [`Choice`](trait@Choice) (E0277); a
+///   completer that is not `fn(&str) -> Vec<Candidate>` (a type error);
+/// - in bpaf mode: **`metavar` alone** — it names an option's value, so it
+///   goes with `long` or `short`;
 /// - **a second `#[arg(…)]` attribute** — one attribute, one answer; two would
 ///   leave *which completer is this?* unanswerable from the source;
-/// - **`complete` on a struct with more than one field, or on an enum** — a
-///   completer on the whole value is handed the *built* value, so it cannot tell
-///   which field is being completed and never fires while another field is
-///   mid-word. Make the value a newtype and complete that, or complete the
-///   field itself with `bpaf`'s own `#[bpaf(complete(f))]`;
+/// - in bpaf mode, **`complete` on a struct with more than one field, or on an
+///   enum** — a completer on the whole value is handed the *built* value, so it
+///   cannot tell which field is being completed and never fires while another
+///   field is mid-word. Make the value a newtype and complete that, or complete
+///   the field itself with `bpaf`'s own `#[bpaf(complete(f))]`;
 /// - **a union, or a generic type** — an argument type is concrete.
 pub use hicli_macros::Arg;
 
@@ -1266,10 +1361,22 @@ pub use choice::{complete_choice, Choice, UnknownChoice};
 /// Write the [`Choice`](trait@Choice) impl by hand instead — it is the plain
 /// Rust above, calling [`UnknownChoice::new`].
 ///
-/// A choice is a value, not an [`Arg`](trait@Arg): a command cannot take one
-/// as a parameter directly. Wrap it in an argument type that says where it goes
-/// on the command line — see the [`complete_choice`] chain in the
-/// [`Choice`](trait@Choice) docs.
+/// A choice is a value. It becomes an [`Arg`](trait@Arg) — one a command can
+/// take as a parameter — when [`#[derive(Arg)]`](derive@Arg) also says where
+/// it goes on the command line, and it then completes its names on its own:
+///
+/// ```ignore
+/// /// What to sort by
+/// #[derive(Debug, Clone, Copy, PartialEq, Choice, Arg)]
+/// #[arg(positional = "KEY")]
+/// pub enum SortKey { /* … */ }
+/// ```
+///
+/// A spelled newtype around a choice (`struct SortOpt(Option<SortKey>)` with
+/// `#[arg(long = "sort", metavar = "KEY")]`) completes the same way. Without
+/// `#[derive(Arg)]`, a command cannot take the enum directly; see the
+/// [`Choice`](trait@Choice) docs for the [`complete_choice`] chain to write by
+/// hand.
 ///
 /// # Rejections
 ///

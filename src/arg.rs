@@ -3,13 +3,44 @@
 //! A command's parameter is one argument **type**, and this is where that type says
 //! how it parses — and, optionally, what it completes to. [`Arg::parser`] is the
 //! whole trait: one associated constructor, no metavar, no attributes, nothing
-//! about spelling. The spelling lives in `#[derive(Bpaf)]` on the same type,
-//! exactly as it did before this trait existed.
+//! about spelling. The spelling is on the type, written one of two ways by
+//! [`#[derive(Arg)]`](derive@crate::Arg) (ADR-016):
 //!
-//! # Completion completes what already parses
+//! - **spelled** — `#[arg(positional = "KEY")]`, `#[arg(long, short = 's',
+//!   metavar = "FIELD")]`, … on a one-value type. hicli writes the `bpaf` chain,
+//!   the type's doc comment's first paragraph is its help row, and the type
+//!   also implements [`ArgHelp`], so a command's `# Arguments` entry can replace
+//!   that row. No `#[derive(Bpaf)]`, no direct `bpaf` dependency;
+//! - **bpaf mode** — no `positional`, `long` or `short` key. The spelling lives
+//!   in `#[derive(Bpaf)]` on the same type, exactly as it did before spelled
+//!   mode existed, and the derive calls its constructor. This is the form for a
+//!   type with several fields.
 //!
-//! A completer attached here is handed the value that **already parsed** —
-//! `&T`, not the raw word. That one fact decides when it fires:
+//! ```
+//! use hicli::Arg;
+//! # use hicli::bpaf::Parser;
+//!
+//! /// An event id
+//! #[derive(Debug, Clone, Arg)]
+//! #[arg(positional = "ID")]
+//! pub struct Id(pub String);
+//!
+//! let id = <Id as Arg>::parser().to_options().run_inner(&["e-17"][..]).unwrap();
+//! assert_eq!(id.0, "e-17");
+//! ```
+//!
+//! # When a completer fires
+//!
+//! **Spelled mode completes the word.** A spelled type's `complete = f` is a
+//! `fn(&str) -> Vec<Candidate>` handed the **raw word** as typed so far, before
+//! it is parsed, so it fires on the empty word and on a half-typed one, even
+//! for a `u16` — and a [`Choice`](trait@crate::Choice) inside completes its
+//! names with no `complete` key at all.
+//!
+//! **bpaf mode completes what already parses.** A completer attached to a
+//! `#[derive(Bpaf)]` type, or through [`complete_with`], is handed the value
+//! that **already parsed** — `&T`, not the raw word. That one fact decides when
+//! it fires:
 //!
 //! - a `String` (and a `Vec<String>` under `some(..)`, which is handed every
 //!   word collected so far with the in-progress one last) parses the empty word,
@@ -17,8 +48,9 @@
 //! - a `u64` — or anything validated through `.parse(..)` — does **not** parse
 //!   the empty word, so the completer is never called for it.
 //!
-//! When that matters, do not derive: hand-write [`Arg::parser`], complete at the
-//! **string** level, and validate after.
+//! When that matters, spell the type with `#[arg(…)]` instead, or hand-write
+//! [`Arg::parser`]: complete at the **string** level, and validate after —
+//! which is what spelled mode writes for you.
 //!
 //! ```
 //! use hicli::bpaf::{long, Parser};
@@ -62,9 +94,15 @@
 //! Not for `String`, not for `u64`, not for `PathBuf` — on purpose. An argument
 //! is a type: the metavar (`"TITLE"`), and whether it is a positional or an
 //! option, are yours to name, and a blanket impl would have to invent both. Give
-//! the value a newtype and the two derives that go with it:
+//! the value a documented newtype, and spell it:
 //!
 //! ```ignore
+//! /// An event id
+//! #[derive(Arg)]
+//! #[arg(positional = "ID")]
+//! struct Id(String);
+//!
+//! // or, in bpaf mode:
 //! #[derive(Bpaf, Arg)]
 //! struct Id(#[bpaf(positional("ID"))] String);
 //! ```
@@ -135,13 +173,23 @@
 //! );
 //! ```
 //!
-//! # A doc comment on an argument struct is a help heading
+//! # What a doc comment on an argument type is
 //!
-//! `bpaf` renders the `///` doc comment on a `#[derive(Bpaf)]` struct as a
-//! **group heading** above that struct's options in `--help` — so a struct
-//! documented `/// Filtering` lists its options under `Filtering`. Keep it to a
-//! single user-facing line (or leave it off), and put developer prose in `//`
-//! comments beside the type instead.
+//! It depends on the mode:
+//!
+//! - **spelled** — the doc comment is the type's **help row**: its first
+//!   paragraph, its lines joined by a space. Everything after the first blank
+//!   line is rustdoc only and never printed, so developer prose can live
+//!   there. A missing or blank doc comment is a compile error. A doc comment
+//!   at a *use site* — a field of a `#[derive(Bpaf)]` struct that embeds the
+//!   type through `#[bpaf(external(…))]` — is never rendered; only a command's
+//!   `# Arguments` entry overrides the row.
+//! - **bpaf mode** — `bpaf` renders the `///` doc comment on a
+//!   `#[derive(Bpaf)]` struct as a **group heading** above that struct's
+//!   options in `--help`, so a struct documented `/// Filtering` lists its
+//!   options under `Filtering`. Keep it to a single user-facing line (or leave
+//!   it off), document the fields instead, and put developer prose in `//`
+//!   comments beside the type.
 //!
 //! # Completion never changes the order
 //!
@@ -163,9 +211,11 @@ pub type Candidate = (String, Option<String>);
 
 /// How an argument type parses: one constructor, and nothing else.
 ///
-/// Implement it by hand, or write `#[derive(Arg)]` beside `#[derive(Bpaf)]` —
-/// the derive calls the type's snake_case `bpaf` constructor (`Id` → `id()`) and
-/// optionally wraps it in one of the completion helpers.
+/// Implement it by hand, or derive it. `#[derive(Arg)]` with
+/// `#[arg(positional|long|short …)]` spells a one-value type itself; without
+/// those keys it goes beside `#[derive(Bpaf)]`, calls the type's snake_case
+/// `bpaf` constructor (`Id` → `id()`) and optionally wraps it in one of the
+/// completion helpers. See [`#[derive(Arg)]`](derive@crate::Arg).
 ///
 /// ```
 /// use hicli::bpaf::{positional, Parser};
@@ -189,7 +239,8 @@ pub type Candidate = (String, Option<String>);
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a hicli argument type",
     label = "this parameter's type must implement `Arg`",
-    note = "an argument is a type: give it a newtype — `#[derive(Bpaf, Arg)] struct Id(#[bpaf(positional(\"ID\"))] String);`",
+    note = "an argument is a type: give it a documented newtype — `/// An event id` above `#[derive(Arg)] #[arg(positional = \"ID\")] struct Id(String);`",
+    note = "a choice enum is spelled the same way: `#[derive(Choice, Arg)] #[arg(positional = \"KEY\")]`; a type with several fields is `#[derive(Bpaf, Arg)]`",
     note = "hicli ships no `Arg` impls for `String`, `u64`, `PathBuf`, … on purpose: the metavar and positional-vs-option are yours to name"
 )]
 pub trait Arg: Sized + 'static {

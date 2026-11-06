@@ -8,6 +8,14 @@ Closes johlrogge/hicli#1 (group-level arguments) and johlrogge/hicli#4 (a
 group's default command). Realises the "Future work: currying" of ADR-004 and
 ADR-005. Extends ADR-008's attribute keys with `curried` and `default`.
 
+**Amended by [ADR-016](016-hicli-spells-one-value-argument-types.md)
+(2026-11-06): a default's doc comment is one paragraph,** not one line — its
+lines up to the first blank line, joined with a space, are the help that
+titles its options in the group's `--help` (or is shown under `Usage:`). Its
+"first doc line" below now reads "first paragraph". Details, an examples
+section or an `# Arguments` section on a default is still a compile error;
+overrides on a default are deferred.
+
 ## Context
 
 mdma-cli needs two shapes a tree of leaves and groups cannot spell:

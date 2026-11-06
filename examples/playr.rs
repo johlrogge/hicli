@@ -9,8 +9,10 @@
 //! cargo test --example playr
 //! ```
 
-// The argument newtypes are documented on their fields, not the type: bpaf
-// turns a doc comment on a struct into a help heading (see the README).
+// `Globals` and `Filters` are spelled by `#[derive(Bpaf)]`, which turns a doc
+// comment on a struct into a help heading, so their fields are documented and
+// `Filters` is not (see the README); the program's other public items are
+// example code.
 #![allow(missing_docs)]
 
 use std::fmt;
@@ -139,13 +141,20 @@ impl FromStr for DaysBack {
 }
 
 // ---- arguments ------------------------------------------------------------
+//
+// Spelled by `#[arg(…)]` itself, with no `#[derive(Bpaf)]`: the doc comment's
+// first paragraph is the help row. `Filters`, which has several fields, is
+// spelled by `#[derive(Bpaf)]` instead.
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct Output(
-    /// An audio output device
-    #[bpaf(positional("NAME"))]
-    pub Name,
-);
+/// An audio output device
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "NAME")]
+pub struct Output(pub Name);
+
+/// Free-text query over title, artist and album
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "QUERY")]
+pub struct Query(pub Option<String>);
 
 #[derive(Debug, Clone, Bpaf, Arg)]
 pub struct Filters {
@@ -160,68 +169,44 @@ pub struct Filters {
     pub unplayed: bool,
 }
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct Query(
-    /// Free-text query over title, artist and album
-    #[bpaf(positional("QUERY"), optional)]
-    pub Option<String>,
-);
+/// A fact type, such as `genre` or `label`
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "TYPE")]
+pub struct FactType(pub Name);
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct FactType(
-    /// A fact type, such as `genre` or `label`
-    #[bpaf(positional("TYPE"))]
-    pub Name,
-);
+/// Only tracks added in the last DAYS days, e.g. -7
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "added", metavar = "DAYS")]
+pub struct Added(pub Option<DaysBack>);
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct Added(
-    /// Only tracks added in the last DAYS days, e.g. -7
-    #[bpaf(long("added"), argument("DAYS"), optional)]
-    pub Option<DaysBack>,
-);
+/// Do not ask for confirmation
+#[derive(Debug, Clone, Arg)]
+#[arg(short = 'y', long = "yes")]
+pub struct Yes(pub bool);
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct Yes(
-    /// Do not ask for confirmation
-    #[bpaf(short('y'), long("yes"), switch)]
-    pub bool,
-);
+/// A source on the node: bandcamp, beatport or upload
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "SOURCE", complete = complete_sources)]
+pub struct SourceName(pub Name);
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-#[arg(complete = complete_sources)]
-pub struct SourceName(
-    /// A source on the node: bandcamp, beatport or upload
-    #[bpaf(positional("SOURCE"))]
-    pub Name,
-);
-
-/// Runs on every TAB: never fails, and filters by what was typed.
-fn complete_sources(typed: &SourceName) -> Vec<Candidate> {
+/// Runs on every TAB, with the word typed so far: never fails, and filters.
+fn complete_sources(typed: &str) -> Vec<Candidate> {
     ["bandcamp", "beatport", "upload"]
         .into_iter()
-        .filter(|s| s.starts_with(&typed.0.to_string()))
+        .filter(|s| s.starts_with(typed))
         .map(|s| (s.to_string(), None))
         .collect()
 }
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct Apply(
-    /// Re-download anything that is out of date
-    #[bpaf(long("apply"), switch)]
-    pub bool,
-);
+/// Re-download anything that is out of date
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "apply")]
+pub struct Apply(pub bool);
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-#[arg(complete = files)]
-pub struct AudioFile(
-    /// An audio file to upload
-    #[bpaf(positional("FILE"))]
-    pub PathBuf,
-);
-
-// The types below are spelled by `#[arg(…)]` itself, with no `#[derive(Bpaf)]`:
-// the doc comment's first paragraph is the help row.
+/// An audio file to upload
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "FILE", complete = files)]
+pub struct AudioFile(pub PathBuf);
 
 /// What to sort by: bpm, title or artist
 //
@@ -311,6 +296,10 @@ mod library {
         use super::*;
 
         /// Permanently delete everything in the archive
+        ///
+        /// # Arguments
+        ///
+        /// * `yes` - Confirm: the files cannot be recovered
         #[command]
         pub fn empty(yes: Yes, ctx: &Ctx) -> Outcome {
             if !yes.0 {
@@ -586,8 +575,37 @@ Examples:
     }
 
     #[test]
+    fn archive_empty_help_matches_the_readme() {
+        assert_eq!(
+            page(&["library", "archive", "empty", "--help"]),
+            "\
+Permanently delete everything in the archive
+
+Usage: playr library archive empty [-y]
+
+Available options:
+    -y, --yes   Confirm: the files cannot be recovered
+    -h, --help  Prints help information
+"
+        );
+    }
+
+    #[test]
+    fn shells_complete() {
+        assert_eq!(
+            app().complete(cli! { generate-completions "" }),
+            ["bash", "zsh", "fish"]
+        );
+    }
+
+    #[test]
     fn source_names_complete() {
         assert_eq!(app().complete(cli! { source b }), ["bandcamp", "beatport"]);
+        // The completer is handed the raw word, so it fires on the empty one.
+        assert_eq!(
+            app().complete(cli! { source "" }),
+            ["list", "bandcamp", "beatport", "upload", "check-updates"]
+        );
     }
 
     #[test]
