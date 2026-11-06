@@ -1,5 +1,6 @@
 //! Procedural macros for [`hicli`](https://docs.rs/hicli):
-//! [`macro@command`], [`macro@group`], [`macro@commands`] and [`derive@Arg`].
+//! [`macro@command`], [`macro@group`], [`macro@commands`], [`macro@cli`] and
+//! [`derive@Arg`].
 //!
 //! Nothing here is meant to be depended on directly: `hicli` re-exports
 //! them and pins this crate to an exact version, so the macros and the runtime
@@ -20,6 +21,7 @@
 //! expansion.
 
 mod arg;
+mod cli;
 mod commands;
 mod ctx;
 mod discover;
@@ -232,4 +234,20 @@ pub fn group(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn commands(input: TokenStream) -> TokenStream {
     commands::expand(input.into()).into()
+}
+
+/// Build an argv `Vec<String>` from raw command-line tokens: tokens that touch
+/// in the source are one word, and whitespace separates words, as in a shell.
+///
+/// ```ignore
+/// assert_eq!(cli! { playback set-output --dry-run "My Event" },
+///            ["playback", "set-output", "--dry-run", "My Event"]);
+/// ```
+///
+/// The full contract — the word rule, how literals read, and the two
+/// rejections — is documented on [`hicli::cli`](https://docs.rs/hicli), which
+/// is where consumers read it.
+#[proc_macro]
+pub fn cli(input: TokenStream) -> TokenStream {
+    cli::expand(input.into()).into()
 }

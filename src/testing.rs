@@ -1,5 +1,4 @@
-//! Test-support helpers used by the [`cli!`](crate::cli) and
-//! [`cli_test!`](crate::cli_test) macros.
+//! Test-support helpers used by the [`cli_test!`](crate::cli_test) macro.
 
 /// Drive one [`cli_test!`](crate::cli_test) case.
 ///
@@ -16,12 +15,12 @@ where
     check(app.parse(args));
 }
 
-/// Convert a single literal token to its argv string.
+/// Convert a value to its argv string, through `Display`.
 ///
-/// Called by [`cli!`](crate::cli) for literal tokens: a string literal yields
-/// its value verbatim (`"My Event"` -> `My Event`), and numeric/char/bool
-/// literals yield their `Display` form (`5` -> `5`). This is what lets a
-/// spaced argument be written as a double-quoted string literal token.
+/// No longer used by [`cli!`](crate::cli), which became a proc macro in 0.5
+/// and reads each literal itself (ADR-017). Kept, hidden, so code that called
+/// it keeps compiling.
+#[doc(hidden)]
 pub fn to_arg(x: impl std::fmt::Display) -> String {
     x.to_string()
 }

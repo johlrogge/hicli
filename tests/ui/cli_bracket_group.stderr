@@ -1,0 +1,5 @@
+error: cli!: a bracketed group is not a word; quote it: "[a]"
+ --> tests/ui/cli_bracket_group.rs:8:37
+  |
+8 |     let _: Vec<String> = cli! { tag [a] };
+  |                                     ^^^

@@ -1,0 +1,5 @@
+error: cli!: a byte string is not a word; write a "string literal"
+ --> tests/ui/cli_byte_string.rs:6:38
+  |
+6 |     let _: Vec<String> = cli! { name b"My Event" };
+  |                                      ^^^^^^^^^^^

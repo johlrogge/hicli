@@ -18,7 +18,10 @@ categories = ["command-line-interface", "development-tools::procedural-macro-hel
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1"
+# `span-locations`: `cli!` reads whether two tokens touch from their
+# line/column (ADR-017). Real locations need rustc >= 1.88, which proc-macro2
+# detects with a stable compile probe.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 syn = { version = "2", features = ["full"] }
 

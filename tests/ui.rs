@@ -1,4 +1,4 @@
-//! Compile-fail tests for `#[command]`, `#[group]` and `commands!`.
+//! Compile-fail tests for `#[command]`, `#[group]`, `commands!` and `cli!`.
 //!
 //! A macro's rejections are part of its contract: the *message* is the whole
 //! documentation a user gets at the moment they need it, and the *span* is what

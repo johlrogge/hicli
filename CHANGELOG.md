@@ -7,6 +7,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Before 1.0, a minor version may carry breaking changes; they are listed under
 "Breaking" with what to change.
 
+## [Unreleased]
+
+### Changed
+
+- `cli!` splits words where the source has whitespace, as a shell does, and nowhere
+  else: tokens that touch are one word. `cli! { playback set-output --dry-run }` is
+  `["playback", "set-output", "--dry-run"]`, and `--since=-7`, `--name="My Event"`,
+  `email,phone`, `a/b/c` and `./ev` need no quotes. Quoted words still work. `cli!` is
+  now a proc macro in `hicli-macros`, re-exported as `hicli::cli` (#22, ADR-017).
+  Edge cases that read differently:
+  - `-- foo` is `["--", "foo"]` (was `["--foo"]`);
+  - `--` is `["--"]` (was a compile error);
+  - `a - b` is `["a", "-", "b"]` (was `["a", "-b"]`);
+  - `- 5` is `["-", "5"]` (was `["-5"]`);
+  - `"a""b"` is `["ab"]` (was `["a", "b"]`);
+  - a number literal is kept as written: `0x10`, `1.50` and `5u8` stay `0x10`, `1.50`
+    and `5u8` (were `16`, `1.5` and `5`).
+
+### Breaking (tests only)
+
+- `cli!` rejects a bracketed group (`(a)`, `[a]`, `{a}`) and a byte or C string
+  (`b"a"`, `c"a"`) with a compile error; quote the word as a `"string literal"`
+  instead. Before, a bracketed group was stringified (`[a]` was `"[a]"`, `(a b)` was
+  `"(a b)"`), and a byte string failed with a type error about `Display`.
+- The hidden `__cli_munch!` macro is removed.
+
+`#[macro_use] extern crate hicli;` still imports `cli!`. `hicli::testing::to_arg` is
+no longer used by `cli!` and is now `#[doc(hidden)]`.
+
 ## [0.4.0] — 2026-11-05
 
 No breaking API changes. Output changed: parse errors and command failures start
