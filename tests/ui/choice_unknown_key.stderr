@@ -1,0 +1,5 @@
+error: #[choice(...)] takes one key: `name = "…"`
+ --> tests/ui/choice_unknown_key.rs:8:14
+  |
+8 |     #[choice(alias = "b")]
+  |              ^^^^^

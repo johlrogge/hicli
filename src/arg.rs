@@ -276,7 +276,7 @@ pub fn complete_dirs<T>(parser: impl Parser<T>) -> impl Parser<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::candidate_values;
+    use crate::app::completions;
     use bpaf::positional;
 
     /// The title of an event — a hand-written `Arg`, which is the form the
@@ -296,21 +296,6 @@ mod tests {
             .run_inner(&["Summer Party"][..])
             .expect("parses");
         assert_eq!(t.0, "Summer Party");
-    }
-
-    /// The candidate **values** `parser` offers for `word`, driven through
-    /// `bpaf`'s revision-1 wire protocol in-process.
-    ///
-    /// Revision 1 on purpose, everywhere: revision 2 through `run_inner`
-    /// terminates the process (see [`crate::App::complete`]).
-    fn completions<T: 'static>(parser: impl Parser<T> + 'static, word: &str) -> Vec<String> {
-        let out = parser
-            .to_options()
-            .run_inner(&["--bpaf-complete-rev=1", word][..])
-            .err()
-            .expect("completion short-circuits with a ParseFailure")
-            .unwrap_stdout();
-        candidate_values(&out)
     }
 
     #[test]

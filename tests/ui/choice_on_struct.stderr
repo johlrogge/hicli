@@ -1,0 +1,5 @@
+error: #[derive(Choice)] goes on an enum whose variants have no fields
+ --> tests/ui/choice_on_struct.rs:6:8
+  |
+6 | struct SortKey(String);
+  |        ^^^^^^^

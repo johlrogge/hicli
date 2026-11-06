@@ -419,16 +419,20 @@ fn missing_command(front: &Front, metavar: &str, names: &[&str]) -> String {
             return format!("no such command after `{value}`: `{next}`, did you mean `{near}`?");
         }
     }
+    match either(names) {
+        None => format!("expected a command after `{value}`, pass `--help` for usage information"),
+        Some(list) => format!("expected a command after `{value}`: {list}"),
+    }
+}
+
+/// `names` quoted and joined the way an error lists alternatives — `` `a` ``,
+/// `` `a` or `b` ``, `` `a`, `b` or `c` `` — or `None` when there are none.
+pub(crate) fn either(names: &[&str]) -> Option<String> {
     let quoted: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
     match quoted.as_slice() {
-        [] => format!("expected a command after `{value}`, pass `--help` for usage information"),
-        [one] => format!("expected a command after `{value}`: {one}"),
-        [init @ .., last] => {
-            format!(
-                "expected a command after `{value}`: {} or {last}",
-                init.join(", ")
-            )
-        }
+        [] => None,
+        [one] => Some(one.clone()),
+        [init @ .., last] => Some(format!("{} or {last}", init.join(", "))),
     }
 }
 

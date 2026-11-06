@@ -1,0 +1,5 @@
+error: a choice name is one non-empty word that does not start with `-`
+ --> tests/ui/choice_bad_name.rs:8:21
+  |
+8 |     #[choice(name = "--bpm")]
+  |                     ^^^^^^^
