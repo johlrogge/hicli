@@ -1,0 +1,5 @@
+error: # Arguments gives `by` twice
+  --> tests/ui/command_arguments_twice.rs:15:1
+   |
+15 | /// * `by` - Or this one
+   | ^^^^^^^^^^^^^^^^^^^^^^^^

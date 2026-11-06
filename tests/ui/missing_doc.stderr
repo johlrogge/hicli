@@ -1,4 +1,4 @@
-error: a #[command] needs a doc comment: its first line is the command's help
+error: a #[command] needs a doc comment: its first paragraph is the command's help
  --> tests/ui/missing_doc.rs:8:1
   |
 8 | fn status(_ctx: &Ctx) {}

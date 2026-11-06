@@ -1,0 +1,5 @@
+error: # Arguments names `source`, which its group parses (`args = SourceName`): its help is the type's
+  --> tests/ui/command_arguments_curried.rs:14:1
+   |
+14 | /// * `source` - The source to sync
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -116,7 +116,7 @@ impl CallSite {
 /// - `default` — the command runs when its group is invoked without naming a
 ///   command; the handle ends in `.by_default()`. It has no name of its own to
 ///   spell or hide, so `name`, `alias` and `hide` are refused with it, and its
-///   doc comment is one line (details and examples belong to the group).
+///   doc comment is one paragraph (details and examples belong to the group).
 ///
 /// ```ignore
 /// /// cancel a download
@@ -138,8 +138,23 @@ pub fn command(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Implement `hicli::Arg` for an argument type, through its `bpaf`
-/// constructor.
+/// Implement `hicli::Arg` for an argument type, in one of two modes.
+///
+/// **Spelled mode** — `positional`, `long` or `short` in `#[arg(…)]`: hicli
+/// spells a one-value type itself. Its doc comment's first paragraph is the
+/// help row, a `Choice` inside completes on its own, and the derive also
+/// writes the snake_case constructor and a `hicli::ArgHelp` impl, so a
+/// command's `# Arguments` entry can replace the row:
+///
+/// ```ignore
+/// /// Sort the listing by this field
+/// #[derive(Arg)]
+/// #[arg(long = "sort", short = 's', metavar = "FIELD")]
+/// struct SortOpt(Option<SortField>);
+/// ```
+///
+/// **bpaf mode** — none of those keys: the parser is the constructor
+/// `#[derive(Bpaf)]` wrote, optionally wrapped in a completer.
 ///
 /// ```ignore
 /// #[derive(Bpaf, Arg)]
@@ -147,10 +162,10 @@ pub fn command(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// struct Id(#[bpaf(positional("ID"))] String);
 /// ```
 ///
-/// The full contract — the constructor it calls, the completion shorthands, the
-/// impl it writes and every rejection — is documented on
-/// [`hicli::Arg`](https://docs.rs/hicli), which is where consumers read
-/// it.
+/// The full contract — the keys, the shapes, the constructor it calls or
+/// writes, the completion shorthands, the items it writes and every
+/// rejection — is documented on [`hicli::Arg`](https://docs.rs/hicli), which
+/// is where consumers read it.
 #[proc_macro_derive(Arg, attributes(arg))]
 pub fn arg(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

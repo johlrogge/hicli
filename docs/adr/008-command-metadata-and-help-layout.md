@@ -16,6 +16,23 @@ Extended by [ADR-011](011-curried-commands-and-default-commands.md) (2026-11-03)
 `args = T` and `curried = T`. Unlike `alias` and `hide`, these are about a
 command's *position in the tree*, not how it is typed or advertised.
 
+**Amended by [ADR-016](016-hicli-spells-one-value-argument-types.md)
+(2026-11-06).** Two changes to decision 1:
+
+- **The help is the first paragraph**, not the first line: consecutive
+  non-blank lines up to the first blank line, each trimmed, joined with one
+  space. The details start after that blank line. A heading (`# Examples`,
+  `# Arguments`, or their `…:` spellings) ends the help even without a blank
+  line. This replaces "Help is the first line, exactly as before" below, and
+  is breaking for a doc comment whose second line directly followed the first.
+- **A command's doc comment gains a slot: `# Arguments`** (or `Arguments:`),
+  between the details and the footer. Its `` * `name` - help `` entries
+  replace the help row of that parameter in this command only, through
+  `ArgHelp`; the section is read, not printed. The details now stop at the
+  first of the `# Arguments` and examples headings. A `# Arguments` line after
+  the examples heading is examples body, verbatim. A group has no parameters,
+  so the section on a `#[group]` is a compile error.
+
 ## Decision
 
 ### 1. All help text lives in the doc comment, in three slots

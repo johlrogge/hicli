@@ -1,0 +1,5 @@
+error: `long` is the option's name without its dashes: one non-empty word that does not start with `-`
+ --> tests/ui/arg_spelled_empty_long.rs:7:14
+  |
+7 | #[arg(long = "")]
+  |              ^^

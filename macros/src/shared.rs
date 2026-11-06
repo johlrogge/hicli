@@ -17,11 +17,11 @@ use syn::{Attribute, Error, Expr, ExprLit, Ident, Lit, LitStr, Meta, Result, Tok
 
 /// The message for a `#[command]` with no doc comment, or a blank one.
 pub(crate) const COMMAND_NEEDS_DOC: &str =
-    "a #[command] needs a doc comment: its first line is the command's help";
+    "a #[command] needs a doc comment: its first paragraph is the command's help";
 
 /// The same rule for a `#[group]` (ADR-001, ADR-005 §3).
 pub(crate) const GROUP_NEEDS_DOC: &str =
-    "a #[group] needs a doc comment: its first line is the group's help";
+    "a #[group] needs a doc comment: its first paragraph is the group's help";
 
 /// The command-line name an ident denotes: `add_admin` -> `add-admin`.
 ///
@@ -122,17 +122,106 @@ pub(crate) fn doc_text(attr: &Attribute) -> Option<String> {
 pub(crate) const EXAMPLES_EMPTY: &str = "this examples section is empty: put at least one \
                                          example under the heading, or remove the heading";
 
-/// The three slots a doc comment fills (ADR-008).
-#[derive(Debug, PartialEq, Eq)]
+/// The message for a line under `# Arguments` that is neither an entry nor
+/// an entry's indented continuation.
+pub(crate) const ARGUMENTS_MALFORMED: &str = "each entry under `# Arguments` is `* `name` - help`";
+
+/// The message for an `# Arguments` heading with no entries under it.
+pub(crate) const ARGUMENTS_EMPTY: &str = "this # Arguments section is empty: give at least one \
+                                          `* `name` - help`, or remove the heading";
+
+/// The slots a doc comment fills (ADR-008, ADR-016).
+#[derive(Debug)]
 pub(crate) struct DocParts {
-    /// The first line: the one-line help, and the heading of `--help`.
+    /// The first paragraph, joined into one line: the help, and the heading
+    /// of `--help`.
     pub(crate) help: String,
-    /// The prose between the help line and the examples heading — `bpaf`'s
+    /// The prose between the help and the first section heading — `bpaf`'s
     /// header, which reflows.
     pub(crate) details: Option<String>,
+    /// The `# Arguments` section, if there is one.
+    pub(crate) arguments: Option<Arguments>,
     /// The examples section, already laid out: `Examples:` and the body
     /// indented by two — rendered verbatim after the options.
     pub(crate) footer: Option<String>,
+}
+
+/// A command's `# Arguments` section: per-parameter help overrides.
+#[derive(Debug)]
+pub(crate) struct Arguments {
+    /// The heading's doc attribute — where an error about the whole section
+    /// points.
+    pub(crate) heading: proc_macro2::TokenStream,
+    /// The entries, in source order.
+    pub(crate) entries: Vec<ArgEntry>,
+}
+
+/// One `* `name` - help` entry.
+#[derive(Debug)]
+pub(crate) struct ArgEntry {
+    /// The parameter it names.
+    pub(crate) name: String,
+    /// Its help: the entry's text and its continuation lines, joined by a
+    /// space.
+    pub(crate) help: String,
+    /// The doc attribute the entry starts on — where an error about it points.
+    pub(crate) at: proc_macro2::TokenStream,
+}
+
+/// Read an entry's first line — `* `name` - help`, or with `-` as the bullet —
+/// into its name and help.
+fn entry_line(line: &str) -> Option<(String, String)> {
+    let t = line.trim();
+    let t = t.strip_prefix('*').or_else(|| t.strip_prefix('-'))?;
+    let t = t.trim_start().strip_prefix('`')?;
+    let (name, rest) = t.split_once('`')?;
+    let help = rest.trim_start().strip_prefix('-')?.trim();
+    if name.trim().is_empty() || name.trim() != name || help.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), help.to_string()))
+}
+
+/// Read the lines under an `# Arguments` heading into entries.
+///
+/// An entry starts at a bullet line and continues on lines indented deeper
+/// than its bullet, which are joined to it with a space; a blank line, the
+/// next bullet or the end of the section ends it. Anything else is
+/// [`ARGUMENTS_MALFORMED`].
+fn arguments_of(heading: &Attribute, body: &[(&Attribute, String)]) -> Result<Arguments> {
+    let mut entries: Vec<ArgEntry> = Vec::new();
+    // The open entry's bullet indentation, while it can still continue.
+    let mut open: Option<usize> = None;
+    for (attr, line) in body {
+        if line.trim().is_empty() {
+            open = None;
+            continue;
+        }
+        let indent = indent_of(line);
+        if let Some((name, help)) = entry_line(line) {
+            entries.push(ArgEntry {
+                name,
+                help,
+                at: attr.to_token_stream(),
+            });
+            open = Some(indent);
+            continue;
+        }
+        match (open, entries.last_mut()) {
+            (Some(bullet), Some(entry)) if indent > bullet => {
+                entry.help.push(' ');
+                entry.help.push_str(line.trim());
+            }
+            _ => return Err(Error::new_spanned(attr, ARGUMENTS_MALFORMED)),
+        }
+    }
+    if entries.is_empty() {
+        return Err(Error::new_spanned(heading, ARGUMENTS_EMPTY));
+    }
+    Ok(Arguments {
+        heading: heading.to_token_stream(),
+        entries,
+    })
 }
 
 /// Is this line the heading that starts the examples footer?
@@ -143,6 +232,58 @@ pub(crate) struct DocParts {
 fn is_examples_heading(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed == "# Examples" || trimmed == "Examples:"
+}
+
+/// Is this line the heading that starts the `# Arguments` section?
+///
+/// Trimmed, exactly `# Arguments` or `Arguments:`, like the examples heading.
+pub(crate) fn is_arguments_heading(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed == "# Arguments" || trimmed == "Arguments:"
+}
+
+/// Does this line start a section — and so end the paragraph before it?
+fn is_section_heading(line: &str) -> bool {
+    is_examples_heading(line) || is_arguments_heading(line)
+}
+
+/// A doc comment's lines, one entry per line, each with the attribute it came
+/// from (for spans).
+///
+/// A `#[doc = "a\nb"]` is several lines; `split` rather than `lines` so an
+/// empty `///` is still one (blank) line. Lines are not trimmed: the examples
+/// body keeps its indentation.
+pub(crate) fn doc_lines(attrs: &[Attribute]) -> Vec<(&Attribute, String)> {
+    attrs
+        .iter()
+        .filter_map(|a| doc_text(a).map(|t| (a, t)))
+        .flat_map(|(a, t)| {
+            t.split('\n')
+                .map(|l| (a, l.trim_end_matches('\r').to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The first paragraph of a doc comment — the help, everywhere — and the index
+/// of the first line after it; `None` if every line is blank.
+///
+/// The paragraph is the first non-blank line and the non-blank lines straight
+/// after it, up to the first blank line or a section heading (`# Examples`,
+/// `# Arguments` and their terminal spellings), each trimmed and joined with a
+/// single space. The first line is always part of it, whatever it says.
+pub(crate) fn first_paragraph<A>(lines: &[(A, String)]) -> Option<(String, usize)> {
+    let first = lines.iter().position(|(_, l)| !l.trim().is_empty())?;
+    let end = lines[first + 1..]
+        .iter()
+        .position(|(_, l)| l.trim().is_empty() || is_section_heading(l))
+        .map_or(lines.len(), |n| first + 1 + n);
+    let help = lines[first..end]
+        .iter()
+        .map(|(_, l)| l.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some((help, end))
 }
 
 /// The number of leading spaces and tabs on `line`.
@@ -168,50 +309,60 @@ fn min_indent<'a>(lines: impl IntoIterator<Item = &'a str>) -> usize {
         .unwrap_or(0)
 }
 
-/// Split the doc comment into the one-line help, the details and the examples
-/// footer.
+/// Split the doc comment into the help, the details and the examples footer.
 ///
 /// `attrs` is the item's whole attribute list, in source order: the doc
 /// attributes are picked out of it and everything else ignored, because the
 /// item is re-emitted with its attributes exactly as written.
 ///
-/// **Help and details:** each line is trimmed (a `///` comment's text starts
-/// with a space), leading blank lines are dropped, and the blank separator
-/// between the first line and the rest disappears with them. A comment that is
+/// **Help:** the first paragraph — see [`first_paragraph`]. Consecutive lines
+/// are joined with a space, so a help that runs onto a second line is still
+/// one help; the details start after the first blank line. A comment that is
 /// missing *or* entirely blank fails with `missing`, spanned at `at` — the
 /// token the author has to put a doc comment on.
 ///
+/// **Details:** each line after the help is trimmed (a `///` comment's text
+/// starts with a space) and leading blank lines are dropped.
+///
+/// **Arguments:** a section headed by a line that is exactly `# Arguments` or
+/// `Arguments:` also ends the details, and runs to the examples heading or
+/// the end of the comment — see [`arguments_of`]. After the examples heading
+/// it is not a heading: everything there is the examples body, verbatim.
+///
 /// **Footer:** the details stop at the first line after the help whose trimmed
 /// text is exactly `# Examples` or `Examples:`; everything after it is the
-/// examples body, read *without* trimming — see [`footer_of`].
+/// examples body, read *without* trimming — see [`footer_of`]. A heading
+/// straight after the help, with no blank line, ends the help.
 pub(crate) fn read_doc<T: ToTokens>(
     attrs: &[Attribute],
     at: &T,
     missing: &str,
 ) -> Result<DocParts> {
-    // One entry per line, each with the attribute it came from (for spans). A
-    // `#[doc = "a\nb"]` is several lines; `split` rather than `lines` so an
-    // empty `///` is still one (blank) line.
-    let lines: Vec<(&Attribute, String)> = attrs
-        .iter()
-        .filter_map(|a| doc_text(a).map(|t| (a, t)))
-        .flat_map(|(a, t)| {
-            t.split('\n')
-                .map(|l| (a, l.trim_end_matches('\r').to_string()))
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    let lines = doc_lines(attrs);
 
-    let Some(first) = lines.iter().position(|(_, l)| !l.trim().is_empty()) else {
+    let Some((help, end)) = first_paragraph(&lines) else {
         return Err(Error::new_spanned(at, missing));
     };
-    let help = lines[first].1.trim().to_string();
-    let rest = &lines[first + 1..];
+    let rest = &lines[end..];
 
     let heading = rest.iter().position(|(_, l)| is_examples_heading(l));
-    let prose = match heading {
+    let before_examples = match heading {
         Some(h) => &rest[..h],
         None => rest,
+    };
+    let section = before_examples
+        .iter()
+        .position(|(_, l)| is_arguments_heading(l));
+    let arguments = match section {
+        Some(s) => Some(arguments_of(
+            before_examples[s].0,
+            &before_examples[s + 1..],
+        )?),
+        None => None,
+    };
+    let prose = match section {
+        Some(s) => &before_examples[..s],
+        None => before_examples,
     };
     let prose: Vec<&str> = prose
         .iter()
@@ -235,6 +386,7 @@ pub(crate) fn read_doc<T: ToTokens>(
     Ok(DocParts {
         help,
         details: (!details.is_empty()).then_some(details),
+        arguments,
         footer,
     })
 }
@@ -479,10 +631,200 @@ mod tests {
     }
 
     #[test]
-    fn the_first_line_is_the_help() {
+    fn a_one_line_paragraph_is_the_help() {
         assert_eq!(
             doc_of("/// create an event\nfn create() {}"),
             ("create an event".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn the_first_paragraph_is_the_help_joined_into_one_line() {
+        // BREAKING (ADR-016): this second line used to be the details.
+        assert_eq!(
+            doc_of(
+                "///   create an event  \n\
+                 /// in the current directory\n\
+                 fn create() {}"
+            ),
+            ("create an event in the current directory".to_string(), None)
+        );
+        let (help, details) = doc_of(
+            "///\n\
+             /// create an event\n\
+             /// in the current directory\n\
+             ///\n\
+             /// The directory is created.\n\
+             /// It must not exist.\n\
+             fn create() {}",
+        );
+        assert_eq!(help, "create an event in the current directory");
+        // The details keep their own line breaks; bpaf reflows them.
+        assert_eq!(
+            details.as_deref(),
+            Some("The directory is created.\nIt must not exist.")
+        );
+    }
+
+    #[test]
+    fn a_heading_ends_the_first_paragraph() {
+        let p = parts_of(
+            "/// search the library\n\
+             /// by text\n\
+             /// # Examples\n\
+             /// mdma search --artist Bowie\n\
+             fn search() {}",
+        );
+        assert_eq!(p.help, "search the library by text");
+        assert_eq!(p.details, None);
+        assert_eq!(
+            p.footer.as_deref(),
+            Some("Examples:\n  mdma search --artist Bowie")
+        );
+        let p =
+            parts_of("/// search the library\n/// Examples:\n///   mdma search\nfn search() {}");
+        assert_eq!(p.help, "search the library");
+        assert_eq!(p.footer.as_deref(), Some("Examples:\n  mdma search"));
+    }
+
+    /// `(name, help)` of each `# Arguments` entry in `src`.
+    fn entries_of(src: &str) -> Vec<(String, String)> {
+        parts_of(src)
+            .arguments
+            .expect("has an # Arguments section")
+            .entries
+            .into_iter()
+            .map(|e| (e.name, e.help))
+            .collect()
+    }
+
+    /// The error `read_doc` raises for `src`.
+    fn doc_rejection(src: &str) -> String {
+        let f: ItemFn = syn::parse_str(src).expect("parses");
+        read_doc(&f.attrs, &f.sig, COMMAND_NEEDS_DOC)
+            .expect_err("rejected")
+            .to_string()
+    }
+
+    #[test]
+    fn an_arguments_section_is_read_and_left_out_of_the_details() {
+        let p = parts_of(
+            "/// list tracks\n\
+             ///\n\
+             /// Prints one track per line.\n\
+             ///\n\
+             /// # Arguments\n\
+             ///\n\
+             /// * `by` - Order for\n\
+             ///   this listing\n\
+             ///\n\
+             /// - `limit` - At most this many\n\
+             /// * `r#type` -   What kind  \n\
+             ///\n\
+             /// # Examples\n\
+             ///\n\
+             /// playr list\n\
+             fn list() {}",
+        );
+        assert_eq!(p.help, "list tracks");
+        assert_eq!(p.details.as_deref(), Some("Prints one track per line."));
+        assert_eq!(p.footer.as_deref(), Some("Examples:\n  playr list"));
+        let entries: Vec<(String, String)> = p
+            .arguments
+            .expect("a section")
+            .entries
+            .into_iter()
+            .map(|e| (e.name, e.help))
+            .collect();
+        assert_eq!(
+            entries,
+            [
+                ("by".to_string(), "Order for this listing".to_string()),
+                ("limit".to_string(), "At most this many".to_string()),
+                ("r#type".to_string(), "What kind".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_terminal_heading_and_a_heading_ending_the_help_work_too() {
+        assert_eq!(
+            entries_of("/// list\n/// Arguments:\n/// * `by` - x\nfn list() {}"),
+            [("by".to_string(), "x".to_string())]
+        );
+        let p = parts_of("/// list tracks\n/// # Arguments\n/// * `by` - x\nfn list() {}");
+        assert_eq!(p.help, "list tracks");
+        assert_eq!(p.details, None);
+        assert_eq!(p.footer, None);
+    }
+
+    #[test]
+    fn an_arguments_heading_after_examples_is_examples_body() {
+        let p = parts_of(
+            "/// list\n\
+             ///\n\
+             /// # Examples\n\
+             /// playr list\n\
+             /// # Arguments\n\
+             /// * `by` - x\n\
+             fn list() {}",
+        );
+        assert!(p.arguments.is_none());
+        assert_eq!(
+            p.footer.as_deref(),
+            Some("Examples:\n  playr list\n  # Arguments\n  * `by` - x")
+        );
+    }
+
+    #[test]
+    fn a_line_that_is_not_an_entry_is_rejected() {
+        for bad in [
+            // prose under the heading
+            "/// list\n/// # Arguments\n/// Some prose.\nfn list() {}",
+            // a continuation after a blank line has nothing to continue
+            "/// list\n/// # Arguments\n/// * `by` - x\n///\n///   more\nfn list() {}",
+            // a continuation not indented past its bullet
+            "/// list\n/// # Arguments\n/// * `by` - x\n/// more\nfn list() {}",
+            // no help
+            "/// list\n/// # Arguments\n/// * `by` -\nfn list() {}",
+            "/// list\n/// # Arguments\n/// * `by` -   \nfn list() {}",
+            // no dash, no backticks, an empty name
+            "/// list\n/// # Arguments\n/// * `by` help\nfn list() {}",
+            "/// list\n/// # Arguments\n/// * by - help\nfn list() {}",
+            "/// list\n/// # Arguments\n/// * `` - help\nfn list() {}",
+            // a second section heading
+            "/// list\n/// # Arguments\n/// * `by` - x\n/// # Arguments\nfn list() {}",
+        ] {
+            assert_eq!(doc_rejection(bad), ARGUMENTS_MALFORMED, "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_empty_arguments_section_is_rejected() {
+        for bad in [
+            "/// list\n///\n/// # Arguments\nfn list() {}",
+            "/// list\n///\n/// # Arguments\n///\n///\n/// # Examples\n/// x\nfn list() {}",
+        ] {
+            assert_eq!(doc_rejection(bad), ARGUMENTS_EMPTY, "{bad}");
+        }
+    }
+
+    #[test]
+    fn first_paragraph_reads_any_lines() {
+        let lines = |ls: &[&str]| ls.iter().map(|l| ((), l.to_string())).collect::<Vec<_>>();
+        assert_eq!(first_paragraph(&lines(&[])), None);
+        assert_eq!(first_paragraph(&lines(&["", "  "])), None);
+        assert_eq!(
+            first_paragraph(&lines(&["", " a ", "b", "", "c"])),
+            Some(("a b".to_string(), 3))
+        );
+        assert_eq!(
+            first_paragraph(&lines(&["a", "# Arguments", "* `x` - y"])),
+            Some(("a".to_string(), 1))
+        );
+        assert_eq!(
+            first_paragraph(&lines(&["a", "b"])),
+            Some(("a b".to_string(), 2))
         );
     }
 

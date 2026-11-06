@@ -5,14 +5,15 @@
 //! case-sensitive match on the names, `hicli::UnknownChoice` otherwise) and
 //! `Display` (the name). A variant's name is its ident in kebab-case —
 //! `PlayCount` → `play-count` — unless `#[choice(name = "…")]` says otherwise;
-//! its description is the first line of its doc comment.
+//! its description is the first paragraph of its doc comment, joined into one
+//! line.
 
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::ext::IdentExt;
 use syn::{Attribute, Data, DeriveInput, Error, Fields, Ident, LitStr, Meta, Result, Token};
 
-use crate::shared::{doc_text, snake_case};
+use crate::shared::{doc_lines, first_paragraph, snake_case};
 
 /// C1: the derive on a struct or a union.
 const NOT_AN_ENUM: &str = "#[derive(Choice)] goes on an enum whose variants have no fields";
@@ -97,17 +98,10 @@ fn kebab(ident: &Ident) -> String {
         .replace('_', "-")
 }
 
-/// The first non-blank line of the doc comment, trimmed.
+/// The first paragraph of the doc comment, joined into one line — the help
+/// rule every hicli doc comment follows.
 fn description(attrs: &[Attribute]) -> Option<String> {
-    attrs
-        .iter()
-        .filter_map(doc_text)
-        .flat_map(|t| {
-            t.split('\n')
-                .map(|l| l.trim().to_string())
-                .collect::<Vec<_>>()
-        })
-        .find(|l| !l.is_empty())
+    first_paragraph(&doc_lines(attrs)).map(|(d, _)| d)
 }
 
 /// Expand `#[derive(Choice)]`, or explain why this type cannot be a choice.
@@ -305,12 +299,14 @@ mod tests {
     }
 
     #[test]
-    fn the_description_is_the_first_non_blank_doc_line() {
+    fn the_description_is_the_first_paragraph_joined() {
         let input: DeriveInput = syn::parse_str(
             "enum K {\n\
              ///\n\
-             ///   Beats per minute  \n\
-             /// More prose.\n\
+             ///   Beats per  \n\
+             /// minute\n\
+             ///\n\
+             /// More prose, never shown.\n\
              Bpm,\n\
              ///\n\
              Title,\n\

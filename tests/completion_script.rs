@@ -53,10 +53,13 @@ pub fn store(home: Home, ctx: &Ctx) {
     let _ = (home.0, ctx);
 }
 
-/// A shell to generate completions for — the recipe from
-/// `completion_script`'s docs, compiled for real.
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct ShellArg(#[bpaf(positional("SHELL"))] pub hicli::Shell);
+// The recipe from `completion_script`'s docs, compiled for real. Its doc
+// comment's first paragraph is its help row.
+
+/// A shell to print completions for: bash, zsh or fish
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "SHELL")]
+pub struct ShellArg(pub hicli::Shell);
 
 /// print the shell completion script
 #[command(hide)]
@@ -206,6 +209,17 @@ fn unknown_shell_is_still_the_shell_error_type() {
 // ---------------------------------------------------------------------------
 // The documented wiring: a `ShellArg` newtype and a hidden command.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn the_documented_shell_arg_completes_the_shells() {
+    // `Shell` is a `Choice`, so the spelled newtype completes with no
+    // completer of its own.
+    assert_eq!(
+        app().complete(cli! { "generate-completions" "" }),
+        ["bash", "zsh", "fish"]
+    );
+    assert_eq!(app().complete(cli! { "generate-completions" f }), ["fish"]);
+}
 
 #[test]
 fn the_documented_generate_completions_command_parses_and_runs() {

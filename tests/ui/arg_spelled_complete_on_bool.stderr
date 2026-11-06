@@ -1,0 +1,5 @@
+error: a switch takes no value, so there is nothing to complete: remove `complete` from this `bool`
+  --> tests/ui/arg_spelled_complete_on_bool.rs:11:23
+   |
+11 | #[arg(long = "quiet", complete = yes)]
+   |                       ^^^^^^^^

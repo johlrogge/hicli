@@ -6,7 +6,7 @@ Accepted (2026-11-06)
 
 Closes johlrogge/hicli#22 (`cli!` splits kebab-case words like `set-output`
 and `--dry-run` into separate tokens). ADR-014 is reserved for
-johlrogge/hicli#7; ADR-016 is pending.
+johlrogge/hicli#7; ADR-016 covers 0.5.0's spelled argument types.
 
 ## Context
 

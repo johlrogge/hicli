@@ -1,0 +1,5 @@
+error: a `bool` cannot be a positional: a `bool` is a switch, so spell it with `long` and/or `short`
+ --> tests/ui/arg_spelled_positional_bool.rs:7:7
+  |
+7 | #[arg(positional)]
+  |       ^^^^^^^^^^

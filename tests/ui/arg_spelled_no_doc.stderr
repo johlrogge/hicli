@@ -1,0 +1,5 @@
+error: an argument type spelled by #[arg(...)] needs a doc comment: its first paragraph is the help for its row
+ --> tests/ui/arg_spelled_no_doc.rs:8:12
+  |
+8 | pub struct Id(String);
+  |            ^^

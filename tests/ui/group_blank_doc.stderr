@@ -1,4 +1,4 @@
-error: a #[group] needs a doc comment: its first line is the group's help
+error: a #[group] needs a doc comment: its first paragraph is the group's help
   --> tests/ui/group_blank_doc.rs:12:5
    |
 12 | mod thing {

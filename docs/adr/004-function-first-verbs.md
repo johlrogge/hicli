@@ -15,6 +15,18 @@ Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verban
 
 "Future work: group-level arguments ("currying")" realised by [ADR-011](011-curried-commands-and-default-commands.md) (2026-11-03): `#[group(args = T)]` and `#[command(curried)]`, built on a generic `Node<O>` rather than the `Mount` field sketched below.
 
+**Amended by [ADR-016](016-hicli-spells-one-value-argument-types.md)
+(2026-11-06).** A hicli attribute dialect is now allowed for **type-level
+spelling**: `#[arg(positional | long | short, metavar, complete)]` on a
+one-value argument type, where hicli writes the bpaf chain — the "interpret
+argument attributes ourselves and emit bpaf combinators" fallback under
+Alternatives, built for the type rather than the parameter. **Decision 1
+stands:** `#[command]` has no parameter attributes and never sees an
+argument's spelling; a per-command help override is read from the doc
+comment's `# Arguments` section, not from an attribute. The "consumers add a
+direct `bpaf` dependency" consequence is narrowed to consumers that use
+`#[derive(Bpaf)]`: a spelled type expands to `::hicli::bpaf::…` paths only.
+
 `IntoOutcome`'s `Result` impls generalised by [ADR-012](012-command-errors-convert-through-into-failure.md) (2026-11-04): `Result<(), E>` and `Result<Success, E>` for any `E: Into<Failure>`, so `io::Result`, `anyhow::Result` and `eyre::Result` are accepted as written. The "no blanket" rule now holds for the success side only.
 
 ## Decision

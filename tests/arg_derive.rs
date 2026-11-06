@@ -117,6 +117,49 @@ fn a_shell_completion_leaves_the_parser_alone() {
     assert_eq!(home.0, "src");
 }
 
+/// Sharing
+#[derive(Debug, Clone, Bpaf, Arg)]
+pub struct Sharing {
+    /// who to share with
+    #[bpaf(long, argument("WHO"))]
+    #[allow(dead_code)] // only the help is under test
+    share: Option<String>,
+}
+
+/// share an event
+#[command]
+pub fn share(s: Sharing, id: Id, ctx: &Ctx) {
+    let _ = (s, id, ctx);
+}
+
+#[test]
+fn bpaf_mode_help_is_unchanged() {
+    // A regression guard for spelled mode being additive: a bpaf-mode type's
+    // help is bpaf's — its struct doc a group heading, its field docs the
+    // rows — exactly as before #8 step 2.
+    let a: App<(), Ctx> = app! { globals: pure(()), commands: [share] };
+    let out = a
+        .parse(cli! { share --help })
+        .err()
+        .expect("help")
+        .unwrap_stdout();
+    assert_eq!(
+        out,
+        "share an event\n\
+         \n\
+         Usage: share [--share=WHO] ID\n\
+         \n\
+         Sharing\n\
+         \x20       --share=WHO  who to share with\n\
+         \n\
+         An event id — a newtype whose completion comes from the type, not from the\n\
+         \x20 command that takes it.\n\
+         \n\
+         Available options:\n\
+         \x20   -h, --help       Prints help information\n"
+    );
+}
+
 #[test]
 fn a_multi_field_struct_parses_its_options() {
     let opts = <ShareOpts as Arg>::parser()

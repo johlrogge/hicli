@@ -1,0 +1,5 @@
+error: a switch is a plain `bool`, `false` when absent: spell `Option<bool>` and `Vec<bool>` as `bool`
+ --> tests/ui/arg_spelled_optional_bool.rs:8:18
+  |
+8 | pub struct Quiet(Option<bool>);
+  |                  ^^^^^^^^^^^^

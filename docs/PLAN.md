@@ -188,12 +188,15 @@ impl<G: 'static, Ctx: 'static> App<G, Ctx> {
 }
 pub fn exit_code_for(f: &bpaf::ParseFailure) -> u8;    // Stderr => 2 (usage), else 0
 
-/// An installable completion script (ADR-009). `#[non_exhaustive]`; parses from
-/// and displays as its lowercase name. hicli ships no `Arg` for it (ADR-006).
+/// An installable completion script (ADR-009). `#[non_exhaustive]`; a
+/// `#[derive(Choice)]` (ADR-016), so it parses from and displays as its
+/// lowercase name and completes its names. hicli ships no `Arg` for it (ADR-006):
+/// the consumer spells `#[derive(Arg)] #[arg(positional = "SHELL")] struct ShellArg(Shell)`.
 #[non_exhaustive]
-pub enum Shell { Bash, Zsh, Fish }
-impl FromStr for Shell { type Err = UnknownShell; /* "bash" | "zsh" | "fish" */ }
-pub struct UnknownShell(/* the name it did not know */);   // Display + Error
+#[derive(Choice)]
+pub enum Shell { Bash, Zsh, Fish }   // FromStr::Err = UnknownChoice
+#[deprecated(since = "0.5.0", note = "use hicli::UnknownChoice")]
+pub type UnknownShell = UnknownChoice;
 pub fn completion_script(shell: Shell, bin: &str) -> String;
                                      // bpaf 0.9.27's templates, revs 8/7/9; panics unless
                                      // `bin` is non-empty [A-Za-z0-9._+-] (pasted unquoted)
@@ -214,13 +217,26 @@ pub fn completion_script(shell: Shell, bin: &str) -> String;
 - **An argument is a type (ADR-006):** `#[command]` never synthesises a call by
   name — it calls `<T as Arg>::parser()` for each owned parameter. `Arg` is
   hand-implementable (the same relationship `#[command]` has to `hicli::command`)
-  or derived with `#[derive(Arg)]` beside `#[derive(Bpaf)]`, which writes one
-  impl calling the constructor `#[derive(Bpaf)]` already generated, spanned at
-  the type's ident so a missing `#[derive(Bpaf)]` reports at the type. An
-  optional `#[arg(complete = …)]` — a function, or the shorthands `files`/`dirs`
-  — attaches completion to the *type*, so every command that takes it inherits the
-  completion for free; it is a compile error on a multi-field struct or an enum,
-  because a whole-value completer cannot tell which field is mid-word.
+  or derived with `#[derive(Arg)]`, in one of two modes (ADR-016):
+  - **spelled** — `#[arg(positional = "KEY")]`, `#[arg(long = "sort", short = 's',
+    metavar = "FIELD")]`, … on a newtype, a one-named-field struct or a
+    `#[derive(Choice)]` enum. hicli writes the bpaf chain (`::hicli::bpaf::…` paths
+    only, so no direct `bpaf` dependency), the type's doc comment's **first
+    paragraph** is its help row, `complete = f` is `fn(&str)` and is handed the
+    raw word, a `Choice` inside completes automatically (an autoref probe in
+    `hicli::__private`), and the type implements `ArgHelp`, so a command's
+    `# Arguments` entry can replace the row. The keys are `positional`, `long`,
+    `short`, `metavar`, `complete` — a key is added only when a consumer earns it;
+  - **bpaf mode** — no spelling key: beside `#[derive(Bpaf)]`, it writes one impl
+    calling the constructor `#[derive(Bpaf)]` already generated, spanned at the
+    type's ident so a missing `#[derive(Bpaf)]` reports at the type. An optional
+    `#[arg(complete = …)]` — a function over the parsed `&T`, or the shorthands
+    `files`/`dirs` — attaches completion; it is a compile error on a multi-field
+    struct or an enum, because a whole-value completer cannot tell which field is
+    mid-word.
+
+  Either way completion attaches to the *type*, so every command that takes it
+  inherits the completion for free.
 
 **Consumer-side subcommand (the pattern this enables) — see ADR-005 for the full
 contract:**
@@ -254,13 +270,13 @@ pub fn __hicli_create() -> ::hicli::Command<Ctx> {
 ```
 There is no `mod create { run }`: `create` is the function, callable by its own
 name from its neighbours, its tests, and itself. `EventDir`/`EventName` are
-ordinary `#[derive(Bpaf, Arg)]` structs the consumer writes — `#[command]` never
-sees an argument's spelling, only its type:
+ordinary argument types the consumer writes — `#[command]` never sees an
+argument's spelling, only its type:
 ```rust
-/// Where the event lives.
-#[derive(Debug, Clone, Bpaf, Arg)]
-#[arg(complete = dirs)]     // completion travels with the type, inherited by every
-pub struct EventDir(#[bpaf(positional("DIR"))] pub String);   // command that takes one
+/// Where the event lives
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "DIR", complete = dirs)]   // completion travels with the type,
+pub struct EventDir(pub String);              // inherited by every command that takes one
 ```
 (bound locals, not inlined calls — `construct!` accepts only a single-segment
 `ident()` call as an element, verified against `bpaf` 0.9.28). A group is an
@@ -308,7 +324,9 @@ limits (bpaf 0.9.27) are in ADR-011.
 **Consumer footprint of the macros — verified at the ADR-004 spike (2026-09-16)
 and the ADR-005 spike (2026-09-17, see each ADR's "Consequences"):**
 
-- **A consumer adds `bpaf = "0.9"` directly**, no features (feature unification
+- **A consumer that uses `#[derive(Bpaf)]` adds `bpaf = "0.9"` directly** (since
+  ADR-016, a crate whose argument types are all spelled by `#[arg(…)]` and whose
+  globals are not derived needs no `bpaf` line), no features (feature unification
   supplies `derive` from hicli's own dependency). `#[derive(Bpaf)]` expands to
   `::bpaf::…` absolute paths, which resolve only against a crate's own extern
   prelude — `use hicli::bpaf;` does not help. This weakens the "consumers pin
@@ -480,20 +498,33 @@ when no sibling is named); the runtime primitives `curried_command`, `group_args
 eyre/anyhow feature or dependency; `Failure` never implements `Error`; no downcasting back to a
 code. `Box<dyn Error + Send + Sync>` is not accepted.
 
+**Also in: one-value argument types spelled by hicli, and choices (ADR-016)** — `Choice` +
+`#[derive(Choice)]` (a fieldless enum is a fixed set of words: `FromStr`, `Display`,
+`UnknownChoice` naming the choices with a suggestion, `complete_choice`; `Shell` is one);
+**spelled `#[derive(Arg)]`**, `#[arg(positional | long | short, metavar, complete)]` on a newtype,
+a one-named-field struct or a `Choice` enum — hicli writes the bpaf chain, the type's doc
+comment's first paragraph is its help row, a `Choice` inside completes with no key, and
+`complete = f` is handed the raw word; **`ArgHelp` and a command's `# Arguments` section** — a
+per-command help override, read from the doc comment, with no parameter attributes (ADR-004
+decision 1 stands). **The help is a doc comment's first paragraph everywhere** — commands,
+groups, argument types, `# Arguments` entries and `Choice` variants (replacing ADR-001/ADR-008's
+"first line"). Earned by mdma-cli's migration (#8, #23); keys are added only when a consumer's
+pain names them. **`cli!` as a proc macro (ADR-017)** — a word is a run of touching tokens (#22).
+
 **Deferred:** nested `args` groups (they parse at runtime but have no constructor or macro form);
 a default in a curried group; a top-level default; a default that also answers to its own name
 (recipe: a second `#[command]` calling the same function); a dedicated `source NAME --help` page;
 typo suggestions inside curried groups (ADR-002's scope stands) (all ADR-011);
 `inventory`/`linkme` auto-registration (still rejected outright — discovery here is lexical and
-local, reading one module body or one file, not link-time collection); argument-level proc-macro
-sugar beyond `#[arg(complete = …)]` (a field-attribute dialect naming metavar/positional-vs-option
-— rejected by ADR-004 in favour of consumer-written `#[derive(Bpaf)]` argument structs, revisit
-only if that proves unusable from a crate that doesn't depend on `bpaf` directly); a
-field-composing `#[derive(Arg)]` for composite types (ADR-006 — a composite hand-writes
-`Arg::parser()`, six lines, composing its parts' own `Arg::parser()`s); `#[arg(parser = …)]` for a
+local, reading one module body or one file, not link-time collection); spelling keys beyond
+ADR-016's five (`fallback`, `env`, `hide`, guards, … — such a type stays in bpaf mode); a
+field-composing `#[derive(Arg)]` for composite types (ADR-006, ADR-016 — a composite hand-writes
+`Arg::parser()`, six lines, composing its parts' own `Arg::parser()`s; when it comes, a field's
+doc comment is that field's help override, the struct-level counterpart of `# Arguments`); an
+`# Arguments` override on a `#[command(default)]`; `#[arg(parser = …)]` for a
 type whose `bpaf` constructor was renamed (a three-line hand-written impl covers it); completion
 masks on the shell shorthands (`complete = files("*.toml")`); globals-aware completion (a
-completer sees only the parsed value, never `--home` — pre-parsing the globals leniently in
+completer sees only its own word or parsed value, never `--home` — pre-parsing the globals leniently in
 completion mode needs a type-erased process-global stash with a runtime-fallible downcast, which
 hicli cannot synthesise); a usage-line override; deprecated-name warnings (an alias that prints
 a hint); visible aliases (`list, ls` in the command list); elvish completion — all deferred
@@ -569,10 +600,10 @@ glued form. This keeps the standard rule that a word starting with `-` is an opt
   each test asserts both the exit code and whether the command ran with the globals-derived context.
   Only the returned code is assertable — the streams are the process's real ones — so `did you
   mean` text remains covered by the `augment_stderr`/`suggest` unit tests.
-- **Help text:** every command and group carries a mandatory one-line `help` (a doc comment, for
+- **Help text:** every command and group carries a mandatory `help` (a doc comment, for
   `#[command]`/`#[group]`), asserted as substrings of top-level, group and leaf `--help`
-  output (never whole-output snapshots); a multi-line doc comment's first line is the help, the
-  rest is `details()` up to an examples heading, and the examples are the footer —
+  output (never whole-output snapshots); a doc comment's first paragraph is the help (ADR-016),
+  the rest is `details()` up to an `# Arguments` or examples heading, and the examples are the footer —
   `tests/help_examples.rs` asserts, for the indented, `# Examples` and ```` ```sh ````-fenced
   spellings in plain `--help` and `--help --help`, that the footer comes after the options and ends
   the output verbatim, and that no example text leaks into the details. `tests/metadata.rs` covers
