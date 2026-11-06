@@ -12,8 +12,9 @@ in-process, without spawning a binary.
 [![crates.io](https://img.shields.io/crates/v/hicli.svg)](https://crates.io/crates/hicli)
 [![docs.rs](https://docs.rs/hicli/badge.svg)](https://docs.rs/hicli)
 
-> 0.4.0, pre-1.0: a minor version may break things. Every break is listed in
-> [`CHANGELOG.md`](CHANGELOG.md). MSRV: Rust 1.99.
+> 0.5.0, pre-1.0: a minor version may break things. Every break is listed in
+> [`CHANGELOG.md`](CHANGELOG.md), and [Upgrading from 0.4](#upgrading-from-04)
+> covers this release's. MSRV: Rust 1.99.
 
 ## Quick start
 
@@ -23,8 +24,8 @@ First, three commands and a global option:
 
 ```toml
 [dependencies]
-hicli = "0.4"
-bpaf = "0.9"   # needed for #[derive(Bpaf)] on your own argument types
+hicli = "0.5"
+bpaf = "0.9"   # needed for #[derive(Bpaf)], used here on Globals
 ```
 
 ```rust
@@ -48,12 +49,10 @@ pub struct Ctx {
     pub node: Node,
 }
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct Output(
-    /// An audio output device
-    #[bpaf(positional("NAME"))]
-    pub Name,
-);
+/// An audio output device
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "NAME")]
+pub struct Output(pub Name);
 
 /// Check that the node answers
 #[command]
@@ -143,17 +142,18 @@ What each piece does:
 
 - **`#[command]` on a function makes it a subcommand.** The name comes from the
   function name, with `_` turned into `-` (`set_output` becomes `set-output`), unless
-  you write `#[command(name = "…")]`. The first line of the doc comment is its help.
-  The function itself is unchanged: `playback::stop(&ctx)` still works.
+  you write `#[command(name = "…")]`. The first paragraph of the doc comment is its
+  help (see [Help text](#help-text)). The function itself is unchanged:
+  `playback::stop(&ctx)` still works.
 - **`#[group]` on a module makes it a group.** Its commands are the `#[command]`
   functions and `#[group]` modules inside it, in source order. There is no list to
   keep in sync. A command or group without a doc comment is a compile error.
 - **An argument is a type.** `set_output` takes an `Output`, a newtype that derives
-  `Bpaf` (how it is spelled) and `Arg` (so hicli can use it). Define it once and use
-  it in every command that needs it. hicli has no `Arg` impls for `String`, `u64` and
-  so on, so you always use a newtype
-  ([ADR-006](docs/adr/006-an-argument-is-a-type.md)). Inside it is the value's own
-  type, here a `Name`.
+  `Arg`. `#[arg(positional = "NAME")]` says where it goes on the command line, and
+  its doc comment is its help. Define it once and use it in every command that
+  needs it. hicli has no `Arg` impls for `String`, `u64` and so on, so you always
+  use a newtype ([ADR-006](docs/adr/006-an-argument-is-a-type.md)). Inside it is
+  the value's own type, here a `Name`.
 - **Global options are a `Bpaf` struct.** They are accepted before or after the
   subcommand (`playr playback stop --node pi.local`), except an external subcommand,
   which needs them before its name (see the rules below). `env(..)` makes an
@@ -224,9 +224,41 @@ The following sections add to `playr`. The complete program, with tests, is
 
 ### Options, switches and positionals
 
-`playr search` filters the library. Several options can share one `Bpaf` struct.
-Each field's doc comment is its help line. `Bpm` accepts 20 to 300, written like
-`Name`:
+An argument type that holds one value is spelled on the type, with `#[arg(…)]`.
+`playr search` takes an optional free-text query, and `source … check-updates`
+takes a switch:
+
+```rust
+/// Free-text query over title, artist and album
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "QUERY")]
+pub struct Query(pub Option<String>);
+
+/// Re-download anything that is out of date
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "apply")]
+pub struct Apply(pub bool);
+```
+
+The keys are:
+
+| key | means |
+|---|---|
+| `positional = "QUERY"` | a positional, shown as `QUERY` |
+| `long = "apply"`, `short = 'y'` | an option, `--apply` or `-y`, alone or together |
+| `metavar = "DAYS"` | an option's value, shown as `--added=DAYS`; required unless the value is a `bool` |
+| `complete = f`, `files`, `dirs` | completion (see [Shell completion](#shell-completion)) |
+
+A bare `positional` or `long` is named after the type: `SortBy` becomes `SORT-BY`
+or `--sort-by`. What is inside decides the rest: `Option<T>` is optional, `Vec<T>`
+repeats, a `bool` with a name is a switch, and anything else is parsed with its
+`FromStr`. The first paragraph of the type's doc comment is its help row, so the
+doc comment is required. These five keys are all there is, on purpose. A type
+that needs more, such as a fallback, is spelled with bpaf.
+
+Several options that belong together can share one struct, spelled with
+`#[derive(Bpaf)]` as in bpaf. This is also how `Globals` is written. Each field's
+doc comment is its help row. `Bpm` accepts 20 to 300, written like `Name`:
 
 ```rust
 #[derive(Debug, Clone, Bpaf, Arg)]
@@ -241,24 +273,17 @@ pub struct Filters {
     #[bpaf(long)]
     pub unplayed: bool,
 }
-
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct Query(
-    /// Free-text query over title, artist and album
-    #[bpaf(positional("QUERY"), optional)]
-    pub Option<String>,
-);
 ```
+
+Document the fields of a `#[derive(Bpaf)]` struct, not the struct. bpaf turns a
+doc comment on the struct into a section heading. That is how `Global options`
+appears above.
 
 A command's parameters are parsed in the order they are declared. **Declare the
 types that contain positionals last.** bpaf requires this, and a debug build checks it
 the first time it runs. A release build doesn't check it up front: the same mistake
 panics when `--help` is rendered. The rule is only about parameter order: on the
 command line, flags can go anywhere.
-
-Put a doc comment on the field, not on the newtype. bpaf turns a doc comment on a
-struct into a section heading (that is how `Global options` appears above). On a
-one-field newtype, that would print a heading with nothing under it.
 
 ### Values that start with `-`
 
@@ -267,12 +292,10 @@ to its option with `=`. A plain `argument` reads it, and the type inside decides
 is valid: `DaysBack` accepts `-7` and rejects `7`, `-0` and `-x`.
 
 ```rust
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct Added(
-    /// Only tracks added in the last DAYS days, e.g. -7
-    #[bpaf(long("added"), argument("DAYS"), optional)]
-    pub Option<DaysBack>,
-);
+/// Only tracks added in the last DAYS days, e.g. -7
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "added", metavar = "DAYS")]
+pub struct Added(pub Option<DaysBack>);
 ```
 
 As two words, `-7` reads as a flag, and bpaf says how to write it instead:
@@ -360,6 +383,10 @@ mod library {
         use super::*;
 
         /// Permanently delete everything in the archive
+        ///
+        /// # Arguments
+        ///
+        /// * `yes` - Confirm: the files cannot be recovered
         #[command]
         pub fn empty(yes: Yes, ctx: &Ctx) -> Outcome {
             if !yes.0 {
@@ -405,11 +432,14 @@ Available commands:
     empty       Permanently delete everything in the archive
 ```
 
+The `# Arguments` section in `empty`'s doc comment is explained in
+[Overriding an argument's help](#overriding-an-arguments-help).
+
 Limits: one default per group; none at the top level or in an `args`/`curried`
 group; a default takes no `name`, `alias` or `hide`, and its doc comment is one
-line (it has no help page of its own). That line titles the default's options in
-the group's `--help`, as with `search` above; a default without options, like
-`list` here, has its line shown under `Usage:`, and the usage reads
+paragraph (it has no help page of its own). That paragraph titles the default's
+options in the group's `--help`, as with `search` above; a default without options,
+like `list` here, has it shown under `Usage:`, and the usage reads
 `[COMMAND ...]` because naming a command is optional. See
 [ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
 
@@ -421,13 +451,10 @@ the command. Use `#[group(args = T)]` for the group and `#[command(curried)]` fo
 each command that receives the value, which must be its first parameter:
 
 ```rust
-#[derive(Debug, Clone, Bpaf, Arg)]
-#[arg(complete = complete_sources)]
-pub struct SourceName(
-    /// A source on the node: bandcamp, beatport or upload
-    #[bpaf(positional("SOURCE"))]
-    pub Name,
-);
+/// A source on the node: bandcamp, beatport or upload
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "SOURCE", complete = complete_sources)]
+pub struct SourceName(pub Name);
 
 /// Music sources
 #[group(args = SourceName)]
@@ -483,8 +510,8 @@ Commands without the `curried` mark, like `list`, are matched first, so a source
 can't be named `list`. A curried command whose first parameter has a different type
 is a compile error. A nested group that also receives the value is
 `#[group(curried = SourceName)]`. One known limit is surprising: `source <TAB>` with
-nothing typed also offers the curried command names, which are not valid until a
-source is typed. For the others, such as `source NAME --help` showing the group's
+nothing typed offers `list`, the sources and also `check-updates`, which is not valid
+until a source is typed. For the others, such as `source NAME --help` showing the group's
 page, see [ADR-011](docs/adr/011-curried-commands-and-default-commands.md).
 
 ### Errors and `?`
@@ -524,51 +551,72 @@ inspects an error to choose an exit code. For any other code, return
 
 ### Choice values
 
-`playr sort bpm` takes one of a fixed set of words. For now, write an enum with
-`FromStr`. Its error message is shown to the user:
+`playr sort bpm` takes one of a fixed set of words. Write an enum whose variants
+have no fields and derive `Choice`. Add `Arg` with `#[arg(positional = "KEY")]`,
+and the enum itself is the argument:
 
 ```rust
-// A choice value: an ordinary enum with `FromStr`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// What to sort by: bpm, title or artist
+//
+// A choice is the argument: its names parse, complete and appear in errors.
+#[derive(Debug, Clone, Copy, PartialEq, Choice, Arg)]
+#[arg(positional = "KEY")]
 pub enum SortKey {
+    /// Beats per minute
     Bpm,
+    /// Track title
     Title,
+    /// Artist name
     Artist,
 }
-
-impl FromStr for SortKey {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "bpm" => Ok(Self::Bpm),
-            "title" => Ok(Self::Title),
-            "artist" => Ok(Self::Artist),
-            other => Err(format!("`{other}` is not one of: bpm, title, artist")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct SortBy(
-    /// What to sort by: bpm, title or artist
-    #[bpaf(positional("KEY"))]
-    pub SortKey,
-);
 ```
+
+`#[derive(Choice)]` writes `FromStr` and `Display`. Each variant is spelled as its
+name in kebab-case (`PlayCount` becomes `play-count`), or as you name it with
+`#[choice(name = "…")]`. Matching is exact. A word that is none of them is a usage
+error that lists the names, and suggests one if it is close:
 
 ```console
 $ playr sort key
-Error: couldn't parse `key`: `key` is not one of: bpm, title, artist
+Error: couldn't parse `key`: expected `bpm`, `title` or `artist`
+$ playr sort bmp
+Error: couldn't parse `bmp`: expected `bpm`, `title` or `artist`; did you mean `bpm`?
 ```
 
-Shell completion doesn't work for these values yet: `sort b<TAB>` offers nothing.
-Built-in choice enums are tracked in [#8](https://github.com/johlrogge/hicli/issues/8).
+The names complete on their own, with no completer to write. `sort <TAB>` offers
+`bpm`, `title` and `artist` (and the `--descending` flag), and `sort t<TAB>` offers
+`title`. A shell that shows
+descriptions shows each variant's doc comment beside it. A choice inside a newtype
+completes the same way: `struct SortOpt(pub Option<SortKey>)` with
+`#[arg(long = "sort", metavar = "KEY")]` is an optional `--sort=KEY`.
 
 ### Help text
 
-All help comes from doc comments. A command's first doc line is its summary, the
-following paragraphs are its description, and an `# Examples` section is printed at
-the end of its `--help`:
+All help comes from doc comments, and one rule reads them all: **the first
+paragraph is the help.** That is every line up to the first blank line, joined by
+spaces, so a long help can wrap onto a second `///` line. What comes after the
+first blank line depends on what the doc comment is on:
+
+- On a **command or group**, it is the details, printed under the usage line of
+  its `--help`. An `# Examples` section is printed at the end, and an
+  `# Arguments` section (see [below](#overriding-an-arguments-help)) is read, not
+  printed.
+- On an **argument type spelled with `#[arg(…)]`**, it is rustdoc only and never
+  printed. Write notes for developers there.
+- On a **`Choice` variant**, the first paragraph is its completion description,
+  and the rest is rustdoc only.
+
+`sort` takes the `SortKey` above and a switch:
+
+```rust
+/// Sort descending (Z→A, high→low)
+#[derive(Debug, Clone, Arg)]
+#[arg(short = 'd', long = "descending")]
+pub struct Descending(pub bool);
+```
+
+Its doc comment has a help, details and examples. Put a blank `///` line between
+the help and the details:
 
 ```rust
 /// Sort track ids read from stdin
@@ -581,8 +629,8 @@ the end of its `--help`:
 /// playr search --artist CBL | playr sort bpm --descending
 /// ```
 #[command]
-fn sort(desc: Descending, by: SortBy) {
-    println!("sorting by {:?}, descending: {}", by.0, desc.0);
+fn sort(desc: Descending, by: SortKey) {
+    println!("sorting by {by}, descending: {}", desc.0);
 }
 ```
 
@@ -622,6 +670,48 @@ fn app() -> App<Globals, Ctx> {
 }
 ```
 
+### Overriding an argument's help
+
+An argument type's help is written once, on the type, and every command that takes
+it shows it. A command that needs to say something more specific lists the
+parameter in an `# Arguments` section of its doc comment. `Yes` says "Do not ask
+for confirmation", and `library archive empty` (above) says instead:
+
+```rust
+/// Permanently delete everything in the archive
+///
+/// # Arguments
+///
+/// * `yes` - Confirm: the files cannot be recovered
+#[command]
+pub fn empty(yes: Yes, ctx: &Ctx) -> Outcome {
+```
+
+```console
+$ playr library archive empty --help
+Permanently delete everything in the archive
+
+Usage: playr library archive empty [-y]
+
+Available options:
+    -y, --yes   Confirm: the files cannot be recovered
+    -h, --help  Prints help information
+```
+
+- Each entry is `` * `name` - help `` (a `-` bullet works too), named after the
+  parameter. An entry can continue on indented lines, which are joined with spaces.
+- Only the help row changes. Usage, completion and errors stay the type's, and the
+  section is not printed as part of the details.
+- It works for argument types spelled with `#[arg(…)]`, and for hand-written ones
+  that implement `ArgHelp`. An entry for a `#[derive(Bpaf)]` type is a compile
+  error, because bpaf builds that help.
+- It is a compile error to name something that is not a parsed parameter of the
+  command (the `&Ctx`, a curried value, a misspelling), to name one twice, or to
+  write the section on a group or on a `#[command(default)]`.
+
+This is the only way a command says anything about its arguments. There are no
+parameter attributes.
+
 ### Colour
 
 On a terminal, `run` prints help and errors in colour: headings and option names in
@@ -629,7 +719,7 @@ bold, metavariables underlined, and `Error: ` in bold red. It needs both stdout 
 stderr to be terminals, so `playr --help | less` and `playr --help 2>/dev/null` print
 plain text. `NO_COLOR=1` turns colour off and `FORCE_COLOR=1` forces it on; there is
 no `--color` flag. To never print colour, depend on
-`hicli = { version = "0.4", default-features = false }`. For bright colours, add
+`hicli = { version = "0.5", default-features = false }`. For bright colours, add
 `bpaf = { version = "0.9", features = ["bright-color"] }`. `App::parse` and the
 snapshot tests built on it always get plain text without the `Error: ` prefix. See
 [ADR-015](docs/adr/015-coloured-output-through-print-message.md).
@@ -640,31 +730,33 @@ Completion is attached to the argument type, so every command that takes a
 `SourceName` completes source names:
 
 ```rust
-/// Runs on every TAB: never fails, and filters by what was typed.
-fn complete_sources(typed: &SourceName) -> Vec<Candidate> {
+/// Runs on every TAB, with the word typed so far: never fails, and filters.
+fn complete_sources(typed: &str) -> Vec<Candidate> {
     ["bandcamp", "beatport", "upload"]
         .into_iter()
-        .filter(|s| s.starts_with(&typed.0.to_string()))
+        .filter(|s| s.starts_with(typed))
         .map(|s| (s.to_string(), None))
         .collect()
 }
 ```
 
-`#[arg(complete = complete_sources)]` on the type (shown above) connects the two. For
-paths, use `#[arg(complete = files)]` or `#[arg(complete = dirs)]`, which let the
-shell complete them. **Your completer must filter by the typed prefix itself.** bpaf
-passes its results to the shell unchanged.
+`#[arg(complete = complete_sources)]` on the type (shown above) connects the two.
+The completer is handed the word as typed, before it is parsed, so it runs from the
+first keystroke, even for a value such as a number that an empty or half-typed word
+is not. A `Choice` completes with no completer at all. For paths, use
+`#[arg(complete = files)]` or `#[arg(complete = dirs)]`, which let the shell complete
+them. **Your completer must filter by the typed prefix itself.** bpaf passes its
+results to the shell unchanged.
 
 Command names complete automatically. To install completion, render the script from a
-hidden command:
+hidden command. `hicli::Shell` is a `Choice`, so `generate-completions <TAB>` offers
+`bash`, `zsh` and `fish`:
 
 ```rust
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct ShellArg(
-    /// A shell to print completions for: bash, zsh or fish
-    #[bpaf(positional("SHELL"))]
-    pub hicli::Shell,
-);
+/// A shell to print completions for: bash, zsh or fish
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "SHELL")]
+pub struct ShellArg(pub hicli::Shell);
 
 /// Print the shell completion script
 #[command(hide)]
@@ -699,12 +791,12 @@ mod tests {
             let (globals, _) = r.expect("parses");
             assert_eq!(globals.node.host, "pi.local");
         },
-        set_output_needs_a_name: { playback "set-output" } => |r| {
+        set_output_needs_a_name: { playback set-output } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
             assert!(e.unwrap_stderr().contains("NAME"));
         },
-        output_names_are_checked: { playback "set-output" HDMI } => |r| {
+        output_names_are_checked: { playback set-output HDMI } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
         },
@@ -738,8 +830,9 @@ mod tests {
 ```
 
 - `cli! { … }` turns the words you would type into an argv, and `cli_test!` writes
-  one `#[test]` per line. **Quote words with hyphens** (`"set-output"`, `"--dry-run"`).
-  Without quotes, Rust splits `set-output` into three tokens.
+  one `#[test]` per line. Words are separated by whitespace, as in a shell:
+  `set-output`, `--dry-run` and `--since=-7` are one word each, and `"My Event"` is
+  one word with a space in it.
 - `App::parse` returns the parsed globals and the selected command, in that order, or
   the error that would be printed. `App::run_with_args` runs everything and returns the exit code
   that `main` would. `App::complete` returns what the shell would offer.
@@ -752,33 +845,34 @@ mod tests {
 
 1. **MSRV is Rust 1.99.** `#[group] pub mod x;` needs attribute macros on file-module
    declarations, stable since 1.99.
-2. **Add `bpaf = "0.9"` to your own dependencies.** `#[derive(Bpaf)]` generates
-   `::bpaf::` paths. Cargo still builds a single copy of bpaf.
+2. **If you use `#[derive(Bpaf)]`, add `bpaf = "0.9"` to your own dependencies.**
+   `#[derive(Bpaf)]` generates `::bpaf::` paths. Cargo still builds a single copy of
+   bpaf. Types spelled with `#[arg(…)]` don't need it; a `Globals` struct written
+   with `#[derive(Bpaf)]` does.
 3. **Declare positional parameters last** (see above).
 4. **There are no `Arg` impls for primitives.** Give each value a newtype, with the
    value's own type inside.
-5. **Completers filter their own candidates, and they only see values that parsed.** A
-   `String` completes from the first keystroke. A value checked by `FromStr`, such
-   as a `Name`, a number or a choice, doesn't complete until the partial word parses.
-   Choose rules that every prefix of a valid value also passes: `b` is a valid
-   `Name`, so `source b<TAB>` offers `bandcamp` and `beatport`. An empty word is not
-   a `Name`, so `source <TAB>` offers only the commands.
-6. **`#[arg(complete = …)]` goes only on a single-field type.** On a multi-field
-   struct or an enum it is a compile error.
+5. **Completers filter their own candidates.** bpaf passes them to the shell
+   unchanged. A completer on a type spelled with `#[arg(…)]` is handed the raw word,
+   so it runs on every keystroke. On a `#[derive(Bpaf, Arg)]` type with
+   `#[arg(complete = …)]`, it is handed the value that already parsed instead, so a
+   value checked by `FromStr`, such as a `Name` or a number, doesn't complete until
+   the partial word parses, and never completes from an empty word. Spell the type
+   with `#[arg(…)]` to fix that.
+6. **`#[arg(complete = …)]` goes only on a single-value type.** On a multi-field
+   struct it is a compile error.
 7. **`Globals` doesn't derive `Arg`.** It is parsed once at the top level.
 8. **A `#[group] pub mod x;` that lives in its own file must be declared at the top
-   level of a file**, not inside an inline module. hicli puts `#[path = "x.rs"]` on
-   it, and rustc then looks up a plain `mod helper;` inside `x.rs` next to `x.rs`,
-   not under `x/` (E0583). Until that is fixed, write
-   `#[path = "x/helper.rs"] mod helper;`
-   ([#25](https://github.com/johlrogge/hicli/issues/25)). A nested `#[group] mod` is not
-   affected.
+   level of a file**, not inside an inline module.
 9. **The attribute keys:**
    - `#[command(name = "…", alias = "…", hide)]`, plus `default` and `curried` (above).
    - `#[group(alias = "…", hide)]`, plus `args` and `curried` (above). A group has no
      `name`: it is the module's.
    - `#[group(ctx = T)]` names a group's context. Without it, the group takes the
      first `&T` among its commands, and a command with no `&T` is generic over `Ctx`.
+   - `#[arg(positional = "…", long = "…", short = '…', metavar = "…", complete = …)]`
+     on an argument type, and `#[choice(name = "…")]` on a `Choice` variant.
+   - A doc comment's `# Examples` and `# Arguments` sections.
 10. **A bare name in `commands!` names a handle.** A local `Command` value must be
     parenthesised, `commands![(c)]`. A macro of your own that forwards a list to
     `app!` or `commands!` should match it as `$($c:tt)*`, not `$c:expr`.
@@ -792,6 +886,101 @@ mod tests {
     - A `--` right after the external's name is eaten by bpaf; the binary only sees
       the words after it.
     - See `ExternalCommand` on [docs.rs](https://docs.rs/hicli) for the rest.
+
+## Upgrading from 0.4
+
+Most code builds unchanged. Check these:
+
+- **The help is the first paragraph, not the first line.** Every line up to the first
+  blank line is now joined into the help, for commands, groups, a
+  `#[command(default)]` and `Choice` variants. A doc comment whose second line
+  directly followed the first used to show that line as the start of the details;
+  now it is part of the help. **Put a blank `///` line between the help and the
+  details:**
+
+  ```rust
+  /// Sort track ids read from stdin
+  ///
+  /// Reads one track id per line and prints them sorted.
+  ```
+
+- **`# Arguments` (or `Arguments:`) in a command's doc comment is now read.** It
+  starts the section described in
+  [Overriding an argument's help](#overriding-an-arguments-help), so it is no longer
+  printed as details, and its entries, `` * `name` - help ``, must name parameters of
+  the command. rustdoc's habit of documenting parameters this way
+  meets hicli here: an entry for a `#[derive(Bpaf)]` type is a compile error
+  (E0277). Remove the entry, or spell the type with `#[arg(…)]`. An `# Arguments`
+  heading after `# Examples` is still examples text.
+- **`Shell`'s error type and text.** `"tcsh".parse::<Shell>()` fails with
+  `UnknownChoice`, which displays ``expected `bash`, `zsh` or `fish`; did you mean
+  `bash`?``. It used to be ``unknown shell `tcsh`: expected one of `bash`, `zsh`,
+  `fish` ``. `UnknownShell` is a deprecated alias of `UnknownChoice`. It was a tuple
+  struct, so code that built or matched `UnknownShell(…)` no longer compiles.
+- **`cli!` splits words only at whitespace**, as a shell does. In tests, a few
+  spellings now read differently: `-- foo` is `["--", "foo"]` (was `["--foo"]`),
+  `a - b` is three words and `- 5` two, `"a""b"` is `["ab"]`, and a number literal is
+  kept as written (`0x10` stays `0x10`). A bracketed group (`[a]`) and a byte string
+  (`b"a"`) are compile errors; quote them as `"[a]"`. See
+  [ADR-017](docs/adr/017-cli-words-are-whitespace-separated-tokens.md).
+- **`#[arg(…)]` on a `#[derive(Bpaf)]` type** rejects `metavar` (it needs
+  `positional`, `long` or `short`, which switch to spelled mode), and a second
+  `complete` gets its own message.
+
+The full list is in [`CHANGELOG.md`](CHANGELOG.md).
+
+### Moving an argument type to `#[arg(…)]`
+
+This is optional, and each type can move on its own: the two forms work side by side.
+A one-value `#[derive(Bpaf, Arg)]` newtype:
+
+```rust
+#[derive(Debug, Clone, Bpaf, Arg)]
+#[arg(complete = complete_sources)]
+pub struct SourceName(
+    /// A source on the node: bandcamp, beatport or upload
+    #[bpaf(positional("SOURCE"))]
+    pub Name,
+);
+
+fn complete_sources(typed: &SourceName) -> Vec<Candidate> {
+    // … filter by typed.0.to_string()
+}
+```
+
+becomes:
+
+```rust
+/// A source on the node: bandcamp, beatport or upload
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "SOURCE", complete = complete_sources)]
+pub struct SourceName(pub Name);
+
+fn complete_sources(typed: &str) -> Vec<Candidate> {
+    // … filter by typed
+}
+```
+
+1. Move the field's doc comment onto the type. Its first paragraph is the help.
+2. Replace `Bpaf` in the derive, and the `#[bpaf(…)]` attribute, with `#[arg(…)]`:
+   - `positional("SOURCE")` becomes `positional = "SOURCE"`;
+   - `long("added"), argument("DAYS")` becomes `long = "added", metavar = "DAYS"`;
+   - `short('y'), long("yes"), switch` becomes `short = 'y', long = "yes"` on a
+     `bool`;
+   - drop `optional` and `many`: an `Option<T>` or `Vec<T>` inside says so.
+3. A completer takes the word, `&str`, instead of the parsed value. It now also runs
+   on an empty or half-typed word.
+4. A hand-written choice enum with its own `FromStr`, wrapped in a newtype, can
+   become `#[derive(Choice, Arg)]` with `#[arg(positional = "KEY")]`, as in
+   [Choice values](#choice-values). Its error text becomes the one shown there.
+
+Usage lines and parsing stay the same, and so does the help row of a one-paragraph
+doc comment (only the first paragraph is printed now). The derive still writes the
+snake_case constructor (`source_name()`), so a `#[bpaf(external(source_name))]`
+that embeds the type elsewhere keeps working. Keep `#[derive(Bpaf)]` for a type
+with several fields, and for one that needs another bpaf attribute, such as
+`fallback`, `env` or a guard. Your crate needs the direct `bpaf` dependency only
+while something still uses `#[derive(Bpaf)]`.
 
 ## Upgrading from 0.1
 
@@ -821,11 +1010,14 @@ The full list is in [`CHANGELOG.md`](CHANGELOG.md#breaking--upgrading-from-01).
   `hicli::curried_command`, `hicli::group_args` and `Node::by_default`. Anything the
   macros generate, you can also write yourself.
 - **Coming from clap:** the help layout is bpaf's, not clap's. Globals are parsed once
-  and can't be overridden per subcommand. Argument spelling uses bpaf's attributes.
+  and can't be overridden per subcommand. A one-value argument is spelled with
+  `#[arg(…)]` on its type, and anything bigger with bpaf's own attributes.
   `--help` exits 0 and usage errors exit 2.
 - **Why it is designed this way:** [`docs/adr/`](docs/adr/). The main ones are
   [005](docs/adr/005-verbs-are-the-function.md) (a command is its function),
   [006](docs/adr/006-an-argument-is-a-type.md) (an argument is a type),
+  [016](docs/adr/016-hicli-spells-one-value-argument-types.md) (`#[arg(…)]`,
+  `Choice` and the help rule),
   [011](docs/adr/011-curried-commands-and-default-commands.md) (curried groups and
   default commands) and
   [012](docs/adr/012-command-errors-convert-through-into-failure.md) (errors).

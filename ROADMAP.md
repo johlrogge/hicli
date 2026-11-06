@@ -16,7 +16,7 @@ work", `#[group(args = T)]`) were earned by mdma-cli (#1) and shipped in
 ## Releases for mdma-cli
 
 The mdma-cli evaluation (2026-11-03) filed issues #1–#18 against hicli as a clap
-replacement. The essentials are split across three releases:
+replacement. The essentials are split across these releases:
 
 - **0.1.0:** help metadata and examples (#2, #9: ADR-008), completion scripts
   (#12: ADR-009), values starting with `-` (#5; since 0.4 the glued `--added=-7` only, #29), and the
@@ -32,11 +32,18 @@ replacement. The essentials are split across three releases:
   `Error: ` on parse errors and command failures (#31, ADR-015); only the glued
   `--added=-7` for values starting with `-` (#29); long usage lines wrap
   between items (#30, ADR-013 §4, a workaround for bpaf#471).
+- **0.5.0:** choice values and one-value argument types spelled by hicli
+  (#8, #23, ADR-016): `#[derive(Choice)]` (`Shell` is one), a spelled
+  `#[derive(Arg)]` with `#[arg(positional | long | short, metavar, complete)]`
+  whose type doc is its help and whose Choice completes on its own, a command's
+  `# Arguments` section overriding a help row through `ArgHelp`, and one help
+  rule (the first paragraph) everywhere; plus `cli!` words split at whitespace
+  only (#22, ADR-017).
 - **Next:** `mk_ctx` seeing the selected command (#7), pending mdma-cli's
   review of the proposed answer: a lazy context (`ctx.node()?`) and no new API
   (ADR-014 once accepted). Parse errors naming the failed option (#26) need a
   bpaf change and are on hold.
-- **Unscheduled:** choice enums (#8), owned command names (#10), the
+- **Unscheduled:** owned command names (#10), the
   positionals-last check (#11), globals-aware completion (#13), and the
   nice-to-haves #14–#18.
 
@@ -59,6 +66,10 @@ replacement. The essentials are split across three releases:
 
 <!-- Completed milestones -->
 
+- 0.5.0, spelled argument types (ADR-016, ADR-017, 2026-11-06, #8 #22 #23):
+  `#[derive(Choice)]`, a spelled `#[derive(Arg)]` whose type doc is its help,
+  `# Arguments` overrides through `ArgHelp`, the first-paragraph help rule, and
+  `cli!` words split at whitespace
 - 0.4.0, colour and wrapping (ADR-015, 2026-11-05, #29 #30 #31): a default
   `color` feature, `Error: ` on parse errors and command failures, long usage
   lines wrapped between items

@@ -7,6 +7,118 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Before 1.0, a minor version may carry breaking changes; they are listed under
 "Breaking" with what to change.
 
+## [0.5.0] — 2026-11-06
+
+### Added
+
+- `Choice`, `#[derive(Choice)]` and `UnknownChoice`: an enum whose variants have no
+  fields is a fixed set of words. The derive writes `Choice`, `FromStr` (exact,
+  case-sensitive) and `Display` from the variants: each is spelled as its ident in
+  kebab-case (`PlayCount` → `play-count`) or its `#[choice(name = "…")]`, and the first
+  paragraph of its doc comment is its completion description. A word that is none of them
+  fails with `UnknownChoice`, which lists the names and suggests a close one:
+  ``expected `bpm`, `title` or `by-artist`; did you mean `bpm`?`` (#8).
+- `complete_choice::<C>(typed)`: the names of a choice that start with `typed`, with
+  their descriptions — a completer for a string-level parser, completed before it is
+  parsed (`.complete(|w: &String| complete_choice::<C>(w)).parse(|w: String| w.parse::<C>())`).
+- Spelled `#[derive(Arg)]`: `#[arg(positional)]`, `#[arg(positional = "KEY")]`,
+  `#[arg(long)]`, `#[arg(long = "sort", short = 's', metavar = "FIELD")]` spell the
+  argument on the type itself, with no `#[derive(Bpaf)]` and no direct `bpaf`
+  dependency. The type is a newtype, a struct with one named field, or a fieldless
+  enum that derives `Choice`; `Option<T>` is optional, `Vec<T>` repeats, `bool` with a
+  name is a switch. The help row is the type's doc comment's first paragraph. A
+  `Choice` inside completes its names with no `complete` key;
+  `complete = f` takes `fn(&str) -> Vec<Candidate>` and is handed the raw word (so it
+  fires on the empty word, even for a `u16`); `files`/`dirs` work as before, and a
+  `PathBuf`/`OsString` value still accepts a non-UTF-8 word. The derive also writes
+  the snake_case constructor `#[derive(Bpaf)]` would have, so
+  `#[bpaf(external(sort_opt))]` still finds it. Types without these keys are derived
+  exactly as before (#8, ADR-016).
+- A `Choice` enum can be the argument itself: `#[derive(Choice, Arg)]` with
+  `#[arg(positional = "KEY")]` parses, completes and reports its names, so
+  `fn sort(by: SortKey)` takes the enum directly (#8).
+- `ArgHelp`: an argument type whose help row can be replaced where it is used,
+  through `ArgHelp::parser_with_help(help)`. Spelled types implement it; a
+  hand-written `Arg` may; a `#[derive(Bpaf, Arg)]` type does not.
+- `# Arguments` in a `#[command]`'s doc comment: `` * `by` - Order for this listing ``
+  replaces that parameter's help row in this command only (its type must be
+  `ArgHelp`). An entry may continue on indented lines. The section is not part of
+  the details. Naming a parameter that is not parsed (the context, a curried value),
+  naming one twice, an empty section, and the section on a `#[group]` or a
+  `#[command(default)]` are compile errors (#23, ADR-016).
+
+### Changed
+
+- `cli!` splits words where the source has whitespace, as a shell does, and nowhere
+  else: tokens that touch are one word. `cli! { playback set-output --dry-run }` is
+  `["playback", "set-output", "--dry-run"]`, and `--since=-7`, `--name="My Event"`,
+  `email,phone`, `a/b/c` and `./ev` need no quotes. Quoted words still work. `cli!` is
+  now a proc macro in `hicli-macros`, re-exported as `hicli::cli` (#22, ADR-017).
+  Edge cases that read differently:
+  - `-- foo` is `["--", "foo"]` (was `["--foo"]`);
+  - `--` is `["--"]` (was a compile error);
+  - `a - b` is `["a", "-", "b"]` (was `["a", "-b"]`);
+  - `- 5` is `["-", "5"]` (was `["-5"]`);
+  - `"a""b"` is `["ab"]` (was `["a", "b"]`);
+  - a number literal is kept as written: `0x10`, `1.50` and `5u8` stay `0x10`, `1.50`
+    and `5u8` (were `16`, `1.5` and `5`).
+
+  `#[macro_use] extern crate hicli;` still imports `cli!`. `hicli::testing::to_arg` is
+  no longer used by `cli!` and is now `#[doc(hidden)]`.
+- The "not a hicli argument type" error (a primitive or a bare `Choice` as a command
+  parameter) now suggests the spelled form first,
+  ``/// An event id` above `#[derive(Arg)] #[arg(positional = "ID")] struct Id(String);``,
+  and names `#[derive(Choice, Arg)]` and `#[derive(Bpaf, Arg)]`. Re-bless trybuild
+  `.stderr` files that record it.
+- Docs: the README, `examples/playr.rs` and its Quick start spell every one-value
+  argument type with `#[arg(…)]`; `examples/demo.rs` stays in bpaf mode, so both forms
+  remain documented. A direct `bpaf` dependency is now needed only by a crate that
+  uses `#[derive(Bpaf)]`.
+
+### Deprecated
+
+- `UnknownShell` is now an alias of `UnknownChoice`; use `UnknownChoice`.
+
+### Removed
+
+- The hidden `__cli_munch!` macro, which `cli!` used to expand through.
+
+### Breaking
+
+- `Shell` is a `#[derive(Choice)]`. Its `FromStr::Err` is `UnknownChoice` (the
+  deprecated `UnknownShell` alias still names it), and its error text changed from
+  ``unknown shell `tcsh`: expected one of `bash`, `zsh`, `fish` `` to
+  ``expected `bash`, `zsh` or `fish`; did you mean `bash`?``: the typed word is no
+  longer repeated, because bpaf already prints ``couldn't parse `tcsh`: `` in front of
+  it. `UnknownShell` was a tuple struct; code that built or destructured
+  `UnknownShell(…)` no longer compiles.
+- **A help is the doc comment's first paragraph, everywhere** (ADR-016, replacing
+  ADR-001/ADR-008's "first line"). For a `#[command]` or `#[group]`, consecutive
+  lines up to the first blank line are joined with a space into the help; the
+  details start after that blank line. A doc comment whose second line directly
+  followed the first used to show that line as the start of the details; now it is
+  part of the help. **Fix: put a blank `///` line between the help and the
+  details.** A `#[command(default)]`'s doc comment is one paragraph (was one line).
+  A `Choice` variant's description is likewise its first paragraph.
+- `#[arg(…)]` on a type whose parser `#[derive(Bpaf)]` writes now rejects
+  `complete = f, complete = g` with ``"`complete` is given twice"`` (was the
+  unknown-key message), and the unknown-key message lists the new keys.
+  `#[arg(metavar = …)]` without `positional`, `long` or `short` is rejected.
+- A `# Arguments` or `Arguments:` line in a command's details (before any examples
+  heading) now starts the arguments section instead of being prose, and its
+  entries must name the command's parameters. A rustdoc-style `# Arguments` section
+  you already had is now read: an entry for a `#[derive(Bpaf)]` type is E0277, and
+  any other line is rejected. **Fix: remove the section, or spell the types with
+  `#[arg(…)]` and keep the entries as help overrides.**
+
+### Breaking (tests only)
+
+- `cli!` rejects a bracketed group (`(a)`, `[a]`, `{a}`) and a byte or C string
+  (`b"a"`, `c"a"`) with a compile error; quote the word as a `"string literal"`
+  instead. Before, a bracketed group was stringified (`[a]` was `"[a]"`, `(a b)` was
+  `"(a b)"`), and a byte string failed with a type error about `Display`.
+- The `cli!` edge cases listed under Changed read differently.
+
 ## [0.4.0] — 2026-11-05
 
 No breaking API changes. Output changed: parse errors and command failures start
@@ -186,6 +298,7 @@ because snapshot tests of help pages need re-blessing.
 First release: help metadata and the doc comment's `# Examples` footer (ADR-008),
 completion scripts (ADR-009) and groups in files (ADR-010).
 
+[0.5.0]: https://github.com/johlrogge/hicli/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/johlrogge/hicli/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/johlrogge/hicli/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/johlrogge/hicli/compare/v0.2.0...v0.2.1

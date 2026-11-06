@@ -1,0 +1,5 @@
+error: each entry under `# Arguments` is `* `name` - help`
+  --> tests/ui/command_arguments_malformed.rs:14:1
+   |
+14 | /// `by` orders the listing.
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

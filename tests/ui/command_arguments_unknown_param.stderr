@@ -1,0 +1,5 @@
+error: # Arguments names `bye`, which is not a parameter of `list`; its parameters are `by`
+  --> tests/ui/command_arguments_unknown_param.rs:14:1
+   |
+14 | /// * `bye` - Order for this listing
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

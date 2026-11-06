@@ -198,6 +198,84 @@ fn cli_macro_empty_is_empty() {
     assert!(empty.is_empty());
 }
 
+/// The word rule, driven through the real proc macro: tokens that touch in the
+/// source are one word, whitespace separates words — as in a shell.
+///
+/// One row per line of the mapping in ADR-017, compared as a whole so a
+/// failure shows every row at once.
+#[test]
+fn cli_macro_words_are_whitespace_separated() {
+    let got: Vec<Vec<String>> = vec![
+        cli! { playback set-output hdmi },
+        cli! { --dry-run },
+        cli! { -v },
+        cli! { -5 },
+        cli! { --since=-7 },
+        cli! { --name="My Event" },
+        cli! { email,phone },
+        cli! { a/b/c },
+        cli! { ./ev },
+        cli! { -- foo },
+        cli! { -- },
+        cli! { a - b },
+        cli! { - 5 },
+        cli! { "" },
+        cli! { x "My Event" },
+        cli! { "a""b" },
+        cli! {},
+        // Literals are kept as written, not re-rendered through `Display`.
+        cli! { 0x10 1.50 5u8 },
+        // A char literal is its value.
+        cli! { 'c' },
+        // Words on separate lines are separate words.
+        cli! {
+            a
+            b
+        },
+    ];
+    let want: Vec<Vec<&str>> = vec![
+        vec!["playback", "set-output", "hdmi"],
+        vec!["--dry-run"],
+        vec!["-v"],
+        vec!["-5"],
+        vec!["--since=-7"],
+        vec!["--name=My Event"],
+        vec!["email,phone"],
+        vec!["a/b/c"],
+        vec!["./ev"],
+        vec!["--", "foo"],
+        vec!["--"],
+        vec!["a", "-", "b"],
+        vec!["-", "5"],
+        vec![""],
+        vec!["x", "My Event"],
+        vec!["ab"],
+        vec![],
+        vec!["0x10", "1.50", "5u8"],
+        vec!["c"],
+        vec!["a", "b"],
+    ];
+    assert_eq!(got, want);
+}
+
+/// A word forwarded by a `macro_rules!` keeps its spans, so it is still one
+/// word on the far side — `cli_test!` forwards token trees exactly this way.
+#[test]
+fn cli_macro_words_survive_forwarding() {
+    macro_rules! forward_tt {
+        ($($t:tt)*) => { cli!($($t)*) };
+    }
+    macro_rules! forward_expr {
+        ($e:expr) => { cli!(set $e) };
+    }
+    assert_eq!(
+        forward_tt! { playback set-output --dry-run },
+        ["playback", "set-output", "--dry-run"]
+    );
+    // An `:expr` capture arrives in an invisible group, which is flattened.
+    assert_eq!(forward_expr!("My Event"), ["set", "My Event"]);
+}
+
 /// Deliberately a path that cannot exist: if registration, help rendering or
 /// dispatch ever spawned the binary, every test below would fail.
 const EXT_BIN: &str = "/nonexistent/hicli-external-foo";
@@ -549,11 +627,28 @@ fn app_with_returns() -> App<Globals, Ctx> {
     }
 }
 
+// A dashed command name needs no quotes: `ret-unit` is one word because its
+// tokens touch. Forwarded through `cli_test!`, which passes token trees on to
+// `cli!` with their spans intact.
+cli_test! {
+    app: app_with_returns();
+
+    dashed_name_unquoted: { ret-unit } => |r| {
+        let (_g, invocation) = r.expect("parses");
+        assert_eq!(invocation.path(), ["ret-unit"]);
+    },
+    dashed_name_with_flag: { ret-outcome-success --home=somewhere } => |r| {
+        let (g, invocation) = r.expect("parses");
+        assert_eq!(invocation.path(), ["ret-outcome-success"]);
+        assert_eq!(g.home, "somewhere");
+    },
+}
+
 #[test]
 fn command_accepts_a_unit_return() {
     let log = log();
-    // A dashed command name must be quoted in `cli!` — bare `ret-unit` lexes as
-    // three tokens and the muncher would read `-unit` as a short flag.
+    // The quoted spelling of a dashed name still works: a string literal is
+    // its value.
     let code = app_with_returns().run_with_args(cli! { "ret-unit" }, ctx_from(&log));
     assert_eq!(code, 0);
     assert_eq!(ran(&log), ["ret-unit:."]);

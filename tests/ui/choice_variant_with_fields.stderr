@@ -1,0 +1,5 @@
+error: a choice variant has no fields: it is one of a fixed set of words
+ --> tests/ui/choice_variant_with_fields.rs:9:10
+  |
+9 |     Field(String),
+  |          ^^^^^^^^

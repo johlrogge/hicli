@@ -1,0 +1,14 @@
+error[E0277]: `SortKey` is not a hicli argument type
+  --> tests/ui/choice_is_not_an_arg.rs:19:15
+   |
+19 | fn sort(_key: SortKey, _ctx: &Ctx) {}
+   |               ^^^^^^^ this parameter's type must implement `Arg`
+   |
+help: the trait `Arg` is not implemented for `SortKey`
+  --> tests/ui/choice_is_not_an_arg.rs:12:1
+   |
+12 | enum SortKey {
+   | ^^^^^^^^^^^^
+   = note: an argument is a type: give it a documented newtype — `/// An event id` above `#[derive(Arg)] #[arg(positional = "ID")] struct Id(String);`
+   = note: a choice enum is spelled the same way: `#[derive(Choice, Arg)] #[arg(positional = "KEY")]`; a type with several fields is `#[derive(Bpaf, Arg)]`
+   = note: hicli ships no `Arg` impls for `String`, `u64`, `PathBuf`, … on purpose: the metavar and positional-vs-option are yours to name

@@ -5,13 +5,14 @@
 //! never has to make a judgement call — and every rejection is raised with a
 //! span pointing at the token the author has to change.
 
-use quote::format_ident;
+use quote::{format_ident, ToTokens};
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, Error, FnArg, Ident, ItemFn, LitStr, Pat, Result, Signature, Token, Type};
 
 use crate::shared::{
-    cfg_attrs, check_spelling, dashed, handle_ident, parse_keys, read_doc, CommandMeta, Spelling,
-    COMMAND_NEEDS_DOC,
+    cfg_attrs, check_spelling, dashed, handle_ident, parse_keys, read_doc, Arguments, CommandMeta,
+    Spelling, COMMAND_NEEDS_DOC,
 };
 
 /// The message for an argument `#[command]` does not take.
@@ -27,11 +28,11 @@ const CURRIED_NOTHING: &str = "a `curried` command receives its group's argument
 const CURRIED_DEFAULT: &str = "`curried` and `default` cannot be combined: a group that hands its \
                                commands an argument has no default command";
 
-/// The message for a `default` command whose doc comment says more than one
-/// line.
+/// The message for a `default` command whose doc comment says more than its
+/// first paragraph.
 const DEFAULT_DOC: &str = "a `default` command is shown on its group's help page, so its doc \
-                           comment is its one-line help only: move the details and examples to \
-                           the group's doc comment";
+                           comment is its help only, one paragraph: move the details and examples \
+                           to the group's doc comment";
 
 /// The message for `default` together with a key that spells or hides the
 /// command's name: `name`, `alias` or `hide`, each with its own reason.
@@ -166,7 +167,7 @@ pub(crate) enum Slot {
 pub(crate) struct CommandFn {
     /// The command's name on the command line.
     pub(crate) name: String,
-    /// The one-line help: the doc comment's first line.
+    /// The help: the doc comment's first paragraph, joined into one line.
     pub(crate) help: String,
     /// The rest of the doc comment up to an examples heading, if any.
     pub(crate) details: Option<String>,
@@ -193,6 +194,9 @@ pub(crate) struct CommandFn {
     /// written**, in declaration order. Each is resolved through `Arg` at
     /// expansion time, spanned where the author wrote it.
     pub(crate) arg_tys: Vec<Type>,
+    /// The `# Arguments` help for each of those parameters, if it has one: the
+    /// handle builds that parameter's parser with `ArgHelp::parser_with_help`.
+    pub(crate) helps: Vec<Option<String>>,
     /// The closure binding for each of those parameters, in declaration order.
     pub(crate) bindings: Vec<Ident>,
     /// The original parameter order, for the call into the function.
@@ -217,22 +221,37 @@ impl CommandFn {
     pub(crate) fn from_item(args: CommandArgs, item: ItemFn) -> Result<CommandFn> {
         check_signature(&item.sig)?;
         let mut params = Params::read(&item.sig)?;
+        let mut curried_name: Option<Ident> = None;
         let curried = match &args.curried {
             None => None,
             Some(key) if params.arg_tys.is_empty() => {
                 return Err(Error::new_spanned(key, CURRIED_NOTHING))
             }
-            Some(_) => Some(CurriedParam {
-                ty: params.arg_tys.remove(0),
-                binding: params.bindings.remove(0),
-            }),
+            Some(_) => {
+                curried_name = Some(params.names.remove(0));
+                Some(CurriedParam {
+                    ty: params.arg_tys.remove(0),
+                    binding: params.bindings.remove(0),
+                })
+            }
         };
         let doc = read_doc(&item.attrs, &item.sig, COMMAND_NEEDS_DOC)?;
         if let Some(key) = &args.default {
-            if doc.details.is_some() || doc.footer.is_some() {
+            // ADR-011, now one paragraph: overrides on a default are deferred
+            // with the rest of its doc comment.
+            if doc.details.is_some() || doc.footer.is_some() || doc.arguments.is_some() {
                 return Err(Error::new_spanned(key, DEFAULT_DOC));
             }
         }
+        let helps = match &doc.arguments {
+            None => vec![None; params.arg_tys.len()],
+            Some(a) => overrides(
+                a,
+                &item.sig.ident,
+                &params,
+                curried_name.as_ref().zip(curried.as_ref().map(|c| &c.ty)),
+            )?,
+        };
         let ident = item.sig.ident.clone();
         let name = match args.name {
             Some(n) => n.value(),
@@ -252,6 +271,7 @@ impl CommandFn {
             default: args.default.is_some(),
             curried,
             arg_tys: params.arg_tys,
+            helps,
             bindings: params.bindings,
             slots: params.slots,
             ctx_ty: params.ctx_ty,
@@ -309,10 +329,83 @@ struct Params {
     arg_tys: Vec<Type>,
     /// One closure binding per owned parameter, in declaration order.
     bindings: Vec<Ident>,
+    /// The name each owned parameter was declared under, in declaration order
+    /// — what an `# Arguments` entry names.
+    names: Vec<Ident>,
     /// Every parameter, in declaration order.
     slots: Vec<Slot>,
     /// The context type, if a `&T` parameter was declared.
     ctx_ty: Option<Type>,
+    /// The context parameter's name, if there is one.
+    ctx_name: Option<Ident>,
+}
+
+/// The parameter-help overrides an `# Arguments` section gives, one slot per
+/// parsed parameter (aligned with `arg_tys`), or why an entry names nothing
+/// that can take one.
+fn overrides(
+    a: &Arguments,
+    function: &Ident,
+    params: &Params,
+    curried: Option<(&Ident, &Type)>,
+) -> Result<Vec<Option<String>>> {
+    let mut helps: Vec<Option<String>> = vec![None; params.names.len()];
+    let mut seen: Vec<&str> = Vec::new();
+    for e in &a.entries {
+        // `r#type` and `type` name the same parameter.
+        let bare = e.name.strip_prefix("r#").unwrap_or(&e.name);
+        if seen.contains(&bare) {
+            return Err(Error::new_spanned(
+                &e.at,
+                format!("# Arguments gives `{}` twice", e.name),
+            ));
+        }
+        seen.push(bare);
+        if let Some(i) = params.names.iter().position(|n| n.unraw() == bare) {
+            helps[i] = Some(e.help.clone());
+            continue;
+        }
+        let message = if params.ctx_name.as_ref().is_some_and(|c| c.unraw() == bare) {
+            format!(
+                "# Arguments names `{}`, the context: it is not parsed, so it has no help",
+                e.name
+            )
+        } else if let Some((_, ty)) = curried.filter(|(c, _)| c.unraw() == bare) {
+            let ty = ty.to_token_stream().to_string().replace(' ', "");
+            format!(
+                "# Arguments names `{}`, which its group parses (`args = {ty}`): its help is the \
+                 type's",
+                e.name
+            )
+        } else {
+            let names: Vec<String> = params
+                .names
+                .iter()
+                .map(|n| format!("`{}`", n.unraw()))
+                .collect();
+            let f = function.unraw();
+            match names.as_slice() {
+                [] => format!(
+                    "# Arguments names `{}`, which is not a parameter of `{f}`, and `{f}` parses \
+                     no arguments",
+                    e.name
+                ),
+                [one] => format!(
+                    "# Arguments names `{}`, which is not a parameter of `{f}`; its parameters \
+                     are {one}",
+                    e.name
+                ),
+                [init @ .., last] => format!(
+                    "# Arguments names `{}`, which is not a parameter of `{f}`; its parameters \
+                     are {} and {last}",
+                    e.name,
+                    init.join(", ")
+                ),
+            }
+        };
+        return Err(Error::new_spanned(&e.at, message));
+    }
+    Ok(helps)
 }
 
 impl Params {
@@ -322,8 +415,10 @@ impl Params {
         let mut p = Params {
             arg_tys: Vec::new(),
             bindings: Vec::new(),
+            names: Vec::new(),
             slots: Vec::new(),
             ctx_ty: None,
+            ctx_name: None,
         };
         for input in &sig.inputs {
             let typed = match input {
@@ -336,6 +431,10 @@ impl Params {
                 FnArg::Typed(t) => t,
             };
             check_pattern(&typed.pat)?;
+            let name = match &*typed.pat {
+                Pat::Ident(p) => p.ident.clone(),
+                _ => unreachable!("check_pattern admits only a plain name"),
+            };
             match &*typed.ty {
                 Type::Reference(r) => {
                     if r.mutability.is_some() {
@@ -353,6 +452,7 @@ impl Params {
                         ));
                     }
                     p.ctx_ty = Some((*r.elem).clone());
+                    p.ctx_name = Some(name);
                     p.slots.push(Slot::Ctx);
                 }
                 Type::Path(path) if path.qself.is_none() => {
@@ -360,6 +460,7 @@ impl Params {
                     // through `Arg`, and a type that is not one has to be
                     // reported at the parameter the author typed.
                     p.arg_tys.push(Type::Path(path.clone()));
+                    p.names.push(name);
                     let binding = format_ident!("a{}", p.bindings.len());
                     p.bindings.push(binding.clone());
                     p.slots.push(Slot::Arg(binding));
@@ -571,7 +672,21 @@ mod tests {
             rejection_on("curried", "/// go\nfn go(ctx: &Ctx) {}"),
             CURRIED_NOTHING
         );
-        // A default command's doc comment is one line.
+        // A default command's doc comment is one paragraph — which may run
+        // over several lines.
+        let c = command_with(
+            "default",
+            "/// search the library\n/// by text\nfn search() {}",
+        )
+        .expect("one paragraph");
+        assert_eq!(c.help, "search the library by text");
+        assert_eq!(
+            rejection_on(
+                "default",
+                "/// search\n/// by text\n///\n/// More.\nfn search() {}"
+            ),
+            DEFAULT_DOC
+        );
         assert_eq!(
             rejection_on("default", "/// search\n///\n/// More.\nfn search() {}"),
             DEFAULT_DOC
@@ -580,6 +695,87 @@ mod tests {
             rejection_on(
                 "default",
                 "/// search\n///\n/// # Examples\n///\n/// demo search\nfn search() {}"
+            ),
+            DEFAULT_DOC
+        );
+    }
+
+    #[test]
+    fn arguments_entries_land_on_their_parameters() {
+        let c = command_with(
+            "",
+            "/// list\n///\n/// # Arguments\n/// * `by` - Order\n/// * `r#type` - Kind\n\
+             fn list(d: Desc, by: SortOpt, r#type: Kind, ctx: &Ctx) {}",
+        )
+        .expect("is a command");
+        assert_eq!(
+            c.helps,
+            [None, Some("Order".to_string()), Some("Kind".to_string())]
+        );
+        // A curried command's slots are its parsed parameters only.
+        let c = command_with(
+            "curried",
+            "/// sync\n///\n/// # Arguments\n/// * `apply` - Really\n\
+             fn sync(source: SourceName, apply: Apply, ctx: &Ctx) {}",
+        )
+        .expect("is a command");
+        assert_eq!(c.helps, [Some("Really".to_string())]);
+        let c = command_with("", "/// list\nfn list(by: SortOpt) {}").expect("is a command");
+        assert_eq!(c.helps, [None]);
+    }
+
+    #[test]
+    fn each_arguments_rejection_is_raised() {
+        assert_eq!(
+            rejection_on(
+                "",
+                "/// list\n/// # Arguments\n/// * `bye` - x\nfn list(by: SortOpt, ctx: &Ctx) {}"
+            ),
+            "# Arguments names `bye`, which is not a parameter of `list`; its parameters are `by`"
+        );
+        assert_eq!(
+            rejection_on(
+                "",
+                "/// list\n/// # Arguments\n/// * `x` - x\nfn list(a: A, b: B, c: C) {}"
+            ),
+            "# Arguments names `x`, which is not a parameter of `list`; its parameters are `a`, \
+             `b` and `c`"
+        );
+        assert_eq!(
+            rejection_on(
+                "",
+                "/// list\n/// # Arguments\n/// * `x` - x\nfn list(ctx: &Ctx) {}"
+            ),
+            "# Arguments names `x`, which is not a parameter of `list`, and `list` parses no \
+             arguments"
+        );
+        assert_eq!(
+            rejection_on(
+                "",
+                "/// list\n/// # Arguments\n/// * `ctx` - x\nfn list(by: SortOpt, ctx: &Ctx) {}"
+            ),
+            "# Arguments names `ctx`, the context: it is not parsed, so it has no help"
+        );
+        assert_eq!(
+            rejection_on(
+                "curried",
+                "/// sync\n/// # Arguments\n/// * `source` - x\n\
+                 fn sync(source: SourceName, ctx: &Ctx) {}"
+            ),
+            "# Arguments names `source`, which its group parses (`args = SourceName`): its help \
+             is the type's"
+        );
+        assert_eq!(
+            rejection_on(
+                "",
+                "/// list\n/// # Arguments\n/// * `by` - x\n/// * `by` - y\nfn list(by: S) {}"
+            ),
+            "# Arguments gives `by` twice"
+        );
+        assert_eq!(
+            rejection_on(
+                "default",
+                "/// search\n///\n/// # Arguments\n/// * `q` - x\nfn search(q: Query) {}"
             ),
             DEFAULT_DOC
         );

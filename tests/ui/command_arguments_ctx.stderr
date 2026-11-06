@@ -1,0 +1,5 @@
+error: # Arguments names `ctx`, the context: it is not parsed, so it has no help
+  --> tests/ui/command_arguments_ctx.rs:11:1
+   |
+11 | /// * `ctx` - The shared state
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

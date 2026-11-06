@@ -457,6 +457,22 @@ pub(crate) fn candidate_values(out: &str) -> Vec<String> {
         .collect()
 }
 
+/// The candidate **values** `parser` offers for `word`, driven through
+/// `bpaf`'s revision-1 wire protocol in-process.
+///
+/// Revision 1 on purpose, everywhere: revision 2 through `run_inner`
+/// terminates the process (see [`App::complete`]).
+#[cfg(test)]
+pub(crate) fn completions<T: 'static>(parser: impl Parser<T> + 'static, word: &str) -> Vec<String> {
+    let out = parser
+        .to_options()
+        .run_inner(&[COMPLETE_REV_1, word][..])
+        .err()
+        .expect("completion short-circuits with a ParseFailure")
+        .unwrap_stdout();
+    candidate_values(&out)
+}
+
 /// The remapped process exit code for a `bpaf` parse failure.
 ///
 /// `bpaf` uses `1` for usage errors and `0` for help/version/completion; this

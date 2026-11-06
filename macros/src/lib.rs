@@ -1,5 +1,6 @@
 //! Procedural macros for [`hicli`](https://docs.rs/hicli):
-//! [`macro@command`], [`macro@group`], [`macro@commands`] and [`derive@Arg`].
+//! [`macro@command`], [`macro@group`], [`macro@commands`], [`macro@cli`],
+//! [`derive@Arg`] and [`derive@Choice`].
 //!
 //! Nothing here is meant to be depended on directly: `hicli` re-exports
 //! them and pins this crate to an exact version, so the macros and the runtime
@@ -20,6 +21,8 @@
 //! expansion.
 
 mod arg;
+mod choice;
+mod cli;
 mod commands;
 mod ctx;
 mod discover;
@@ -113,7 +116,7 @@ impl CallSite {
 /// - `default` — the command runs when its group is invoked without naming a
 ///   command; the handle ends in `.by_default()`. It has no name of its own to
 ///   spell or hide, so `name`, `alias` and `hide` are refused with it, and its
-///   doc comment is one line (details and examples belong to the group).
+///   doc comment is one paragraph (details and examples belong to the group).
 ///
 /// ```ignore
 /// /// cancel a download
@@ -135,8 +138,23 @@ pub fn command(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Implement `hicli::Arg` for an argument type, through its `bpaf`
-/// constructor.
+/// Implement `hicli::Arg` for an argument type, in one of two modes.
+///
+/// **Spelled mode** — `positional`, `long` or `short` in `#[arg(…)]`: hicli
+/// spells a one-value type itself. Its doc comment's first paragraph is the
+/// help row, a `Choice` inside completes on its own, and the derive also
+/// writes the snake_case constructor and a `hicli::ArgHelp` impl, so a
+/// command's `# Arguments` entry can replace the row:
+///
+/// ```ignore
+/// /// Sort the listing by this field
+/// #[derive(Arg)]
+/// #[arg(long = "sort", short = 's', metavar = "FIELD")]
+/// struct SortOpt(Option<SortField>);
+/// ```
+///
+/// **bpaf mode** — none of those keys: the parser is the constructor
+/// `#[derive(Bpaf)]` wrote, optionally wrapped in a completer.
 ///
 /// ```ignore
 /// #[derive(Bpaf, Arg)]
@@ -144,14 +162,40 @@ pub fn command(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// struct Id(#[bpaf(positional("ID"))] String);
 /// ```
 ///
-/// The full contract — the constructor it calls, the completion shorthands, the
-/// impl it writes and every rejection — is documented on
-/// [`hicli::Arg`](https://docs.rs/hicli), which is where consumers read
-/// it.
+/// The full contract — the keys, the shapes, the constructor it calls or
+/// writes, the completion shorthands, the items it writes and every
+/// rejection — is documented on [`hicli::Arg`](https://docs.rs/hicli), which
+/// is where consumers read it.
 #[proc_macro_derive(Arg, attributes(arg))]
 pub fn arg(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match arg::expand(input) {
+        Ok(tokens) => tokens.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+/// Implement `hicli::Choice`, `FromStr` and `Display` for an enum whose
+/// variants are a fixed set of words.
+///
+/// ```ignore
+/// #[derive(Choice)]
+/// pub enum SortKey {
+///     /// Beats per minute
+///     Bpm,
+///     Title,
+///     #[choice(name = "by-artist")]
+///     Artist,
+/// }
+/// ```
+///
+/// The full contract — the names, the descriptions, the impls it writes and
+/// every rejection — is documented on [`hicli::Choice`](https://docs.rs/hicli),
+/// which is where consumers read it.
+#[proc_macro_derive(Choice, attributes(choice))]
+pub fn choice(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match choice::expand(input) {
         Ok(tokens) => tokens.into(),
         Err(e) => e.to_compile_error().into(),
     }
@@ -232,4 +276,20 @@ pub fn group(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn commands(input: TokenStream) -> TokenStream {
     commands::expand(input.into()).into()
+}
+
+/// Build an argv `Vec<String>` from raw command-line tokens: tokens that touch
+/// in the source are one word, and whitespace separates words, as in a shell.
+///
+/// ```ignore
+/// assert_eq!(cli! { playback set-output --dry-run "My Event" },
+///            ["playback", "set-output", "--dry-run", "My Event"]);
+/// ```
+///
+/// The full contract — the word rule, how literals read, and the two
+/// rejections — is documented on [`hicli::cli`](https://docs.rs/hicli), which
+/// is where consumers read it.
+#[proc_macro]
+pub fn cli(input: TokenStream) -> TokenStream {
+    cli::expand(input.into()).into()
 }

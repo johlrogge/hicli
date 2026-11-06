@@ -1,5 +1,6 @@
-//! `complete` is the only thing `#[arg(…)]` has to say. The metavar, the
-//! positional-vs-option question and the command's own name all live elsewhere.
+//! `#[arg(…)]` has five keys — `positional`, `long`, `short`, `metavar` and
+//! `complete` — and the message lists them all. The command's own name lives
+//! elsewhere.
 
 use hicli::Arg;
 

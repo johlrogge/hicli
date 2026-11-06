@@ -14,6 +14,14 @@ error, which is strictly stronger than the required-parameter enforcement
 below. The "would need a proc-macro" line under Alternatives is exactly what
 ADR-004 built once moniker's adoption justified the proc-macro dependency.
 
+**Amended by [ADR-016](016-hicli-spells-one-value-argument-types.md)
+(2026-11-06): the help is the doc comment's first paragraph, not its first
+line.** Consecutive lines up to the first blank line are joined with a space
+into the help, which is still mandatory and still one line in a listing; a
+second line that directly follows the first is now part of the help, not the
+start of the details. The same rule covers groups, argument types spelled by
+`#[arg(…)]`, `# Arguments` entries and `Choice` variants.
+
 Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verbandi` → `hicli`, `#[verb]` → `#[command]`, `Verb` → `Invocation`, `VerbResult` → `Outcome`). The text below is kept exactly as written.
 
 ## Decision

@@ -5,5 +5,6 @@ error[E0277]: `String` is not a hicli argument type
    |                  ^^^^^^ this parameter's type must implement `Arg`
    |
    = help: the trait `Arg` is not implemented for `String`
-   = note: an argument is a type: give it a newtype — `#[derive(Bpaf, Arg)] struct Id(#[bpaf(positional("ID"))] String);`
+   = note: an argument is a type: give it a documented newtype — `/// An event id` above `#[derive(Arg)] #[arg(positional = "ID")] struct Id(String);`
+   = note: a choice enum is spelled the same way: `#[derive(Choice, Arg)] #[arg(positional = "KEY")]`; a type with several fields is `#[derive(Bpaf, Arg)]`
    = note: hicli ships no `Arg` impls for `String`, `u64`, `PathBuf`, … on purpose: the metavar and positional-vs-option are yours to name

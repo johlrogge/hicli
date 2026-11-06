@@ -1,0 +1,23 @@
+error[E0277]: `Mode` is not a hicli choice
+ --> tests/ui/arg_spelled_enum_not_choice.rs:6:10
+  |
+6 | #[derive(Arg)]
+  |          ^^^ `Mode` must implement `Choice`
+  |
+help: the trait `Choice` is not implemented for `Mode`
+ --> tests/ui/arg_spelled_enum_not_choice.rs:8:1
+  |
+8 | pub enum Mode {
+  | ^^^^^^^^^^^^^
+  = note: an enum spelled by `#[arg(...)]` is a choice: add `#[derive(Choice)]` to it
+help: the trait `Choice` is implemented for `Shell`
+ --> src/completion.rs
+  |
+  | #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Choice)]
+  |                                                   ^^^^^^
+note: required by a bound in `hicli::__private::choice`
+ --> src/private.rs
+  |
+  | pub fn choice<C: Choice>(word: impl Parser<String>) -> impl Parser<C> {
+  |                  ^^^^^^ required by this bound in `choice`
+  = note: this error originates in the derive macro `Arg` which comes from the expansion of the derive macro `Choice` (in Nightly builds, run with -Z macro-backtrace for more info)

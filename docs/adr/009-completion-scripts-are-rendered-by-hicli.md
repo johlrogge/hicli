@@ -8,6 +8,21 @@ Resolves johlrogge/hicli#12. Builds on ADR-006 (completion belongs to the
 argument type; `App::complete` pins revision 1 because revision 2 exits) and
 ADR-003 (the exit code is a value; hicli never calls `std::process::exit`).
 
+**Amended by [ADR-016](016-hicli-spells-one-value-argument-types.md)
+(2026-11-06).** `Shell` is a `#[derive(Choice)]`: its `FromStr::Err` is
+`UnknownChoice`, and `"tcsh"` fails with ``expected `bash`, `zsh` or `fish`;
+did you mean `bash`?``. **`UnknownShell` is deprecated** (since 0.5.0), an
+alias of `UnknownChoice`; it is no longer a tuple struct. Decision 5 stands —
+hicli still ships no `Arg` for `Shell` — but the documented newtype is spelled
+by hicli, and completes the shell names with no completer:
+
+```rust
+/// A shell to print completions for: bash, zsh or fish
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "SHELL")]
+pub struct ShellArg(pub hicli::Shell);
+```
+
 ## Decision
 
 ### 1. `completion_script(Shell, bin) -> String`

@@ -1,4 +1,4 @@
-error: a `default` command is shown on its group's help page, so its doc comment is its one-line help only: move the details and examples to the group's doc comment
+error: a `default` command is shown on its group's help page, so its doc comment is its help only, one paragraph: move the details and examples to the group's doc comment
   --> tests/ui/command_default_details.rs:11:11
    |
 11 | #[command(default)]

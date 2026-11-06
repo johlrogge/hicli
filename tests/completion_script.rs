@@ -53,10 +53,13 @@ pub fn store(home: Home, ctx: &Ctx) {
     let _ = (home.0, ctx);
 }
 
-/// A shell to generate completions for — the recipe from
-/// `completion_script`'s docs, compiled for real.
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct ShellArg(#[bpaf(positional("SHELL"))] pub hicli::Shell);
+// The recipe from `completion_script`'s docs, compiled for real. Its doc
+// comment's first paragraph is its help row.
+
+/// A shell to print completions for: bash, zsh or fish
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "SHELL")]
+pub struct ShellArg(pub hicli::Shell);
 
 /// print the shell completion script
 #[command(hide)]
@@ -168,19 +171,55 @@ fn shell_round_trips_through_its_name() {
 
 #[test]
 fn an_unknown_shell_is_an_error_naming_it() {
-    for name in ["elvish", "Bash", "", "powershell"] {
+    // `Shell` is a `Choice`: the error lists the names and leaves the typed
+    // word to bpaf's ``couldn't parse `tcsh`: `` in front of it.
+    for (name, want) in [
+        // Two edits from both `bash` and `zsh`: the tie goes to the earlier.
+        (
+            "tcsh",
+            "expected `bash`, `zsh` or `fish`; did you mean `bash`?",
+        ),
+        ("elvish", "expected `bash`, `zsh` or `fish`"),
+        ("", "expected `bash`, `zsh` or `fish`"),
+        ("powershell", "expected `bash`, `zsh` or `fish`"),
+        (
+            "Bash",
+            "expected `bash`, `zsh` or `fish`; did you mean `bash`?",
+        ),
+        (
+            "fishh",
+            "expected `bash`, `zsh` or `fish`; did you mean `fish`?",
+        ),
+    ] {
         let e = name.parse::<Shell>().expect_err("not a known shell");
-        let msg = e.to_string();
-        assert!(msg.contains(&format!("`{name}`")), "{name}: got {msg}");
-        assert!(msg.contains("bash") && msg.contains("zsh") && msg.contains("fish"));
+        assert_eq!(e.to_string(), want, "{name:?}");
+        assert_eq!(e.typed(), name);
         // It is a real error type, usable behind `?` in a `Box<dyn Error>`.
         let _: Box<dyn std::error::Error> = Box::new(e);
     }
 }
 
+#[test]
+#[allow(deprecated)]
+fn unknown_shell_is_still_the_shell_error_type() {
+    let e: hicli::UnknownShell = "tcsh".parse::<Shell>().expect_err("not a known shell");
+    let _: hicli::UnknownChoice = e;
+}
+
 // ---------------------------------------------------------------------------
 // The documented wiring: a `ShellArg` newtype and a hidden command.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn the_documented_shell_arg_completes_the_shells() {
+    // `Shell` is a `Choice`, so the spelled newtype completes with no
+    // completer of its own.
+    assert_eq!(
+        app().complete(cli! { "generate-completions" "" }),
+        ["bash", "zsh", "fish"]
+    );
+    assert_eq!(app().complete(cli! { "generate-completions" f }), ["fish"]);
+}
 
 #[test]
 fn the_documented_generate_completions_command_parses_and_runs() {
@@ -199,10 +238,9 @@ fn an_unknown_shell_is_a_usage_error_naming_the_choices() {
     match app().parse(cli! { "generate-completions" tcsh }) {
         Err(e @ ParseFailure::Stderr(..)) => {
             assert_eq!(exit_code_for(&e), 2);
-            let text = e.unwrap_stderr();
-            assert!(
-                text.contains("tcsh") && text.contains("zsh"),
-                "got:\n{text}"
+            assert_eq!(
+                e.unwrap_stderr(),
+                "couldn't parse `tcsh`: expected `bash`, `zsh` or `fish`; did you mean `bash`?"
             );
         }
         Err(_) => panic!("not a usage error"),

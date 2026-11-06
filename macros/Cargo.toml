@@ -1,11 +1,11 @@
 [package]
 name = "hicli-macros"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 # Matches `hicli`'s: `#[group]` on a file-module declaration needs attribute
 # macros on non-inline modules, stable since 1.99 (ADR-010).
 rust-version = "1.99"
-description = "Procedural macros for hicli: `#[command]` (a documented function is a subcommand), `#[group]` (a documented module, inline or a file, is a group, its children discovered), `commands!` and `#[derive(Arg)]`. Use the `hicli` crate, which re-exports them."
+description = "Procedural macros for hicli: `#[command]` (a documented function is a subcommand), `#[group]` (a documented module, inline or a file, is a group, its children discovered), `commands!`, `cli!`, `#[derive(Arg)]` and `#[derive(Choice)]`. Use the `hicli` crate, which re-exports them."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/johlrogge/hicli"
 # The workspace README: this crate has no standalone story, and pointing at the
@@ -18,7 +18,10 @@ categories = ["command-line-interface", "development-tools::procedural-macro-hel
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1"
+# `span-locations`: `cli!` reads whether two tokens touch from their
+# line/column (ADR-017). Real locations need rustc >= 1.88, which proc-macro2
+# detects with a stable compile probe.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 syn = { version = "2", features = ["full"] }
 

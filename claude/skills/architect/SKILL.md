@@ -26,12 +26,16 @@ shape), or makes adding a command heavier than "a new `#[command]` function in t
 that is a design regression worth calling out.
 
 **An argument is a type** (ADR-006: `docs/adr/006-an-argument-is-a-type.md`). Each owned
-parameter is a consumer-written type implementing `hicli::Arg` — ordinarily
-`#[derive(Bpaf, Arg)]` beside each other, `Arg` writing one impl that calls the constructor
-`#[derive(Bpaf)]` already generated. `#[command]` emits `<T as Arg>::parser()` for each owned
-parameter, never a name it synthesises. Completion is not a second concept: `#[arg(complete = f
-| files | dirs)]` on the type attaches a completer to the parser the type already returns, so
-every command taking that type inherits its completion for free. If a change reintroduces a blanket
+parameter is a consumer-written type implementing `hicli::Arg`, derived in one of two modes
+(ADR-016): **spelled** — `#[derive(Arg)] #[arg(positional | long | short, metavar, complete)]` on
+a newtype, a one-named-field struct or a `#[derive(Choice)]` enum, where hicli writes the bpaf
+chain, the type's doc comment's first paragraph is its help row, and the type also implements
+`ArgHelp` — or **bpaf mode** — `#[derive(Bpaf, Arg)]`, `Arg` writing one impl that calls the
+constructor `#[derive(Bpaf)]` already generated (the form for multi-field structs). `#[command]`
+emits `<T as Arg>::parser()` for each owned parameter, never a name it synthesises. Completion is
+not a second concept: `#[arg(complete = f | files | dirs)]` on the type attaches a completer to
+the parser the type already returns (spelled: `f(&str)`, the raw word; a `Choice` inside completes
+with no key), so every command taking that type inherits its completion for free. If a change reintroduces a blanket
 `impl<T: Bpaf> Arg for T`, ships an `Arg` impl for a primitive (`String`, `u64`, `PathBuf`, …), or
 moves completion back to being something written per-command, that is a design regression worth
 calling out.
@@ -63,17 +67,28 @@ calling out.
   child's exit code comes back as `Ok(Success::code(n))`, never `std::process::exit`.
 - `src/arg.rs` — `Arg` (one required method, `fn parser() -> impl Parser<Self>`, with
   `#[diagnostic::on_unimplemented]` notes), `Candidate` (`= (String, Option<String>)`), and the
-  completion helpers `complete_with`/`complete_files`/`complete_dirs` (ADR-006). Ships no `Arg`
-  impls for anything.
+  completion helpers `complete_with`/`complete_files`/`complete_dirs` (ADR-006), and `ArgHelp`
+  (`parser_with_help(&'static str)`, ADR-016), the trait through which a command's `# Arguments`
+  entry replaces a help row. Ships no `Arg` impls for anything.
+- `src/choice.rs` — `Choice` (`VARIANTS`/`name`/`description`), `UnknownChoice` (names the
+  choices, suggests a close one, never repeats the typed word) and `complete_choice` (ADR-016).
+  `Shell` (`src/completion.rs`) is a `#[derive(Choice)]`; `UnknownShell` is a deprecated alias.
+- `src/private.rs` — `hicli::__private`, `#[doc(hidden)]`, named only by spelled
+  `#[derive(Arg)]` expansions: the autoref `Probe` (`ChoiceCompleter` for `Probe<T: Choice>`,
+  `NoCompleter` for `&Probe<T>`) and `choice::<C>`, a self-spelled choice enum's chain tail under a
+  single `C: Choice` bound (one E0277, not two). Not API; may change in any release.
 - `src/macro_support.rs` — **gone (ADR-005).** The dash rule and the doc-comment split it used to
   hold now live once, in the proc-macro crate (`macros/src/shared.rs`), because a proc macro can
   read a doc comment's text and rewrite idents; a `macro_rules!` macro could not, which is why this
   module existed at all.
 - `macros/` — a separate, exact-pinned `hicli-macros` proc-macro crate, re-exported as
-  `hicli::{command, group, commands, Arg}`. `proc_macro::TokenStream` appears only in
+  `hicli::{command, group, commands, cli, Arg, Choice}`. `proc_macro::TokenStream` appears only in
   `macros/src/lib.rs`; everything else works in `proc_macro2` so it unit-tests outside a macro
   expansion:
-  - `shared.rs` — the dash rule and doc-comment split `#[command]` and `#[group]` both use.
+  - `shared.rs` — the dash rule and doc-comment split `#[command]` and `#[group]` both use:
+    `read_doc` → help (the **first paragraph**, joined — ADR-016), details, the `# Arguments`
+    section (commands only; `#[group]` rejects it) and the examples footer; `first_paragraph`
+    is also what spelled `#[derive(Arg)]` and `#[derive(Choice)]` read.
   - `parse.rs` / `expand.rs` — `#[command]`: parse the function, emit it verbatim plus its handle.
     Since ADR-006, `expand.rs` binds one local per owned parameter to
     `<T as ::hicli::Arg>::parser()` and composes the locals with `construct!`, rather than
@@ -95,12 +110,20 @@ calling out.
   - `resolve.rs` — the Reference's mod-rs/non-mod-rs file-resolution rules, against `&dyn Fs`.
   - `commands.rs` — `commands!`: a bare path's last segment becomes `__hicli_<ident>`; anything
     else is an expression through `IntoCommand`.
-  - `arg.rs` — `#[derive(Arg)]` (ADR-006): one impl calling the type's snake_case `bpaf`
-    constructor (shared `shared::snake_case`, spanned at the type's ident), optionally wrapped in
-    `complete_with`/`complete_files`/`complete_dirs` from `#[arg(complete = fn | files | dirs)]`.
-    Rejects a multi-field struct or an enum under `#[arg(complete = …)]` (a whole-value completer
-    cannot tell which field is mid-word), a union, and a generic type.
-  `app!`, `cli!`, `cli_test!` stay `macro_rules!` in the runtime crate's `src/macros.rs`; `app!`
+  - `arg.rs` — `#[derive(Arg)]`, two modes chosen by the keys. **bpaf mode** (ADR-006, no
+    `positional`/`long`/`short`): one impl calling the type's snake_case `bpaf` constructor
+    (shared `shared::snake_case`, spanned at the type's ident), optionally wrapped in
+    `complete_with`/`complete_files`/`complete_dirs` from `#[arg(complete = fn | files | dirs)]`;
+    rejects a multi-field struct or an enum under `#[arg(complete = …)]` (a whole-value completer
+    cannot tell which field is mid-word) and `metavar` alone. **Spelled mode** (ADR-016): three
+    items — the snake_case constructor bpaf would have written, `Arg`, and `ArgHelp` whose chain
+    parses a `String`, completes it (probe, `f(&str)`, or shell `files`/`dirs`), then `FromStr`s
+    it, `.optional()`/`.many()` last; every key and shape rejection is a constant message with a
+    trybuild case. Both modes reject a union and a generic type.
+  - `choice.rs` — `#[derive(Choice)]`: `Choice` + `FromStr` + `Display` from the variants
+    (kebab-case or `#[choice(name = …)]`, description = first paragraph).
+  - `cli.rs` — `cli!` (ADR-017): a word is a run of tokens that touch, by span line/column.
+  `app!` and `cli_test!` stay `macro_rules!` in the runtime crate's `src/macros.rs` (`cli!` is a proc macro in hicli-macros, `macros/src/cli.rs`, ADR-017); `app!`
   forwards its command list as `$($c:tt)*`, not `$c:expr`, so `commands!`'s bare-path rewrite still
   sees bare paths.
 - `src/testing.rs` — arg-vector helpers backing the macros.
@@ -140,23 +163,34 @@ beside the module — a child is a child because it's in the module, no registra
 module is `/// events and instances` + `#[group] pub mod event;` (keys `ctx`/`alias`/`hide` on the
 attribute); `#[group]` reads and parses `event.rs` (resolved by the Reference's mod-rs/non-mod-rs
 rules) and emits the declaration plus the same shape of handle. `commands!`/`app!` assemble the tree —
-a bare path is always a handle (`create` → `__hicli_create()`); consumers add a direct
-`bpaf = "0.9"` dependency (`#[derive(Bpaf)]` expands to `::bpaf::…` paths that only resolve against
+a bare path is always a handle (`create` → `__hicli_create()`); consumers that use
+`#[derive(Bpaf)]` (globals, multi-field argument structs) add a direct `bpaf = "0.9"` dependency
+— a spelled type needs none (ADR-016) — (`#[derive(Bpaf)]` expands to `::bpaf::…` paths that only resolve against
 a crate's own extern prelude — `use hicli::bpaf` does not help), so "consumers pin one `bpaf`
 version through hicli" is now "hicli states the version, cargo unifies it." See
 `docs/sketches/moniker.rs` for a full consumer tree in this shape.
 
-`EventDir`/`EventName` above are consumer-written newtypes deriving both `Bpaf` and `Arg`
-(ADR-006) — the type *is* the argument, completion included:
+`EventDir`/`EventName` above are consumer-written argument types (ADR-006, ADR-016) — the type
+*is* the argument, help and completion included:
 ```rust
-/// `ID` — an identity in this home.
+/// An identity in this home
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "ID", complete = complete_ids)]   // fn(&str) -> Vec<Candidate>, the raw word
+pub struct Id(pub String);
+
+// bpaf mode, unchanged — the form for a multi-field struct:
 #[derive(Debug, Clone, Bpaf, Arg)]
-#[arg(complete = complete_ids)]        // fn(&Id) -> Vec<Candidate>
+#[arg(complete = complete_ids)]        // fn(&Id) -> Vec<Candidate>, the parsed value
 pub struct Id(#[bpaf(positional("ID"))] pub String);
 ```
 Every command taking an `Id` inherits `Id`'s completion with nothing written at it; `#[command]`
 expands to `let a0 = <Id as ::hicli::Arg>::parser();` bound before `construct!`, never
-`id()`/`<name>()` written by hand or inferred from an argument's spelling.
+`id()`/`<name>()` written by hand or inferred from an argument's spelling. The **one exception**
+is a command whose doc comment has an `# Arguments` entry for the parameter
+(`` * `id` - The identity to remove ``): that local is
+`<Id as ::hicli::ArgHelp>::parser_with_help("The identity to remove")` instead — still a trait
+call, still on the type, read from the doc comment rather than a parameter attribute, and only
+the help row changes. Without the section the expansion is byte-for-byte unchanged.
 
 ## Design contracts to hold the line on
 
@@ -174,11 +208,18 @@ expands to `let a0 = <Id as ::hicli::Arg>::parser();` bound before `construct!`,
   must reach one level down into a possibly-private child. `commands![a::b]` and a hand-written
   `#[doc(hidden)] pub fn __hicli_x()` both rely on the name being stable and documented.
 - **`#[command]` never sees an argument's spelling.** Arguments are owned parameters, each a
-  consumer-written type implementing `Arg`, ordinarily `#[derive(Bpaf, Arg)]`; the macro's whole
-  job is name + doc + one `<T as Arg>::parser()` call per parameter, composed with `construct!`.
-  No `#[arg(...)]` parameter-attribute dialect on the function — that was tried and rejected
-  (ADR-004's Alternatives); `#[arg(complete = …)]` is a *type*-level attribute beside
-  `#[derive(Bpaf)]`, never on a command's parameter.
+  consumer-written type implementing `Arg` (spelled `#[derive(Arg)] #[arg(…)]`, or
+  `#[derive(Bpaf, Arg)]`); the macro's whole job is name + doc + one `<T as Arg>::parser()` call
+  per parameter (or `<T as ArgHelp>::parser_with_help(…)` for an `# Arguments` entry), composed
+  with `construct!`. No `#[arg(...)]` parameter-attribute dialect on the function — that was tried
+  and rejected (ADR-004's Alternatives, decision 1 still stands); `#[arg(…)]` is a *type*-level
+  attribute, never on a command's parameter. A per-command help override lives in the doc
+  comment's `# Arguments` section, never in an attribute.
+- **One help rule: the first paragraph (ADR-016).** Commands, groups, spelled argument types,
+  `# Arguments` entries and `Choice` variants all take their help from the doc comment's first
+  paragraph — lines up to the first blank line or a heading, joined. Reintroducing a "first line"
+  reading for any one of them is a regression. A use-site doc comment (a field embedding a type
+  via `#[bpaf(external(…))]`) is never rendered.
 - **`#[command]` emits a trait call, not a name (ADR-006).** The generated handle binds
   `<T as ::hicli::Arg>::parser()` to a local per owned parameter and composes the locals with
   `construct!` — it does not synthesise a bare `snake_case()` call and does not know or care what
@@ -191,13 +232,13 @@ expands to `let a0 = <Id as ::hicli::Arg>::parser();` bound before `construct!`,
   A blanket `impl<T: Bpaf> Arg for T` is impossible besides (a derive emits a free function, not a
   trait impl, so there is nothing to key a blanket impl on) and would forbid the hand-written
   impls that are the escape hatch even if it existed.
-- **The completer filters; completion completes what already parses.** `bpaf` passes a
-  completer's output through unfiltered (it prefix-filters only its own flag names), so every
-  completer hicli ships or documents filters by the partial word itself. `bpaf` also hands a
-  completer the *parsed* value, never the raw word, so a type that does not parse from a partial
-  string (a `u64` newtype, say) never sees the empty word at all; such a type hand-writes
-  `Arg::parser()` and completes at the string level before converting — the same relationship
-  `#[command]` has to `hicli::command`.
+- **The completer filters; in bpaf mode, completion completes what already parses.** `bpaf`
+  passes a completer's output through unfiltered (it prefix-filters only its own flag names), so
+  every completer hicli ships or documents filters by the partial word itself. `bpaf` also hands a
+  completer the *parsed* value, never the raw word, so a bpaf-mode type that does not parse from a
+  partial string (a `u64` newtype, say) never sees the empty word at all. Spelled mode exists
+  partly for this: it parses a `String`, completes it, then converts, so `complete = f` gets the
+  raw word — the same string-level chain a hand-written `Arg::parser()` would write.
 - **`App::complete` pins `bpaf`'s completion protocol at revision 1, and that is permanent, not
   provisional.** Revision 2 driven through `run_inner` terminates the process (verified against
   bpaf 0.9.28) — a hole in bpaf's otherwise exit-free seam, outside hicli's control. A change
@@ -241,13 +282,16 @@ justified the proc-macro dependency, and `#[group]`/`Arg`+`#[derive(Arg)]` were
 earned the same way — the last one closing off completion, which was unreachable while a command's
 parsers were synthesised inside `#[command]`'s own expansion. Group-level currying
 (`#[group(args = T)]`, `#[group(curried = T)]`, `#[command(curried)]`) and a group's
-`#[command(default)]` were earned by mdma-cli's migration (ADR-011) — that is the bar for adding more.
+`#[command(default)]` were earned by mdma-cli's migration (ADR-011), as were `Choice`, spelled
+`#[derive(Arg)]` and `# Arguments` overrides (ADR-016, whose five spelling keys grow only when a
+consumer earns the next one) — that is the bar for adding more.
 Currently deferred: an inner `#![group]` (still E0658, rust-lang/rust#54726); nested `args`
 groups, a default command in a curried group or at the top level, and a dedicated
 `source NAME --help` page (ADR-011); `inventory`/`linkme` auto-registration (rejected outright, not just deferred: link-time magic with
 no explicit tree to read — discovery here is lexical and local, one module body or one file,
-readable by eye); and, per ADR-006, a field-composing `#[derive(Arg)]` for composite types (a
-composite hand-writes `Arg::parser()` instead — six lines), `#[arg(parser = …)]` for a renamed
+readable by eye); and, per ADR-006/ADR-016, a field-composing `#[derive(Arg)]` for composite types (a
+composite hand-writes `Arg::parser()` instead — six lines; when earned, a field's doc comment is
+its help override), spelling keys beyond the five, `#[arg(parser = …)]` for a renamed
 `bpaf` constructor (a three-line hand-written impl covers it), completion masks on the shell
 shorthands (`complete = files("*.toml")`), and globals-aware completion (needs a type-erased
 process-global stash with a runtime-fallible downcast hicli cannot synthesise). Don't

@@ -1,0 +1,16 @@
+error[E0308]: mismatched types
+  --> tests/ui/arg_spelled_completer_wrong_signature.rs:11:10
+   |
+11 | #[derive(Arg)]
+   |          ^^^ expected `&u16`, found `&str`
+12 | #[arg(long = "port", metavar = "PORT", complete = ports)]
+   |                                                   ----- arguments to this function are incorrect
+   |
+   = note: expected reference `&u16`
+              found reference `&str`
+note: function defined here
+  --> tests/ui/arg_spelled_completer_wrong_signature.rs:6:4
+   |
+ 6 | fn ports(_: &u16) -> Vec<Candidate> {
+   |    ^^^^^ -------
+   = note: this error originates in the derive macro `Arg` (in Nightly builds, run with -Z macro-backtrace for more info)

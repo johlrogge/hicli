@@ -3,8 +3,9 @@
 //!
 //! Try: `cargo run --example playr_minimal -- --help`
 
-// The argument newtypes are documented on their fields, not the type: bpaf
-// turns a doc comment on a struct into a help heading (see the README).
+// `Globals` is spelled by `#[derive(Bpaf)]`, which turns a doc comment on a
+// struct into a help heading, so its field is documented; the program's other
+// public items are example code.
 #![allow(missing_docs)]
 
 use std::fmt;
@@ -27,12 +28,10 @@ pub struct Ctx {
     pub node: Node,
 }
 
-#[derive(Debug, Clone, Bpaf, Arg)]
-pub struct Output(
-    /// An audio output device
-    #[bpaf(positional("NAME"))]
-    pub Name,
-);
+/// An audio output device
+#[derive(Debug, Clone, Arg)]
+#[arg(positional = "NAME")]
+pub struct Output(pub Name);
 
 /// Check that the node answers
 #[command]

@@ -15,6 +15,25 @@ still never sees an argument's spelling.
 
 Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verbandi` → `hicli`, `#[verb]` → `#[command]`, `Verb` → `Invocation`, `VerbResult` → `Outcome`). The text below is kept exactly as written.
 
+**Amended by [ADR-016](016-hicli-spells-one-value-argument-types.md)
+(2026-11-06).** Decisions 1, 2, 4, 6 and 8 stand. Three are extended:
+
+- **Decision 3** — `#[derive(Arg)]` beside `#[derive(Bpaf)]` is now **bpaf
+  mode**, unchanged. With `#[arg(positional | long | short …)]` the derive is
+  in **spelled mode**: it spells a one-value type itself (no `#[derive(Bpaf)]`,
+  no direct `bpaf` dependency), takes the type's doc comment's first paragraph
+  as the help row, writes the snake_case constructor bpaf would have, and also
+  implements `ArgHelp`. The on-unimplemented note now teaches the spelled
+  form first.
+- **Decision 5** — "completion completes what already parses" is now **bpaf
+  mode only**. A spelled type's `complete = f` is `fn(&str) -> Vec<Candidate>`
+  and is handed the raw word, because hicli builds the parser string-first —
+  the shape the first alternative below rejected, now owned at the type
+  rather than synthesised at the command. A `Choice` inside completes with no
+  key. The completer still filters.
+- **Decision 7** — a field-composing derive is still deferred. When it comes, a
+  field's doc comment is that field's help override (ADR-016 §8).
+
 ## Decision
 
 ### 1. `verbandi::Arg` — an argument is a type that parses itself

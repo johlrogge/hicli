@@ -39,6 +39,11 @@ pub(crate) struct Child {
 
 /// The shapes a child comes in: a command, or a group whose body is inline or
 /// in a file.
+///
+/// `Command` is the large variant because a `syn::Type` is, and more so since
+/// proc-macro2's `span-locations` (ADR-017) widened every span. A `ChildKind`
+/// lives for one expansion, a handful at a time, so boxing buys nothing.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ChildKind {
     /// A `#[command]` function, with the type of its `&T` parameter if it has
     /// one.

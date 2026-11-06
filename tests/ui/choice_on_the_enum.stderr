@@ -1,0 +1,5 @@
+error: #[choice(name = …)] goes on a variant
+ --> tests/ui/choice_on_the_enum.rs:6:1
+  |
+6 | #[choice(name = "sort-key")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: `positional` cannot be combined with `long` or `short`: an argument is either a positional or an option
+ --> tests/ui/arg_spelled_positional_and_long.rs:7:7
+  |
+7 | #[arg(positional = "ID", long = "id")]
+  |       ^^^^^^^^^^

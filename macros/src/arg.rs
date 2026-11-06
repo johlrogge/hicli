@@ -1,30 +1,44 @@
-//! `#[derive(Arg)]`: the impl that says an argument type parses through its own
-//! `bpaf` constructor.
+//! `#[derive(Arg)]`: the impl that says how an argument type parses.
 //!
-//! The whole derive is one sentence — *`Id`'s parser is `id()`* — plus an
-//! optional completer wrapped around it. The constructor is the one
-//! `#[derive(Bpaf)]` writes, named by snake-casing the type's ident — the rule
-//! that used to live in `#[command]`, now that `#[command]` asks the type through
-//! `Arg` instead of guessing a name at the call site. The call is **spanned at
-//! the type's ident**: a type that derives
-//! `Arg` without `Bpaf` gets rustc's own *"cannot find function `id`"* pointing
-//! at `Id`, which is a better message than any wrapper could produce.
+//! Two modes, chosen by the keys of `#[arg(…)]`:
+//!
+//! - **bpaf mode** — no `positional`, `long` or `short`. The whole derive is
+//!   one sentence — *`Id`'s parser is `id()`* — plus an optional completer
+//!   wrapped around it. The constructor is the one `#[derive(Bpaf)]` writes,
+//!   named by snake-casing the type's ident. The call is **spanned at the
+//!   type's ident**: a type that derives `Arg` without `Bpaf` gets rustc's own
+//!   *"cannot find function `id`"* pointing at `Id`.
+//! - **spelled mode** — any of `positional`, `long` or `short`. The derive
+//!   spells the argument itself, so the type needs no `#[derive(Bpaf)]` and its
+//!   crate no direct `bpaf` dependency. It writes three items: the snake_case
+//!   constructor `#[derive(Bpaf)]` would have written (so
+//!   `#[bpaf(external(…))]` still finds it), the `Arg` impl calling it, and an
+//!   `ArgHelp` impl that builds the parser around a given help — the type's
+//!   doc comment's first paragraph by default, a command's `# Arguments`
+//!   entry when it has one.
 //!
 //! The completion helpers are emitted as **functions**
 //! (`::hicli::complete_with(…)`), never as methods on the parser, so the
-//! expansion needs no trait in scope and reads as what the author could have
-//! written by hand.
+//! bpaf-mode expansion needs no trait in scope and reads as what the author
+//! could have written by hand.
 
-use proc_macro2::TokenStream;
-use quote::quote;
+use proc_macro2::{Span, TokenStream};
+use quote::{quote, quote_spanned};
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
-use syn::{Attribute, Data, DeriveInput, Error, Ident, Meta, Path, PathArguments, Result, Token};
+use syn::spanned::Spanned;
+use syn::{
+    Attribute, Data, DeriveInput, Error, Fields, GenericArgument, Ident, LitChar, LitStr, Meta,
+    Path, PathArguments, Result, Token, Type,
+};
 
-use crate::shared::snake_case;
+use crate::shared::{doc_lines, first_paragraph, snake_case};
 
-/// The message for an `#[arg(…)]` argument that is not `complete = …` (A1).
-const UNKNOWN_ARG: &str = "#[arg(...)] takes one argument: `complete = <fn>`, `complete = files` \
-                           or `complete = dirs`";
+/// The message for an `#[arg(…)]` key it does not know (A1), listing every key.
+const UNKNOWN_ARG: &str = "#[arg(...)] takes `positional`, `long`, `short`, `metavar` and \
+                           `complete`: `positional` or `positional = \"KEY\"`, `long` or \
+                           `long = \"name\"`, `short = 'c'`, `metavar = \"M\"`, and \
+                           `complete = <fn>`, `complete = files` or `complete = dirs`";
 
 /// The message for a completer on something that is not a single value (A2).
 ///
@@ -54,6 +68,66 @@ const GENERIC: &str = "#[derive(Arg)] cannot be generic: an argument type is con
                        `Arg::parser()` takes no parameters, so there is nothing to fix a type \
                        parameter with";
 
+/// S1: a spelled type with no doc comment, or a blank one.
+const NEEDS_DOC: &str = "an argument type spelled by #[arg(...)] needs a doc comment: its first \
+                         paragraph is the help for its row";
+
+/// S2: `positional` together with `long` or `short`.
+const POSITIONAL_AND_NAMED: &str = "`positional` cannot be combined with `long` or `short`: an \
+                                    argument is either a positional or an option";
+
+/// S3: a positional `bool`.
+const POSITIONAL_BOOL: &str = "a `bool` cannot be a positional: a `bool` is a switch, so spell it \
+                               with `long` and/or `short`";
+
+/// S4a: `metavar` on a switch.
+const METAVAR_ON_BOOL: &str =
+    "a switch takes no value, so it has no metavar: remove `metavar` from this `bool`";
+
+/// S4b: `metavar` with `positional`.
+const METAVAR_ON_POSITIONAL: &str =
+    "a positional's metavar is its own value: write `positional = \"…\"` instead of `metavar`";
+
+/// S4c: `metavar` without a spelling key, in bpaf mode.
+const METAVAR_ALONE: &str =
+    "`metavar` names an option's value: it goes with `long` or `short` (a positional writes \
+     `positional = \"…\"`)";
+
+/// S5: an option with a value but no metavar.
+const NEEDS_METAVAR: &str = "an option with a value needs `metavar = \"…\"`: the word that stands \
+                             for its value in help and usage, as in `--sort=FIELD`";
+
+/// S6: `Option<bool>` / `Vec<bool>`.
+const OPTIONAL_SWITCH: &str = "a switch is a plain `bool`, `false` when absent: spell \
+                               `Option<bool>` and `Vec<bool>` as `bool`";
+
+/// S7: spelling keys on a struct with more than one field.
+const MULTI_FIELD: &str = "a multi-field argument type is spelled by #[derive(Bpaf)]";
+
+/// S7b: a spelled type of any other shape.
+const SPELLED_SHAPE: &str = "#[arg(positional|long|short …)] spells a newtype, a struct with one \
+                             named field, or a fieldless enum that derives Choice";
+
+/// S8: `#[bpaf(…)]` attributes on a spelled type.
+const BPAF_ATTRS: &str = "#[arg(positional…)] spells this type: remove #[derive(Bpaf)] and its \
+                          #[bpaf(…)] attributes";
+
+/// S9a: a `short` that cannot be a flag.
+const BAD_SHORT: &str = "`short` is one character that is not `-` or whitespace: `short = 'c'`";
+
+/// S9b: a `long` that cannot be a flag.
+const BAD_LONG: &str = "`long` is the option's name without its dashes: one non-empty word that \
+                        does not start with `-`";
+
+/// S11: `complete` on a switch.
+const COMPLETE_ON_BOOL: &str = "a switch takes no value, so there is nothing to complete: remove \
+                                `complete` from this `bool`";
+
+/// S10: a key given twice.
+fn twice(key: &Ident) -> String {
+    format!("`{}` is given twice", key.unraw())
+}
+
 /// What a completer is, if there is one.
 enum Completion {
     /// None asked for: the constructor, unwrapped.
@@ -66,33 +140,115 @@ enum Completion {
     With(Path),
 }
 
-/// What `#[arg(…)]` was given, and where it was written.
+/// One key, with where it was written.
+struct Key<T> {
+    /// The key's ident — the span its rejections point at.
+    at: Ident,
+    /// What it was given.
+    value: T,
+}
+
+/// What `#[arg(…)]` was given.
+#[derive(Default)]
 struct ArgArgs {
+    /// `positional` / `positional = "KEY"`.
+    positional: Option<Key<Option<LitStr>>>,
+    /// `long` / `long = "name"`.
+    long: Option<Key<Option<LitStr>>>,
+    /// `short = 'c'`.
+    short: Option<Key<LitChar>>,
+    /// `metavar = "M"`.
+    metavar: Option<Key<LitStr>>,
+    /// `complete = …`.
+    complete: Option<Key<Completion>>,
+}
+
+impl ArgArgs {
+    /// Is this spelled mode?
+    fn spelled(&self) -> bool {
+        self.positional.is_some() || self.long.is_some() || self.short.is_some()
+    }
+
     /// The completer asked for.
-    completion: Completion,
+    fn completion(&self) -> &Completion {
+        self.complete
+            .as_ref()
+            .map_or(&Completion::None, |k| &k.value)
+    }
+}
+
+/// Store `value` under `slot`, or reject the key as given twice.
+fn set<T>(slot: &mut Option<Key<T>>, at: Ident, value: T) -> Result<()> {
+    if slot.is_some() {
+        return Err(Error::new_spanned(&at, twice(&at)));
+    }
+    *slot = Some(Key { at, value });
+    Ok(())
+}
+
+/// An optional `= "…"` after a bare-able key.
+fn optional_str(input: ParseStream) -> Result<Option<LitStr>> {
+    if input.peek(Token![=]) {
+        let _: Token![=] = input.parse()?;
+        let lit: LitStr = input
+            .parse()
+            .map_err(|e| Error::new(e.span(), UNKNOWN_ARG))?;
+        Ok(Some(lit))
+    } else {
+        Ok(None)
+    }
+}
+
+/// A required `= <value>` after a key.
+fn required<T: Parse>(input: ParseStream) -> Result<T> {
+    let _: Token![=] = input
+        .parse()
+        .map_err(|e| Error::new(e.span(), UNKNOWN_ARG))?;
+    input.parse().map_err(|e| Error::new(e.span(), UNKNOWN_ARG))
 }
 
 impl Parse for ArgArgs {
     fn parse(input: ParseStream) -> Result<Self> {
-        if input.is_empty() {
-            return Ok(ArgArgs {
-                completion: Completion::None,
-            });
+        let mut args = ArgArgs::default();
+        while !input.is_empty() {
+            let key = input
+                .call(Ident::parse_any)
+                .map_err(|e| Error::new(e.span(), UNKNOWN_ARG))?;
+            if key == "positional" {
+                let v = optional_str(input)?;
+                set(&mut args.positional, key, v)?;
+            } else if key == "long" {
+                let v = optional_str(input)?;
+                if let Some(l) = &v {
+                    let s = l.value();
+                    if s.is_empty() || s.chars().any(char::is_whitespace) || s.starts_with('-') {
+                        return Err(Error::new_spanned(l, BAD_LONG));
+                    }
+                }
+                set(&mut args.long, key, v)?;
+            } else if key == "short" {
+                let c: LitChar = required(input)?;
+                if c.value() == '-' || c.value().is_whitespace() {
+                    return Err(Error::new_spanned(&c, BAD_SHORT));
+                }
+                set(&mut args.short, key, c)?;
+            } else if key == "metavar" {
+                let m: LitStr = required(input)?;
+                set(&mut args.metavar, key, m)?;
+            } else if key == "complete" {
+                let path: Path = required(input)?;
+                set(&mut args.complete, key, shorthand(path))?;
+            } else {
+                return Err(Error::new_spanned(&key, UNKNOWN_ARG));
+            }
+            if input.is_empty() {
+                break;
+            }
+            let _: Token![,] = input
+                .parse()
+                .map_err(|e| Error::new(e.span(), UNKNOWN_ARG))?;
         }
-        let key: Ident = input
-            .parse()
-            .map_err(|e| Error::new(e.span(), UNKNOWN_ARG))?;
-        if key != "complete" {
-            return Err(Error::new_spanned(&key, UNKNOWN_ARG));
-        }
-        let _: Token![=] = input.parse()?;
-        let path: Path = input.parse()?;
-        if !input.is_empty() {
-            return Err(input.error(UNKNOWN_ARG));
-        }
-        Ok(ArgArgs {
-            completion: shorthand(path),
-        })
+        Ok(args)
     }
 }
 
@@ -117,8 +273,8 @@ fn shorthand(path: Path) -> Completion {
 
 /// The `#[arg(…)]` on the type, if any: what it asked for, and the attribute it
 /// asked on — which is the span a shape rejection points at.
-fn read_attrs(attrs: &[Attribute]) -> Result<(Completion, Option<Attribute>)> {
-    let mut found = (Completion::None, None);
+fn read_attrs(attrs: &[Attribute]) -> Result<(ArgArgs, Option<Attribute>)> {
+    let mut found = (ArgArgs::default(), None);
     for attr in attrs.iter().filter(|a| a.path().is_ident("arg")) {
         match &attr.meta {
             // `#[arg]` on its own says nothing, and is allowed to: it is what a
@@ -131,7 +287,7 @@ fn read_attrs(attrs: &[Attribute]) -> Result<(Completion, Option<Attribute>)> {
                     return Err(Error::new_spanned(attr, TWO_ATTRIBUTES));
                 }
                 let args: ArgArgs = syn::parse2(list.tokens.clone())?;
-                found = (args.completion, Some(attr.clone()));
+                found = (args, Some(attr.clone()));
             }
             Meta::NameValue(nv) => return Err(Error::new_spanned(nv, UNKNOWN_ARG)),
         }
@@ -151,7 +307,15 @@ pub(crate) fn expand(input: DeriveInput) -> Result<TokenStream> {
         return Err(Error::new_spanned(w, GENERIC));
     }
 
-    let (completion, at) = read_attrs(&input.attrs)?;
+    let (args, at) = read_attrs(&input.attrs)?;
+    if args.spelled() {
+        let at = at.expect("spelling keys were given by an attribute");
+        return spelled(&input, args, &at);
+    }
+    if let Some(m) = &args.metavar {
+        return Err(Error::new_spanned(&m.at, METAVAR_ALONE));
+    }
+    let completion = args.completion();
     if !matches!(completion, Completion::None) && !is_single_field(&input.data) {
         let at = at.expect("a completion was asked for by an attribute");
         return Err(Error::new_spanned(at, COMPLETE_NEEDS_ONE_FIELD));
@@ -185,6 +349,324 @@ fn is_single_field(data: &Data) -> bool {
         Data::Struct(s) => s.fields.len() == 1,
         // An enum's completer would have to speak for every variant at once.
         Data::Enum(_) | Data::Union(_) => false,
+    }
+}
+
+// --- spelled mode ------------------------------------------------------------
+
+/// Where the value goes once parsed: the shape of the spelled type.
+enum Shape<'a> {
+    /// `struct T(Inner);` — `.map(T)`.
+    Tuple(&'a Type),
+    /// `struct T { field: Inner }` — `.map(|v| T { field: v })`.
+    Named(&'a Ident, &'a Type),
+    /// A fieldless enum: the type *is* the value, and a `Choice`.
+    Choice,
+}
+
+/// How many values the field holds, read off its type's last path segment.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Arity {
+    /// `T` — exactly one.
+    One,
+    /// `Option<T>` — at most one.
+    Optional,
+    /// `Vec<T>` — any number.
+    Many,
+}
+
+/// The last segment of a plain path type (no qualified self).
+fn last_segment(ty: &Type) -> Option<&syn::PathSegment> {
+    match ty {
+        Type::Path(p) if p.qself.is_none() => p.path.segments.last(),
+        Type::Group(g) => last_segment(&g.elem),
+        Type::Paren(p) => last_segment(&p.elem),
+        _ => None,
+    }
+}
+
+/// `Option<T>` / `Vec<T>` → the arity and `T`, recognised syntactically as
+/// `bpaf_derive` does; anything else is one value of itself.
+fn arity(ty: &Type) -> (Arity, &Type) {
+    let Some(seg) = last_segment(ty) else {
+        return (Arity::One, ty);
+    };
+    let kind = if seg.ident == "Option" {
+        Arity::Optional
+    } else if seg.ident == "Vec" {
+        Arity::Many
+    } else {
+        return (Arity::One, ty);
+    };
+    let PathArguments::AngleBracketed(a) = &seg.arguments else {
+        return (Arity::One, ty);
+    };
+    match (a.args.len(), a.args.first()) {
+        (1, Some(GenericArgument::Type(inner))) => (kind, inner),
+        _ => (Arity::One, ty),
+    }
+}
+
+/// Is `ty` spelled as the plain path `…::name`, with no generic arguments?
+fn is_named(ty: &Type, name: &str) -> bool {
+    last_segment(ty).is_some_and(|s| s.ident == name && matches!(s.arguments, PathArguments::None))
+}
+
+/// Does `attrs` hold a `#[bpaf(…)]`?
+fn bpaf_attr(attrs: &[Attribute]) -> Option<&Attribute> {
+    attrs.iter().find(|a| a.path().is_ident("bpaf"))
+}
+
+/// The spelled type's shape, or why it cannot be spelled.
+fn shape<'a>(input: &'a DeriveInput, at: &Attribute) -> Result<Shape<'a>> {
+    match &input.data {
+        Data::Struct(s) => match &s.fields {
+            Fields::Unnamed(f) if f.unnamed.len() == 1 => Ok(Shape::Tuple(&f.unnamed[0].ty)),
+            Fields::Named(f) if f.named.len() == 1 => {
+                let field = &f.named[0];
+                let ident = field.ident.as_ref().expect("a named field has an ident");
+                Ok(Shape::Named(ident, &field.ty))
+            }
+            Fields::Unnamed(f) if f.unnamed.len() > 1 => Err(Error::new_spanned(at, MULTI_FIELD)),
+            Fields::Named(f) if f.named.len() > 1 => Err(Error::new_spanned(at, MULTI_FIELD)),
+            _ => Err(Error::new_spanned(at, SPELLED_SHAPE)),
+        },
+        Data::Enum(e) => {
+            if e.variants.iter().all(|v| matches!(v.fields, Fields::Unit)) {
+                Ok(Shape::Choice)
+            } else {
+                Err(Error::new_spanned(at, SPELLED_SHAPE))
+            }
+        }
+        Data::Union(_) => Err(Error::new_spanned(&input.ident, A_UNION)),
+    }
+}
+
+/// Every `#[bpaf(…)]` anywhere on the type: on it, its fields or its variants.
+fn any_bpaf_attr(input: &DeriveInput) -> Option<&Attribute> {
+    if let Some(a) = bpaf_attr(&input.attrs) {
+        return Some(a);
+    }
+    match &input.data {
+        Data::Struct(s) => s.fields.iter().find_map(|f| bpaf_attr(&f.attrs)),
+        Data::Enum(e) => e.variants.iter().find_map(|v| {
+            bpaf_attr(&v.attrs).or_else(|| v.fields.iter().find_map(|f| bpaf_attr(&f.attrs)))
+        }),
+        Data::Union(_) => None,
+    }
+}
+
+/// `SortBy` → `SORT-BY`: a bare `positional`'s metavar.
+fn screaming_kebab(ident: &Ident) -> String {
+    kebab(ident).to_uppercase()
+}
+
+/// `SortBy` → `sort-by`: a bare `long`'s name.
+fn kebab(ident: &Ident) -> String {
+    snake_case(&ident.unraw())
+        .unraw()
+        .to_string()
+        .replace('_', "-")
+}
+
+/// Expand a spelled type into its three items.
+fn spelled(input: &DeriveInput, args: ArgArgs, at: &Attribute) -> Result<TokenStream> {
+    if let Some(a) = any_bpaf_attr(input) {
+        return Err(Error::new_spanned(a, BPAF_ATTRS));
+    }
+    let shape = shape(input, at)?;
+    let help = match first_paragraph(&doc_lines(&input.attrs)) {
+        Some((help, _)) => help,
+        None => return Err(Error::new_spanned(&input.ident, NEEDS_DOC)),
+    };
+    if let Some(p) = &args.positional {
+        if args.long.is_some() || args.short.is_some() {
+            return Err(Error::new_spanned(&p.at, POSITIONAL_AND_NAMED));
+        }
+        if let Some(m) = &args.metavar {
+            return Err(Error::new_spanned(&m.at, METAVAR_ON_POSITIONAL));
+        }
+    }
+
+    let ty = &input.ident;
+    let (arity, inner) = match &shape {
+        Shape::Tuple(t) | Shape::Named(_, t) => {
+            let (a, i) = arity(t);
+            (a, Some(i))
+        }
+        Shape::Choice => (Arity::One, None),
+    };
+    let switch = inner.is_some_and(|i| is_named(i, "bool"));
+    if switch {
+        if arity != Arity::One {
+            let t = match &shape {
+                Shape::Tuple(t) | Shape::Named(_, t) => *t,
+                Shape::Choice => unreachable!("a choice has no field"),
+            };
+            return Err(Error::new_spanned(t, OPTIONAL_SWITCH));
+        }
+        if let Some(p) = &args.positional {
+            return Err(Error::new_spanned(&p.at, POSITIONAL_BOOL));
+        }
+        if let Some(m) = &args.metavar {
+            return Err(Error::new_spanned(&m.at, METAVAR_ON_BOOL));
+        }
+        if let Some(c) = &args.complete {
+            return Err(Error::new_spanned(&c.at, COMPLETE_ON_BOOL));
+        }
+    } else if args.positional.is_none() && args.metavar.is_none() {
+        let k = args.long.as_ref().map_or_else(
+            || &args.short.as_ref().expect("long or short").at,
+            |l| &l.at,
+        );
+        return Err(Error::new_spanned(k, NEEDS_METAVAR));
+    }
+
+    let chain = chain(input, &args, &shape, arity, inner, switch);
+    let ctor = snake_case(ty);
+    let vis = &input.vis;
+    let ctor_doc = format!("The parser `#[derive(Arg)]` wrote for [`{ty}`].");
+    let help = LitStr::new(&help, Span::call_site());
+
+    Ok(quote! {
+        #[doc = #ctor_doc]
+        #[doc(hidden)]
+        #vis fn #ctor() -> impl ::hicli::bpaf::Parser<#ty> {
+            <#ty as ::hicli::ArgHelp>::parser_with_help(#help)
+        }
+        #[automatically_derived]
+        impl ::hicli::Arg for #ty {
+            fn parser() -> impl ::hicli::bpaf::Parser<Self> {
+                #ctor()
+            }
+        }
+        #[automatically_derived]
+        impl ::hicli::ArgHelp for #ty {
+            fn parser_with_help(help: &'static str) -> impl ::hicli::bpaf::Parser<Self> {
+                #chain
+            }
+        }
+    })
+}
+
+/// The body of `parser_with_help`: the bpaf chain for this spelling.
+fn chain(
+    input: &DeriveInput,
+    args: &ArgArgs,
+    shape: &Shape<'_>,
+    arity: Arity,
+    inner: Option<&Type>,
+    switch: bool,
+) -> TokenStream {
+    let ty = &input.ident;
+    let string = quote!(::std::string::String);
+    // The value type: `Self` for a choice enum, the field's (unwrapped) type
+    // otherwise.
+    let value = match inner {
+        Some(i) => quote!(#i),
+        None => quote!(Self),
+    };
+    let value_span = inner.map_or_else(|| ty.span(), Spanned::span);
+    let completion = args.completion();
+    // A path type keeps bpaf's own `OsString` conversion, which needs no
+    // UTF-8, unless a completer has to see the word as a string.
+    let os = inner.is_some_and(|i| is_named(i, "PathBuf") || is_named(i, "OsString"));
+    let typed = match completion {
+        Completion::Files | Completion::Dirs => true,
+        Completion::With(_) => false,
+        Completion::None => os,
+    };
+    let parsed_as = if typed { value.clone() } else { string.clone() };
+
+    let named = || {
+        let long = args.long.as_ref().map(|l| match &l.value {
+            Some(s) => quote!(#s),
+            None => {
+                let s = LitStr::new(&kebab(ty), l.at.span());
+                quote!(#s)
+            }
+        });
+        let short = args.short.as_ref().map(|s| &s.value);
+        match (long, short) {
+            (Some(l), Some(s)) => quote!(::hicli::bpaf::long(#l).short(#s)),
+            (Some(l), None) => quote!(::hicli::bpaf::long(#l)),
+            (None, Some(s)) => quote!(::hicli::bpaf::short(#s)),
+            (None, None) => unreachable!("a named argument has a long or a short"),
+        }
+    };
+
+    let mut prelude = TokenStream::new();
+    let mut body = if switch {
+        let n = named();
+        quote!(#n.help(help).switch())
+    } else {
+        let head = match &args.positional {
+            Some(p) => {
+                let meta = match &p.value {
+                    Some(m) => m.clone(),
+                    None => LitStr::new(&screaming_kebab(ty), p.at.span()),
+                };
+                quote!(::hicli::bpaf::positional::<#parsed_as>(#meta).help(help))
+            }
+            None => {
+                let n = named();
+                let meta = &args
+                    .metavar
+                    .as_ref()
+                    .expect("checked: an option has a metavar")
+                    .value;
+                quote!(#n.help(help).argument::<#parsed_as>(#meta))
+            }
+        };
+        match completion {
+            Completion::Files => quote!(::hicli::complete_files(#head)),
+            Completion::Dirs => quote!(::hicli::complete_dirs(#head)),
+            Completion::None if typed => head,
+            Completion::None => {
+                let parse = quote_spanned!(value_span=> .parse(|w: #string| w.parse::<#value>()));
+                match shape {
+                    // One `Choice` bound for both steps, so an enum that is
+                    // not a choice is one E0277, not that and a `FromStr` one.
+                    Shape::Choice => quote!(::hicli::__private::choice::<Self>(#head)),
+                    _ => {
+                        prelude = quote! {
+                            #[allow(unused_imports)]
+                            use ::hicli::__private::{ChoiceCompleter as _, NoCompleter as _};
+                            let __complete = (&::hicli::__private::Probe::<#value>::NEW).completer();
+                        };
+                        quote! {
+                            #head
+                                .complete(move |w: &#string| __complete(w.as_str()))
+                                #parse
+                        }
+                    }
+                }
+            }
+            Completion::With(f) => {
+                let parse = quote_spanned!(value_span=> .parse(|w: #string| w.parse::<#value>()));
+                quote! {
+                    #head
+                        .complete(|w: &#string| #f(w.as_str()))
+                        #parse
+                }
+            }
+        }
+    };
+    match arity {
+        Arity::One => {}
+        Arity::Optional => body = quote!(#body.optional()),
+        Arity::Many => body = quote!(#body.many()),
+    }
+    match shape {
+        Shape::Tuple(_) => body = quote!(#body.map(#ty)),
+        Shape::Named(field, _) => body = quote!(#body.map(|v| #ty { #field: v })),
+        Shape::Choice => {}
+    }
+    quote! {
+        #[allow(unused_imports)]
+        use ::hicli::bpaf::Parser as _;
+        #prelude
+        #body
     }
 }
 
@@ -298,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_key_names_the_one_argument() {
+    fn an_unknown_key_lists_every_key() {
         assert_eq!(
             rejection("#[arg(name = \"ID\")]\npub struct Id(String);"),
             UNKNOWN_ARG
@@ -312,8 +794,38 @@ mod tests {
             UNKNOWN_ARG
         );
         assert_eq!(
-            rejection("#[arg(complete = f, complete = g)]\npub struct Id(String);"),
+            rejection("#[arg(short)]\n/// x\npub struct Id(bool);"),
             UNKNOWN_ARG
+        );
+        assert_eq!(
+            rejection("#[arg(metavar)]\npub struct Id(String);"),
+            UNKNOWN_ARG
+        );
+    }
+
+    #[test]
+    fn a_key_given_twice_is_refused() {
+        assert_eq!(
+            rejection("#[arg(complete = f, complete = g)]\npub struct Id(String);"),
+            "`complete` is given twice"
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(long, long = \"y\", metavar = \"M\")]\npub struct Id(String);"),
+            "`long` is given twice"
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(positional, positional)]\npub struct Id(String);"),
+            "`positional` is given twice"
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(short = 'a', short = 'b')]\npub struct Id(bool);"),
+            "`short` is given twice"
+        );
+        assert_eq!(
+            rejection(
+                "/// x\n#[arg(long, metavar = \"A\", metavar = \"B\")]\npub struct Id(String);"
+            ),
+            "`metavar` is given twice"
         );
     }
 
@@ -366,6 +878,392 @@ mod tests {
         assert_eq!(
             rejection("pub struct Id(String) where String: Clone;"),
             GENERIC
+        );
+    }
+
+    #[test]
+    fn metavar_without_a_spelling_is_refused() {
+        assert_eq!(
+            rejection("#[arg(metavar = \"M\")]\npub struct Id(String);"),
+            METAVAR_ALONE
+        );
+    }
+
+    // --- spelled mode: golden expansions ---------------------------------------
+
+    /// The three items, with `chain` as `parser_with_help`'s body.
+    fn three(vis: TokenStream, ty: &str, ctor: &str, help: &str, chain: TokenStream) -> String {
+        let ty: Ident = syn::parse_str(ty).expect("an ident");
+        let ctor: Ident = syn::parse_str(ctor).expect("an ident");
+        let doc = format!("The parser `#[derive(Arg)]` wrote for [`{ty}`].");
+        quote! {
+            #[doc = #doc]
+            #[doc(hidden)]
+            #vis fn #ctor() -> impl ::hicli::bpaf::Parser<#ty> {
+                <#ty as ::hicli::ArgHelp>::parser_with_help(#help)
+            }
+            #[automatically_derived]
+            impl ::hicli::Arg for #ty {
+                fn parser() -> impl ::hicli::bpaf::Parser<Self> {
+                    #ctor()
+                }
+            }
+            #[automatically_derived]
+            impl ::hicli::ArgHelp for #ty {
+                fn parser_with_help(help: &'static str) -> impl ::hicli::bpaf::Parser<Self> {
+                    #[allow(unused_imports)]
+                    use ::hicli::bpaf::Parser as _;
+                    #chain
+                }
+            }
+        }
+        .to_string()
+    }
+
+    /// The probe prelude for `T`.
+    fn probe(t: TokenStream) -> TokenStream {
+        quote! {
+            #[allow(unused_imports)]
+            use ::hicli::__private::{ChoiceCompleter as _, NoCompleter as _};
+            let __complete = (&::hicli::__private::Probe::<#t>::NEW).completer();
+        }
+    }
+
+    #[test]
+    fn spelled_positional_string() {
+        let got = expansion(
+            "/// The event's title\n#[arg(positional = \"TITLE\")]\npub struct Title(String);",
+        );
+        let p = probe(quote!(String));
+        let want = three(
+            quote!(pub),
+            "Title",
+            "title",
+            "The event's title",
+            quote! {
+                #p
+                ::hicli::bpaf::positional::<::std::string::String>("TITLE").help(help)
+                    .complete(move |w: &::std::string::String| __complete(w.as_str()))
+                    .parse(|w: ::std::string::String| w.parse::<String>())
+                    .map(Title)
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_positional_choice_newtype() {
+        let got = expansion(
+            "/// A shell\n#[arg(positional = \"SHELL\")]\npub struct ShellArg(pub hicli::Shell);",
+        );
+        let p = probe(quote!(hicli::Shell));
+        let want = three(
+            quote!(pub),
+            "ShellArg",
+            "shell_arg",
+            "A shell",
+            quote! {
+                #p
+                ::hicli::bpaf::positional::<::std::string::String>("SHELL").help(help)
+                    .complete(move |w: &::std::string::String| __complete(w.as_str()))
+                    .parse(|w: ::std::string::String| w.parse::<hicli::Shell>())
+                    .map(ShellArg)
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_optional_choice_long_with_short() {
+        let got = expansion(
+            "/// Sort the listing\n/// by this field\n///\n/// Developer prose.\n\
+             #[arg(long = \"sort\", short = 's', metavar = \"FIELD\")]\n\
+             pub struct SortOpt(pub Option<SortField>);",
+        );
+        let p = probe(quote!(SortField));
+        let want = three(
+            quote!(pub),
+            "SortOpt",
+            "sort_opt",
+            "Sort the listing by this field",
+            quote! {
+                #p
+                ::hicli::bpaf::long("sort").short('s').help(help)
+                    .argument::<::std::string::String>("FIELD")
+                    .complete(move |w: &::std::string::String| __complete(w.as_str()))
+                    .parse(|w: ::std::string::String| w.parse::<SortField>())
+                    .optional()
+                    .map(SortOpt)
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_switch() {
+        let got = expansion(
+            "/// Sort descending\n#[arg(long = \"descending\", short = 'd')]\nstruct Descending(bool);",
+        );
+        let want = three(
+            quote!(),
+            "Descending",
+            "descending",
+            "Sort descending",
+            quote! {
+                ::hicli::bpaf::long("descending").short('d').help(help).switch().map(Descending)
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_vec_positional_with_a_completer() {
+        let got = expansion(
+            "/// Tags\n#[arg(positional = \"TAG\", complete = tags)]\npub struct Tags(Vec<String>);",
+        );
+        let want = three(
+            quote!(pub),
+            "Tags",
+            "tags",
+            "Tags",
+            quote! {
+                ::hicli::bpaf::positional::<::std::string::String>("TAG").help(help)
+                    .complete(|w: &::std::string::String| tags(w.as_str()))
+                    .parse(|w: ::std::string::String| w.parse::<String>())
+                    .many()
+                    .map(Tags)
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_path_with_files_is_typed() {
+        let got = expansion(
+            "/// A file\n#[arg(positional = \"FILE\", complete = files)]\npub struct Input(std::path::PathBuf);",
+        );
+        let want = three(
+            quote!(pub),
+            "Input",
+            "input",
+            "A file",
+            quote! {
+                ::hicli::complete_files(
+                    ::hicli::bpaf::positional::<std::path::PathBuf>("FILE").help(help)
+                )
+                .map(Input)
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_path_without_a_completer_is_typed() {
+        let got = expansion(
+            "/// Where to write\n#[arg(long = \"out\", metavar = \"DIR\")]\npub struct Out(PathBuf);",
+        );
+        let want = three(
+            quote!(pub),
+            "Out",
+            "out",
+            "Where to write",
+            quote! {
+                ::hicli::bpaf::long("out").help(help).argument::<PathBuf>("DIR").map(Out)
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_self_choice_enum() {
+        let got = expansion(
+            "/// What to sort by\n#[arg(positional = \"KEY\")]\npub enum SortKey { Bpm, Title }",
+        );
+        let want = three(
+            quote!(pub),
+            "SortKey",
+            "sort_key",
+            "What to sort by",
+            quote! {
+                ::hicli::__private::choice::<Self>(
+                    ::hicli::bpaf::positional::<::std::string::String>("KEY").help(help)
+                )
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_named_field() {
+        let got = expansion(
+            "/// The node\n#[arg(long, metavar = \"PORT\", complete = known_ports)]\npub struct Port { pub port: u16 }",
+        );
+        let want = three(
+            quote!(pub),
+            "Port",
+            "port",
+            "The node",
+            quote! {
+                ::hicli::bpaf::long("port").help(help)
+                    .argument::<::std::string::String>("PORT")
+                    .complete(|w: &::std::string::String| known_ports(w.as_str()))
+                    .parse(|w: ::std::string::String| w.parse::<u16>())
+                    .map(|v| Port { port: v })
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn bare_long_and_positional_default_from_the_ident() {
+        let long = expansion("/// x\n#[arg(long, metavar = \"M\")]\npub struct SortBy(String);");
+        assert!(
+            long.contains(":: hicli :: bpaf :: long (\"sort-by\")"),
+            "{long}"
+        );
+        let pos = expansion("/// x\n#[arg(positional)]\npub struct SortBy(String);");
+        assert!(
+            pos.contains("positional :: < :: std :: string :: String > (\"SORT-BY\")"),
+            "{pos}"
+        );
+        let short = expansion("/// x\n#[arg(short = 'v')]\npub struct Verbose(bool);");
+        assert!(
+            short.contains(":: hicli :: bpaf :: short ('v') . help (help) . switch ()"),
+            "{short}"
+        );
+    }
+
+    // --- spelled mode: rejections ----------------------------------------------
+
+    #[test]
+    fn s1_a_spelled_type_needs_a_doc_comment() {
+        assert_eq!(
+            rejection("#[arg(positional)]\npub struct Id(String);"),
+            NEEDS_DOC
+        );
+        assert_eq!(
+            rejection("///\n///   \n#[arg(positional)]\npub struct Id(String);"),
+            NEEDS_DOC
+        );
+    }
+
+    #[test]
+    fn s2_positional_with_long_or_short() {
+        assert_eq!(
+            rejection("/// x\n#[arg(positional, long)]\npub struct Id(String);"),
+            POSITIONAL_AND_NAMED
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(short = 'i', positional)]\npub struct Id(String);"),
+            POSITIONAL_AND_NAMED
+        );
+    }
+
+    #[test]
+    fn s3_a_positional_bool() {
+        assert_eq!(
+            rejection("/// x\n#[arg(positional)]\npub struct On(bool);"),
+            POSITIONAL_BOOL
+        );
+    }
+
+    #[test]
+    fn s4_metavar_on_a_bool_or_a_positional() {
+        assert_eq!(
+            rejection("/// x\n#[arg(long, metavar = \"M\")]\npub struct On(bool);"),
+            METAVAR_ON_BOOL
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(positional, metavar = \"M\")]\npub struct Id(String);"),
+            METAVAR_ON_POSITIONAL
+        );
+    }
+
+    #[test]
+    fn s5_an_option_needs_a_metavar() {
+        assert_eq!(
+            rejection("/// x\n#[arg(long)]\npub struct Id(String);"),
+            NEEDS_METAVAR
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(short = 'i')]\npub enum Mode { A, B }"),
+            NEEDS_METAVAR
+        );
+    }
+
+    #[test]
+    fn s6_an_optional_or_repeated_switch() {
+        assert_eq!(
+            rejection("/// x\n#[arg(long)]\npub struct On(Option<bool>);"),
+            OPTIONAL_SWITCH
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(long)]\npub struct On(Vec<bool>);"),
+            OPTIONAL_SWITCH
+        );
+    }
+
+    #[test]
+    fn s7_a_multi_field_or_other_shape() {
+        assert_eq!(
+            rejection("/// x\n#[arg(long)]\npub struct R { a: String, b: String }"),
+            MULTI_FIELD
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(positional)]\npub struct R(String, String);"),
+            MULTI_FIELD
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(positional)]\npub struct R;"),
+            SPELLED_SHAPE
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(positional)]\npub enum R { A(String) }"),
+            SPELLED_SHAPE
+        );
+    }
+
+    #[test]
+    fn s8_bpaf_attributes_on_a_spelled_type() {
+        assert_eq!(
+            rejection(
+                "/// x\n#[arg(positional)]\npub struct Id(#[bpaf(positional(\"ID\"))] String);"
+            ),
+            BPAF_ATTRS
+        );
+        assert_eq!(
+            rejection("/// x\n#[bpaf(options)]\n#[arg(positional)]\npub struct Id(String);"),
+            BPAF_ATTRS
+        );
+    }
+
+    #[test]
+    fn s9_a_bad_short_or_long() {
+        for bad in ["'-'", "' '", "'\\t'"] {
+            assert_eq!(
+                rejection(&format!(
+                    "/// x\n#[arg(short = {bad})]\npub struct On(bool);"
+                )),
+                BAD_SHORT,
+                "{bad}"
+            );
+        }
+        for bad in ["\"\"", "\"--x\"", "\"a b\""] {
+            assert_eq!(
+                rejection(&format!(
+                    "/// x\n#[arg(long = {bad})]\npub struct On(bool);"
+                )),
+                BAD_LONG,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn s11_complete_on_a_switch() {
+        assert_eq!(
+            rejection("/// x\n#[arg(long, complete = f)]\npub struct On(bool);"),
+            COMPLETE_ON_BOOL
         );
     }
 }

@@ -1,0 +1,5 @@
+error: an option with a value needs `metavar = "…"`: the word that stands for its value in help and usage, as in `--sort=FIELD`
+ --> tests/ui/arg_spelled_needs_metavar.rs:7:7
+  |
+7 | #[arg(long = "port")]
+  |       ^^^^
