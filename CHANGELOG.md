@@ -9,6 +9,33 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
 
 ## [Unreleased]
 
+### Added
+
+- `Choice`, `#[derive(Choice)]` and `UnknownChoice`: an enum whose variants have no
+  fields is a fixed set of words. The derive writes `Choice`, `FromStr` (exact,
+  case-sensitive) and `Display` from the variants: each is spelled as its ident in
+  kebab-case (`PlayCount` → `play-count`) or its `#[choice(name = "…")]`, and the first
+  line of its doc comment is its completion description. A word that is none of them
+  fails with `UnknownChoice`, which lists the names and suggests a close one:
+  ``expected `bpm`, `title` or `by-artist`; did you mean `bpm`?`` (#8).
+- `complete_choice::<C>(typed)`: the names of a choice that start with `typed`, with
+  their descriptions — a completer for a string-level parser, completed before it is
+  parsed (`.complete(|w: &String| complete_choice::<C>(w)).parse(|w: String| w.parse::<C>())`).
+
+### Deprecated
+
+- `UnknownShell` is now an alias of `UnknownChoice`; use `UnknownChoice`.
+
+### Breaking
+
+- `Shell` is a `#[derive(Choice)]`. Its `FromStr::Err` is `UnknownChoice` (the
+  deprecated `UnknownShell` alias still names it), and its error text changed from
+  ``unknown shell `tcsh`: expected one of `bash`, `zsh`, `fish` `` to
+  ``expected `bash`, `zsh` or `fish`; did you mean `bash`?``: the typed word is no
+  longer repeated, because bpaf already prints ``couldn't parse `tcsh`: `` in front of
+  it. `UnknownShell` was a tuple struct; code that built or destructured
+  `UnknownShell(…)` no longer compiles.
+
 ### Changed
 
 - `cli!` splits words where the source has whitespace, as a shell does, and nowhere

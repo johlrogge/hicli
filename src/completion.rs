@@ -10,8 +10,7 @@
 //! [`App::run`](crate::App::run) prints it — so the only thing missing was the
 //! script itself, which is what this module renders. See ADR-009.
 
-use std::fmt;
-use std::str::FromStr;
+use crate::{Choice, UnknownChoice};
 
 /// A shell [`completion_script`] can render a script for.
 ///
@@ -19,23 +18,34 @@ use std::str::FromStr;
 /// candidate) without a breaking change. A `match` on it outside this crate
 /// needs a wildcard arm.
 ///
-/// It parses from and displays as its lowercase name — `"bash"`, `"zsh"`,
-/// `"fish"` — which is what a `generate-completions bash` command line carries:
+/// It is a [`Choice`](trait@crate::Choice): it parses from and displays as its
+/// lowercase name — `"bash"`, `"zsh"`, `"fish"` — which is what a
+/// `generate-completions bash` command line carries, and each variant's doc is
+/// its completion description:
 ///
 /// ```
-/// use hicli::Shell;
+/// use hicli::{Choice, Shell};
 ///
 /// let s: Shell = "zsh".parse().expect("a known shell");
 /// assert_eq!(s, Shell::Zsh);
 /// assert_eq!(s.to_string(), "zsh");
-/// assert!("tcsh".parse::<Shell>().is_err());
+/// assert_eq!(Shell::Bash.description(), Some("GNU bash."));
+/// assert_eq!(
+///     "powershell".parse::<Shell>().unwrap_err().to_string(),
+///     "expected `bash`, `zsh` or `fish`"
+/// );
+/// // Two edits from `bash` (and from `zsh`: the tie goes to the earlier name).
+/// assert_eq!(
+///     "tcsh".parse::<Shell>().unwrap_err().to_string(),
+///     "expected `bash`, `zsh` or `fish`; did you mean `bash`?"
+/// );
 /// ```
 ///
 /// `hicli` ships no [`Arg`](trait@crate::Arg) impl for `Shell` (ADR-006): the
 /// metavar and positional-vs-option are yours to name. See
 /// [`completion_script`] for the newtype to write.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Choice)]
 pub enum Shell {
     /// GNU bash.
     Bash,
@@ -45,51 +55,10 @@ pub enum Shell {
     Fish,
 }
 
-impl Shell {
-    /// The shell's lowercase name, as [`FromStr`] reads it.
-    fn name(self) -> &'static str {
-        match self {
-            Shell::Bash => "bash",
-            Shell::Zsh => "zsh",
-            Shell::Fish => "fish",
-        }
-    }
-}
-
-impl fmt::Display for Shell {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
-    }
-}
-
-/// The error from parsing a [`Shell`] out of a name it does not know.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownShell(String);
-
-impl fmt::Display for UnknownShell {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "unknown shell `{}`: expected one of `bash`, `zsh`, `fish`",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for UnknownShell {}
-
-impl FromStr for Shell {
-    type Err = UnknownShell;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "bash" => Ok(Shell::Bash),
-            "zsh" => Ok(Shell::Zsh),
-            "fish" => Ok(Shell::Fish),
-            other => Err(UnknownShell(other.to_string())),
-        }
-    }
-}
+/// The error from parsing a [`Shell`] out of a name it does not know — now
+/// the [`UnknownChoice`] every [`Choice`](trait@crate::Choice) fails with.
+#[deprecated(since = "0.5.0", note = "use hicli::UnknownChoice")]
+pub type UnknownShell = UnknownChoice;
 
 /// The installable completion script for `shell`, completing the binary `bin`.
 ///

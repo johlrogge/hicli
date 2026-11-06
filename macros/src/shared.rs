@@ -103,7 +103,7 @@ pub(crate) fn cfg_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
 }
 
 /// The text of one `#[doc = "..."]` attribute, if that is what it is.
-fn doc_text(attr: &Attribute) -> Option<String> {
+pub(crate) fn doc_text(attr: &Attribute) -> Option<String> {
     let Meta::NameValue(nv) = &attr.meta else {
         return None;
     };

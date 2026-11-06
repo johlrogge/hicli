@@ -940,7 +940,12 @@ pub use hicli_macros::commands;
 /// [`App::parse`](crate::App::parse).
 pub use hicli_macros::cli;
 
+// The derives emit `::hicli::…` paths, so that this crate can use them on its
+// own types (`Shell` is a `#[derive(Choice)]`), it is its own extern crate.
+extern crate self as hicli;
+
 mod app;
+mod choice;
 mod command;
 mod completion;
 mod external;
@@ -959,7 +964,9 @@ pub use command::{
     command, curried_command, external, group, group_args, Command, Curried, IntoCommand, Node,
     Partial,
 };
-pub use completion::{completion_script, Shell, UnknownShell};
+#[allow(deprecated)]
+pub use completion::UnknownShell;
+pub use completion::{completion_script, Shell};
 pub use external::{ArgSchema, ArgSpec, ExternalCommand};
 pub use invocation::Invocation;
 pub use outcome::{Failure, IntoOutcome, Outcome, Success};
@@ -1062,3 +1069,123 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, Candidate};
 ///   field itself with `bpaf`'s own `#[bpaf(complete(f))]`;
 /// - **a union, or a generic type** — an argument type is concrete.
 pub use hicli_macros::Arg;
+
+// The trait and its derive, fenced the same way as `Arg`'s: they share the
+// name `Choice` across the type and macro namespaces, so one
+// `use hicli::Choice;` imports both.
+pub use choice::{complete_choice, Choice, UnknownChoice};
+
+/// Implement [`Choice`](trait@Choice), [`FromStr`](std::str::FromStr) and
+/// [`Display`](std::fmt::Display) for an enum whose variants are a fixed set of
+/// words — and leave the enum exactly as it is.
+///
+/// ```
+/// // One import, two namespaces, as for `Arg`: the trait and the derive.
+/// use hicli::{complete_choice, Choice};
+///
+/// /// What to sort by.
+/// #[derive(Debug, Clone, Copy, PartialEq, Eq, Choice)]
+/// pub enum SortKey {
+///     /// Beats per minute
+///     Bpm,
+///     PlayCount,
+///     #[choice(name = "by-artist")]
+///     Artist,
+/// }
+///
+/// assert_eq!("play-count".parse::<SortKey>(), Ok(SortKey::PlayCount));
+/// assert_eq!(SortKey::Artist.to_string(), "by-artist");
+/// assert_eq!(SortKey::Bpm.description(), Some("Beats per minute"));
+/// assert_eq!(
+///     "Bpm".parse::<SortKey>().unwrap_err().to_string(),
+///     "expected `bpm`, `play-count` or `by-artist`; did you mean `bpm`?"
+/// );
+/// assert_eq!(
+///     complete_choice::<SortKey>("b"),
+///     [
+///         ("bpm".to_string(), Some("Beats per minute".to_string())),
+///         ("by-artist".to_string(), None),
+///     ]
+/// );
+/// ```
+///
+/// # What it reads
+///
+/// | From | Becomes |
+/// |---|---|
+/// | each variant's ident, kebab-cased (`PlayCount` → `play-count`, `HTTPServer` → `http-server`, `Mp3` → `mp3`) | the word that spells it — [`Choice::name`], matched by `FromStr`, printed by `Display` |
+/// | `#[choice(name = "…")]` on a variant | that word instead |
+/// | the first non-blank line of a variant's doc comment, trimmed | [`Choice::description`] — shown beside the name when completing; `None` without one |
+/// | the variants, in declaration order | [`Choice::VARIANTS`] — the order the error lists them and [`complete_choice`] offers them |
+///
+/// Matching is **exact and case-sensitive**: `Bpm` is not `bpm`. The error's
+/// suggestion is not — `Bpm` is answered with *did you mean `bpm`?* — and
+/// otherwise suggests a name one or two edits away. Explicit discriminants are
+/// allowed and play no part.
+///
+/// # What it writes
+///
+/// **Your enum, untouched**, and three impls beside it:
+///
+/// ```ignore
+/// #[automatically_derived]
+/// impl ::hicli::Choice for SortKey {
+///     const VARIANTS: &'static [Self] = &[SortKey::Bpm, SortKey::PlayCount, SortKey::Artist];
+///     fn name(&self) -> &'static str {
+///         match self { SortKey::Bpm => "bpm", SortKey::PlayCount => "play-count", SortKey::Artist => "by-artist" }
+///     }
+///     fn description(&self) -> ::core::option::Option<&'static str> {
+///         match self {
+///             SortKey::Bpm => ::core::option::Option::Some("Beats per minute"),
+///             SortKey::PlayCount => ::core::option::Option::None,
+///             SortKey::Artist => ::core::option::Option::None
+///         }
+///     }
+/// }
+/// #[automatically_derived]
+/// impl ::core::str::FromStr for SortKey {
+///     type Err = ::hicli::UnknownChoice;
+///     fn from_str(s: &str) -> ::core::result::Result<Self, Self::Err> {
+///         match s {
+///             "bpm" => ::core::result::Result::Ok(SortKey::Bpm),
+///             "play-count" => ::core::result::Result::Ok(SortKey::PlayCount),
+///             "by-artist" => ::core::result::Result::Ok(SortKey::Artist),
+///             _ => ::core::result::Result::Err(::hicli::UnknownChoice::new::<Self>(s)),
+///         }
+///     }
+/// }
+/// #[automatically_derived]
+/// impl ::core::fmt::Display for SortKey {
+///     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+///         f.write_str(<Self as ::hicli::Choice>::name(self))
+///     }
+/// }
+/// ```
+///
+/// Because it writes `FromStr` and `Display`, an enum that also implements
+/// either by hand fails with rustc's E0119, *conflicting implementations*.
+/// Write the [`Choice`](trait@Choice) impl by hand instead — it is the plain
+/// Rust above, calling [`UnknownChoice::new`].
+///
+/// A choice is a value, not an [`Arg`](trait@Arg): a command cannot take one
+/// as a parameter directly. Wrap it in an argument type that says where it goes
+/// on the command line — see the [`complete_choice`] chain in the
+/// [`Choice`](trait@Choice) docs.
+///
+/// # Rejections
+///
+/// Each of these is a compile error pointing at the token to change:
+///
+/// - **a struct or a union** — a choice is an enum;
+/// - **a variant with fields** — a choice is one of a fixed set of words, with
+///   nothing after it;
+/// - **an enum with no variants** — there would be nothing to type;
+/// - **generics or a where clause** — a choice is concrete;
+/// - **two variants spelled the same** — named or derived, pointing at the
+///   second;
+/// - **a name that is empty, contains whitespace or starts with `-`** —
+///   including a derived one (`_Hidden` would be `--hidden`);
+/// - **anything in `#[choice(…)]` but one `name = "…"`**, or a second
+///   `#[choice]` on the same variant;
+/// - **`#[choice]` on the enum itself** — it goes on a variant.
+pub use hicli_macros::Choice;

@@ -1,0 +1,5 @@
+error: two choices are both spelled `artist`
+ --> tests/ui/choice_duplicate_name.rs:9:21
+  |
+9 |     #[choice(name = "artist")]
+  |                     ^^^^^^^^

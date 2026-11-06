@@ -1,0 +1,5 @@
+error: #[derive(Choice)] cannot be generic: a choice is concrete — `Choice::VARIANTS` is a constant list of values, so there is nothing to fix a type parameter with
+ --> tests/ui/choice_on_generic.rs:7:13
+  |
+7 | enum SortKey<T> {
+  |             ^^^

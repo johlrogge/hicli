@@ -1,6 +1,6 @@
 //! Procedural macros for [`hicli`](https://docs.rs/hicli):
-//! [`macro@command`], [`macro@group`], [`macro@commands`], [`macro@cli`] and
-//! [`derive@Arg`].
+//! [`macro@command`], [`macro@group`], [`macro@commands`], [`macro@cli`],
+//! [`derive@Arg`] and [`derive@Choice`].
 //!
 //! Nothing here is meant to be depended on directly: `hicli` re-exports
 //! them and pins this crate to an exact version, so the macros and the runtime
@@ -21,6 +21,7 @@
 //! expansion.
 
 mod arg;
+mod choice;
 mod cli;
 mod commands;
 mod ctx;
@@ -154,6 +155,32 @@ pub fn command(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn arg(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match arg::expand(input) {
+        Ok(tokens) => tokens.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+/// Implement `hicli::Choice`, `FromStr` and `Display` for an enum whose
+/// variants are a fixed set of words.
+///
+/// ```ignore
+/// #[derive(Choice)]
+/// pub enum SortKey {
+///     /// Beats per minute
+///     Bpm,
+///     Title,
+///     #[choice(name = "by-artist")]
+///     Artist,
+/// }
+/// ```
+///
+/// The full contract — the names, the descriptions, the impls it writes and
+/// every rejection — is documented on [`hicli::Choice`](https://docs.rs/hicli),
+/// which is where consumers read it.
+#[proc_macro_derive(Choice, attributes(choice))]
+pub fn choice(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match choice::expand(input) {
         Ok(tokens) => tokens.into(),
         Err(e) => e.to_compile_error().into(),
     }
