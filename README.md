@@ -767,12 +767,7 @@ mod tests {
    struct or an enum it is a compile error.
 7. **`Globals` doesn't derive `Arg`.** It is parsed once at the top level.
 8. **A `#[group] pub mod x;` that lives in its own file must be declared at the top
-   level of a file**, not inside an inline module. hicli puts `#[path = "x.rs"]` on
-   it, and rustc then looks up a plain `mod helper;` inside `x.rs` next to `x.rs`,
-   not under `x/` (E0583). Until that is fixed, write
-   `#[path = "x/helper.rs"] mod helper;`
-   ([#25](https://github.com/johlrogge/hicli/issues/25)). A nested `#[group] mod` is not
-   affected.
+   level of a file**, not inside an inline module.
 9. **The attribute keys:**
    - `#[command(name = "…", alias = "…", hide)]`, plus `default` and `curried` (above).
    - `#[group(alias = "…", hide)]`, plus `args` and `curried` (above). A group has no
