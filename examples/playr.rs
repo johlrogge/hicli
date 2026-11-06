@@ -428,19 +428,19 @@ mod tests {
             let (globals, _) = r.expect("parses");
             assert_eq!(globals.node.host, "pi.local");
         },
-        set_output_needs_a_name: { playback "set-output" } => |r| {
+        set_output_needs_a_name: { playback set-output } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
             assert!(e.unwrap_stderr().contains("NAME"));
         },
-        output_names_are_checked: { playback "set-output" HDMI } => |r| {
+        output_names_are_checked: { playback set-output HDMI } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
         },
-        added_takes_the_glued_form: { search "--added=-7" } => |r| {
+        added_takes_the_glued_form: { search --added=-7 } => |r| {
             assert!(r.is_ok(), "--added=-7 parses");
         },
-        added_rejects_a_separate_negative_word: { search "--added" "-7" } => |r| {
+        added_rejects_a_separate_negative_word: { search --added -7 } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
             assert!(e.unwrap_stderr().contains("try `--added=-7`"));

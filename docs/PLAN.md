@@ -370,8 +370,9 @@ mapped to a test function. `hicli` ships two macros:
   let (_g, invocation) = app().parse(cli! { event create x "My Event" }).unwrap();
   assert_eq!(invocation.name(), "create");
   ```
-  Each bare token is `stringify!`- d; a **string-literal token** is taken by value — that's how an
-  argument containing spaces/special chars is written. Tokenizer caveat (documented on the macro):
+  Words are separated by whitespace, as in a shell: tokens that touch in the source join into one
+  word (`set-output`, `--dry-run`, `--since=-7`), and a **string-literal token** is taken by value —
+  that's how an argument containing spaces/special chars is written (ADR-017: `cli!` is a proc macro). Tokenizer caveat (documented on the macro):
   a single-quoted multi-word arg (`'My Event'`) does not lex in Rust, so a spaced argument MUST be
   a double-quoted literal `"My Event"`; single-token args need no quotes (`event create x`).
 - **`cli_test! { … }`** — generates a `#[test]` per case; each case's left side is the typed

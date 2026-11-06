@@ -875,6 +875,71 @@ pub use hicli_macros::group;
 /// keeps the list literally the list the user wrote. [`app!`] does it that way.
 pub use hicli_macros::commands;
 
+/// Build an argv `Vec<String>` from **raw command-line tokens** — no wrapping
+/// string literal — so the call site reads like typing in a terminal:
+///
+/// ```
+/// # use hicli::cli;
+/// let args = cli! { playback set-output --dry-run x "My Event" };
+/// assert_eq!(args, ["playback", "set-output", "--dry-run", "x", "My Event"]);
+/// ```
+///
+/// # Words are separated by whitespace, as in a shell
+///
+/// A **word** is a run of tokens that touch each other in the source: `cli!`
+/// splits where you put a space or a line break, and nowhere else. So
+/// `set-output`, `--dry-run`, `--since=-7`, `email,phone`, `a/b/c` and `./ev`
+/// are each one word, and `a - b` is three. The table is ADR-017's:
+///
+/// | you write | argv |
+/// |---|---|
+/// | `playback set-output hdmi` | `playback`, `set-output`, `hdmi` |
+/// | `--name="My Event"` | `--name=My Event` |
+/// | `-- foo` | `--`, `foo` |
+/// | `- 5` | `-`, `5` |
+/// | `""` | the empty word |
+/// | `"a""b"` | `ab` |
+///
+/// Within a word, each token contributes its text:
+///
+/// - an identifier or punctuation — as written;
+/// - a string or raw string literal — its **value**, so a word with spaces is
+///   written in double quotes: `"My Event"` → `My Event`;
+/// - a char literal — its value: `'c'` → `c`;
+/// - any other literal — **as written**: `0x10`, `1.50` and `5u8` stay
+///   `0x10`, `1.50` and `5u8`.
+///
+/// ```
+/// # use hicli::cli;
+/// assert_eq!(cli! { --since=-7 --name="My Event" }, ["--since=-7", "--name=My Event"]);
+/// assert_eq!(cli! { -- foo }, ["--", "foo"]);
+/// assert_eq!(cli! { 0x10 }, ["0x10"]);
+/// ```
+///
+/// A word forwarded by a `macro_rules!` keeps its spans and so stays one word
+/// — [`cli_test!`] relies on this — and an `:expr` capture's invisible group is
+/// flattened in place.
+///
+/// # What does NOT work
+///
+/// `cli!` still reads *source tokens*, so it is bound by Rust's lexer:
+///
+/// - `'My Event'` does **not** compile: Rust lexes a leading `'` as the start
+///   of a lifetime (`'My`), not a quoted word. **Use double quotes**:
+///   `"My Event"`.
+/// - A **bracketed group** — `(a)`, `[a]`, `{a}` — is a compile error: brackets
+///   are not words. Quote it: `"[a]"`.
+/// - A **byte string** or **C string** (`b"a"`, `c"a"`) is a compile error:
+///   argv words are strings. Write a `"string literal"`.
+///
+/// Where the front end gives tokens no source location (rust-analyzer's
+/// proc-macro server may do this), touching cannot be seen, so every token is
+/// its own word there; `cargo build` and `cargo test` always see locations.
+///
+/// The result is a `Vec<String>`, which plugs straight into
+/// [`App::parse`](crate::App::parse).
+pub use hicli_macros::cli;
+
 mod app;
 mod command;
 mod completion;

@@ -100,7 +100,7 @@ calling out.
     `complete_with`/`complete_files`/`complete_dirs` from `#[arg(complete = fn | files | dirs)]`.
     Rejects a multi-field struct or an enum under `#[arg(complete = …)]` (a whole-value completer
     cannot tell which field is mid-word), a union, and a generic type.
-  `app!`, `cli!`, `cli_test!` stay `macro_rules!` in the runtime crate's `src/macros.rs`; `app!`
+  `app!` and `cli_test!` stay `macro_rules!` in the runtime crate's `src/macros.rs` (`cli!` is a proc macro in hicli-macros, `macros/src/cli.rs`, ADR-017); `app!`
   forwards its command list as `$($c:tt)*`, not `$c:expr`, so `commands!`'s bare-path rewrite still
   sees bare paths.
 - `src/testing.rs` — arg-vector helpers backing the macros.

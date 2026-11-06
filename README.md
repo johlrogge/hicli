@@ -699,12 +699,12 @@ mod tests {
             let (globals, _) = r.expect("parses");
             assert_eq!(globals.node.host, "pi.local");
         },
-        set_output_needs_a_name: { playback "set-output" } => |r| {
+        set_output_needs_a_name: { playback set-output } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
             assert!(e.unwrap_stderr().contains("NAME"));
         },
-        output_names_are_checked: { playback "set-output" HDMI } => |r| {
+        output_names_are_checked: { playback set-output HDMI } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
         },
@@ -738,8 +738,9 @@ mod tests {
 ```
 
 - `cli! { … }` turns the words you would type into an argv, and `cli_test!` writes
-  one `#[test]` per line. **Quote words with hyphens** (`"set-output"`, `"--dry-run"`).
-  Without quotes, Rust splits `set-output` into three tokens.
+  one `#[test]` per line. Words are separated by whitespace, as in a shell:
+  `set-output`, `--dry-run` and `--since=-7` are one word each, and `"My Event"` is
+  one word with a space in it.
 - `App::parse` returns the parsed globals and the selected command, in that order, or
   the error that would be printed. `App::run_with_args` runs everything and returns the exit code
   that `main` would. `App::complete` returns what the shell would offer.

@@ -636,7 +636,7 @@ Error: uploading missing.flac: reading the file: No such file or directory (os e
             <span class="t-k">let</span> (_globals, invocation) = r.expect(<span class="t-s">"parses"</span>);
             assert_eq!(invocation.path(), [<span class="t-s">"playback"</span>, <span class="t-s">"stop"</span>]);
         },
-        set_output_needs_a_name: { playback <span class="t-s">"set-output"</span> } =&gt; |r| {
+        set_output_needs_a_name: { playback set-output } =&gt; |r| {
             <span class="t-k">let</span> e = r.err().expect(<span class="t-s">"a usage error"</span>);
             assert_eq!(exit_code_for(&amp;e), <span class="t-n">2</span>);
             assert!(e.unwrap_stderr().contains(<span class="t-s">"NAME"</span>));
