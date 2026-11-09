@@ -283,8 +283,12 @@ earned the same way — the last one closing off completion, which was unreachab
 parsers were synthesised inside `#[command]`'s own expansion. Group-level currying
 (`#[group(args = T)]`, `#[group(curried = T)]`, `#[command(curried)]`) and a group's
 `#[command(default)]` were earned by mdma-cli's migration (ADR-011), as were `Choice`, spelled
-`#[derive(Arg)]` and `# Arguments` overrides (ADR-016, whose five spelling keys grow only when a
-consumer earns the next one) — that is the bar for adding more.
+`#[derive(Arg)]` and `# Arguments` overrides (ADR-016, whose five spelling keys grow when consumer code shows the next one would
+improve it). **The bar for adding more is our own analysis of real consumer code**: study how
+mdma-cli, moniker and ctx use hicli and look for redundancy, weak expressiveness and
+inconsistency. Don't wait for a consumer to ask ("a faster horse"); a clean migration is not
+evidence there is nothing to improve. Every proposal points at concrete consumer code it makes
+better, with a before/after.
 Currently deferred: an inner `#![group]` (still E0658, rust-lang/rust#54726); nested `args`
 groups, a default command in a curried group or at the top level, and a dedicated
 `source NAME --help` page (ADR-011); `inventory`/`linkme` auto-registration (rejected outright, not just deferred: link-time magic with

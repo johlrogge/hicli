@@ -250,7 +250,10 @@ rendering, completion protocol. The direction this sets:
 
 - **Own the derive layer** where a consumer's pain says bpaf's derive is the
   obstacle, one earned key at a time.
-- **Push runtime limits upstream** rather than patching around them in hicli.
+- **Take runtime limits upstream** rather than patching around them in hicli.
+  The maintainer files upstream issues and pull requests themselves; agents
+  only draft them (title, body, reproduction) for the maintainer to file, and
+  never post to a repository the maintainer does not own.
   ADR-013 §4's usage-line wrap is a workaround for bpaf#471, kept only until
   bpaf fixes it; an error that names the value but not the option (#26) waits
   on a bpaf issue the same way.

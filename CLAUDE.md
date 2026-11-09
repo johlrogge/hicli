@@ -85,12 +85,18 @@ Run `just ci` before considering any change done.
   completes and names itself in errors), spelled `#[derive(Arg)]` with
   `#[arg(positional|long|short, metavar, complete)]` on a one-value type
   (hicli writes the bpaf chain; the type's doc comment's first paragraph is its
-  help; a `Choice` inside completes via an autoref probe; keys are added only
-  when a consumer earns them), and `ArgHelp` + a command's `# Arguments`
+  help; a `Choice` inside completes via an autoref probe; keys are added when
+  our analysis of consumer code shows they improve it), and `ArgHelp` + a command's `# Arguments`
   doc-comment section (a per-command help override, no parameter attributes).
   The help is a doc comment's **first paragraph** everywhere (ADR-016). `cli!`
   is a proc macro whose words are runs of touching tokens (ADR-017).
-  Deferred until the next real consumer's pain justifies them: nested `args`
+  **The bar for a new mechanism** is our own analysis of real consumer code
+  (mdma-cli, moniker, ctx): it removes redundancy, makes the code more
+  expressive, or makes it more consistent. We own the experience; a consumer not
+  asking for something is not evidence it is unneeded, and a consumer asking is
+  not by itself a reason to build it. Every mechanism still points at concrete
+  consumer code it improves.
+  Deferred until that analysis justifies them: nested `args`
   groups, a default in a curried group or at the top level, a field-composing
   `#[derive(Arg)]` for composites (a field's doc would be its override),
   spelling keys beyond ADR-016's five, `#[arg(parser = …)]`, completion masks,

@@ -465,6 +465,12 @@ bpaf has built-in suggestions for both misspelled commands (since 0.5.1) and fla
 
 ## v1 scope (subtractive)
 
+**The bar.** hicli owns the experience. A mechanism is added when our own analysis of real
+consumer code (mdma-cli, moniker, ctx) shows it removes redundancy, makes the code more
+expressive, or makes it more consistent, not when a consumer requests it, and a consumer
+reporting no issues is not evidence there is nothing to improve. The evidence is concrete
+consumer code the mechanism makes better; nothing is built ahead of it.
+
 **In:** `Success`/`Failure`/`IntoOutcome`, `Invocation<Ctx>` (a struct), `Command<Ctx>`/`IntoCommand`
 (`command`/`group`/`external`) + `App` (`command`/`commands`/`run` + test seams, `complete`); the
 proc-macro crate `hicli-macros` (exact-pinned): `#[command]` (leaves the function alone, adds a
@@ -508,8 +514,8 @@ comment's first paragraph is its help row, a `Choice` inside completes with no k
 per-command help override, read from the doc comment, with no parameter attributes (ADR-004
 decision 1 stands). **The help is a doc comment's first paragraph everywhere** — commands,
 groups, argument types, `# Arguments` entries and `Choice` variants (replacing ADR-001/ADR-008's
-"first line"). Earned by mdma-cli's migration (#8, #23); keys are added only when a consumer's
-pain names them. **`cli!` as a proc macro (ADR-017)** — a word is a run of touching tokens (#22).
+"first line"). Earned by mdma-cli's migration (#8, #23); keys are added when our analysis of consumer code
+shows they improve it. **`cli!` as a proc macro (ADR-017)** — a word is a run of touching tokens (#22).
 
 **Deferred:** nested `args` groups (they parse at runtime but have no constructor or macro form);
 a default in a curried group; a top-level default; a default that also answers to its own name
@@ -528,7 +534,8 @@ completer sees only its own word or parsed value, never `--home` — pre-parsing
 completion mode needs a type-erased process-global stash with a runtime-fallible downcast, which
 hicli cannot synthesise); a usage-line override; deprecated-name warnings (an alias that prints
 a hint); visible aliases (`list, ls` in the command list); elvish completion — all deferred
-until a consumer's pain names them, not built ahead of that evidence.
+until our analysis of real consumer code shows they remove redundancy or improve
+expressiveness or consistency, not built ahead of that evidence.
 
 **Rejected:** a helper (or a documented recipe) for accepting an option value that starts with
 `-` as a separate word (`--since -7`) (#29). A dash-led value is written glued, `--since=-7`, and
