@@ -56,7 +56,7 @@ pub fn store(home: Home, ctx: &Ctx) {
 // The recipe from `completion_script`'s docs, compiled for real. Its doc
 // comment's first paragraph is its help row.
 
-/// A shell to print completions for: bash, zsh or fish
+/// A shell to print completions for
 #[derive(Debug, Clone, Arg)]
 #[arg(positional = "SHELL")]
 pub struct ShellArg(pub hicli::Shell);
@@ -174,11 +174,8 @@ fn an_unknown_shell_is_an_error_naming_it() {
     // `Shell` is a `Choice`: the error lists the names and leaves the typed
     // word to bpaf's ``couldn't parse `tcsh`: `` in front of it.
     for (name, want) in [
-        // Two edits from both `bash` and `zsh`: the tie goes to the earlier.
-        (
-            "tcsh",
-            "expected `bash`, `zsh` or `fish`; did you mean `bash`?",
-        ),
+        // Two edits from both `bash` and `zsh`: too many for four letters.
+        ("tcsh", "expected `bash`, `zsh` or `fish`"),
         ("elvish", "expected `bash`, `zsh` or `fish`"),
         ("", "expected `bash`, `zsh` or `fish`"),
         ("powershell", "expected `bash`, `zsh` or `fish`"),
@@ -240,7 +237,7 @@ fn an_unknown_shell_is_a_usage_error_naming_the_choices() {
             assert_eq!(exit_code_for(&e), 2);
             assert_eq!(
                 e.unwrap_stderr(),
-                "couldn't parse `tcsh`: expected `bash`, `zsh` or `fish`; did you mean `bash`?"
+                "couldn't parse `tcsh`: `SHELL`: expected `bash`, `zsh` or `fish`"
             );
         }
         Err(_) => panic!("not a usage error"),

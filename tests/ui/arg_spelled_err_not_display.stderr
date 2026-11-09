@@ -1,0 +1,19 @@
+error[E0277]: `NotDisplay` doesn't implement `std::fmt::Display`
+  --> tests/ui/arg_spelled_err_not_display.rs:13:21
+   |
+11 | #[derive(Arg)]
+   |          --- required by a bound introduced by this call
+12 | #[arg(positional = "NAME")]
+13 | pub struct Name(pub String);
+   |                     ^^^^^^ unsatisfied trait bound
+   |
+help: the trait `std::fmt::Display` is not implemented for `NotDisplay`
+  --> tests/ui/arg_spelled_err_not_display.rs:8:1
+   |
+ 8 | pub struct NotDisplay;
+   | ^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `hicli::__private::named`
+  --> src/private.rs
+   |
+   | pub fn named(name: &'static str, error: impl Display) -> String {
+   |                                              ^^^^^^^ required by this bound in `named`

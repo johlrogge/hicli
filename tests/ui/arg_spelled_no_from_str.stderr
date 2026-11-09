@@ -1,0 +1,23 @@
+error[E0599]: the method `parse_word` exists for reference `&hicli::__private::FromStrOf<Wrap, Opaque>`, but its trait bounds were not satisfied
+  --> tests/ui/arg_spelled_no_from_str.rs:11:21
+   |
+ 6 | pub struct Opaque;
+   | ----------------- doesn't satisfy `Opaque: FromStr`
+...
+11 | pub struct Wrap(pub Opaque);
+   | ---------------     ^^^^^^
+   | |
+   | doesn't satisfy `Wrap: FromStr`
+   |
+  ::: src/private.rs
+   |
+   | pub struct FromStrOf<T, I>(pub fn(I) -> T);
+   | -------------------------- doesn't satisfy `_: SelfFromStr`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Wrap: FromStr`
+           which is required by `hicli::__private::FromStrOf<Wrap, Opaque>: hicli::__private::SelfFromStr`
+           `Opaque: FromStr`
+           which is required by `&hicli::__private::FromStrOf<Wrap, Opaque>: hicli::__private::FieldFromStr`
+note: the trait `FromStr` must be implemented
+  --> $RUST/core/src/str/traits.rs

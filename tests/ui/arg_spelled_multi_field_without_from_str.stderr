@@ -1,0 +1,21 @@
+error[E0277]: the trait bound `Ref: FromStr` is not satisfied
+ --> tests/ui/arg_spelled_multi_field_without_from_str.rs:8:12
+  |
+8 | pub struct Ref {
+  |            ^^^ unsatisfied trait bound
+  |
+help: the trait `FromStr` is not implemented for `Ref`
+ --> tests/ui/arg_spelled_multi_field_without_from_str.rs:8:1
+  |
+8 | pub struct Ref {
+  | ^^^^^^^^^^^^^^
+  = help: the following other types implement trait `FromStr`:
+            ByteString
+            CString
+            IpAddr
+            Ipv4Addr
+            Ipv6Addr
+            NonZero<i128>
+            NonZero<i16>
+            NonZero<i32>
+          and $N others

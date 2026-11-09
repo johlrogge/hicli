@@ -131,7 +131,7 @@ fn the_help_rows_are_the_types_first_paragraphs() {
          Usage: list [-s=FIELD] [-d] --port=PORT\n\
          \n\
          Available options:\n\
-         \x20   -s, --sort=FIELD  Sort the listing by this field\n\
+         \x20   -s, --sort=FIELD  Sort the listing by this field [bpm, title]\n\
          \x20   -d, --descending  Sort descending\n\
          \x20       --port=PORT   The node to talk to\n\
          \x20   -h, --help        Prints help information\n"
@@ -143,7 +143,7 @@ fn the_help_rows_are_the_types_first_paragraphs() {
          Usage: order KEY\n\
          \n\
          Available positional items:\n\
-         \x20   KEY         What to sort by\n\
+         \x20   KEY         What to sort by [bpm, artist]\n\
          \n\
          Available options:\n\
          \x20   -h, --help  Prints help information\n"
@@ -196,15 +196,15 @@ fn spelled_types_parse() {
 fn spelled_errors_name_the_choices() {
     assert_eq!(
         error_of(cli! { list --sort bmp --port 80 }),
-        "couldn't parse `bmp`: expected `bpm` or `title`; did you mean `bpm`?"
+        "couldn't parse `bmp`: `--sort`: expected `bpm` or `title`; did you mean `bpm`?"
     );
     assert_eq!(
         error_of(cli! { order genre }),
-        "couldn't parse `genre`: expected `bpm` or `artist`"
+        "couldn't parse `genre`: `KEY`: expected `bpm` or `artist`"
     );
     assert_eq!(
         error_of(cli! { list --port http }),
-        "couldn't parse `http`: invalid digit found in string"
+        "couldn't parse `http`: `--port`: invalid digit found in string"
     );
     assert_eq!(
         error_of(cli! { list }),
@@ -264,7 +264,7 @@ fn an_external_field_shows_the_types_help() {
          Usage: filter [-s=FIELD]\n\
          \n\
          Available options:\n\
-         \x20   -s, --sort=FIELD  Sort the listing by this field\n\
+         \x20   -s, --sort=FIELD  Sort the listing by this field [bpm, title]\n\
          \x20   -h, --help        Prints help information\n"
     );
     let f: Filters = parse(&["-s", "bpm"]);

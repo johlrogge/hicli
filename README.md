@@ -164,15 +164,19 @@ What each piece does:
   `[env:PLAYR_NODE = "x"]`.
 - **The context `&Ctx`** is built once from the globals, by the closure you pass to
   `run`, and every command that takes `&Ctx` receives it. Put connections and
-  configuration in it. Read secrets from the environment in that closure.
+  configuration in it. Read secrets from the environment in that closure. A
+  connection that is slow or can fail is opened by the first command that asks
+  for it; see [A context that connects only when asked](#a-context-that-connects-only-when-asked).
 - **Exit codes:** `0` on success, `1` for a runtime failure, `2` for a usage error.
   `run` returns the `ExitCode`. It never calls `process::exit`.
 
 ### Bad values never reach a command
 
-The newtype says how an argument is spelled. The type inside it says what a valid
-value is. bpaf parses the value with that type's `FromStr`, so its rules live in one
-place, and every command receives a value that is already valid:
+The newtype says how an argument is spelled, and a `FromStr` says what a valid value
+is. The newtype's own `FromStr` is used if it has one; otherwise the `FromStr` of the
+type inside it. Either way the rules live in one place, and every command receives a
+value that is already valid. `Output` has no `FromStr` of its own, so its word is
+parsed by `Name`'s:
 
 ```rust
 /// Lowercase letters, digits and `-`, such as `hdmi` or `bandcamp`.
@@ -198,24 +202,54 @@ impl fmt::Display for Name {
 ```
 
 `Node`, the `--node` value, is written the same way: a host name with an optional
-`:port`. A value that doesn't parse is a usage error, and no command runs:
+`:port`. A value that doesn't parse is a usage error, and no command runs. The
+message names the value, the argument it was given to, and what is wrong:
 
 ```console
 $ playr playback set-output HDMI
-Error: couldn't parse `HDMI`: a name uses only a-z, 0-9 and -
+Error: couldn't parse `HDMI`: `NAME`: a name uses only a-z, 0-9 and -
 $ echo $?
 2
 $ playr --node pi.local:http ping
 Error: couldn't parse `pi.local:http`: `http` is not a port number
 ```
 
-Known gap: the message names the value and the reason, not the option or positional
-it was given to. With several values of the same type, the user has to work out
-which one failed ([#26](https://github.com/johlrogge/hicli/issues/26)).
+Known gap: an argument spelled by bpaf, such as a `Globals` field like `--node`
+above or a field of a `#[derive(Bpaf)]` struct, is not named, only its value. With
+several such values of the same type, the user has to work out which one failed
+([#26](https://github.com/johlrogge/hicli/issues/26)). Types spelled with `#[arg(…)]`
+are always named.
+
+A newtype over a type that isn't yours, such as `NonZeroUsize` or `PathBuf`, can
+carry the rule itself, because its own `FromStr` comes first:
+
+```rust
+/// How many to take
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "limit", short = 'l', metavar = "N")]
+pub struct Limit(pub NonZeroUsize);
+
+impl FromStr for Limit {
+    type Err = &'static str;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse().map(Limit).map_err(|_| "must be at least 1")
+    }
+}
+```
+
+`--limit 0` and `-l 0` both fail with ``couldn't parse `0`: `--limit`: must be at
+least 1``: the name is the argument's spelling, not what was typed.
 
 A value with no rules, like the free-text search query below, can stay a `String`
 inside its newtype. Paths are `PathBuf`, and choices are enums (see
 [Choice values](#choice-values)).
+
+### What a `FromStr` error should say
+
+Say what is wrong with the word, as a phrase that reads after the argument's name:
+`must be at least 1`, not `'0' must be a whole number of at least 1`. Leave out the
+word, which bpaf prints, and the argument, which hicli prints. The error type can be
+anything that implements `Display`: a `String`, a `&str`, any `std::error::Error`.
 
 ## Growing the example
 
@@ -251,10 +285,57 @@ The keys are:
 
 A bare `positional` or `long` is named after the type: `SortBy` becomes `SORT-BY`
 or `--sort-by`. What is inside decides the rest: `Option<T>` is optional, `Vec<T>`
-repeats, a `bool` with a name is a switch, and anything else is parsed with its
-`FromStr`. The first paragraph of the type's doc comment is its help row, so the
-doc comment is required. These five keys are all there is, on purpose. A type
-that needs more, such as a fallback, is spelled with bpaf.
+repeats, a `bool` with a name is a switch, and anything else is one word. The
+first paragraph of the type's doc comment is its help row, so the doc comment is
+required. These five keys are all there is, on purpose. A type that needs more,
+such as a fallback, is spelled with bpaf.
+
+Which `FromStr` parses the word:
+
+| the type | parsed by |
+|---|---|
+| `Output(Name)` | `Output`'s own `FromStr` if it has one, else `Name`'s |
+| `Added(Option<DaysBack>)`, `T(Vec<I>)` | the inner type's, once per word |
+| `AudioFile(PathBuf)` | `AudioFile`'s own if it has one, else the path as given |
+| a struct with several fields | its own, which it must have |
+| a `Choice` enum | the one `#[derive(Choice)]` writes |
+
+A struct with several fields can be spelled too, when it is one word that its own
+`FromStr` takes apart. An upload that is either an audio file or a ZIP archive:
+
+```rust
+/// An audio file or a ZIP archive
+#[derive(Debug, Clone, PartialEq, Eq, Arg)]
+#[arg(positional = "FILE", complete = files)]
+pub struct Upload {
+    /// Where the file is.
+    pub path: PathBuf,
+    /// Whether it is a ZIP archive.
+    pub zip: bool,
+}
+
+impl FromStr for Upload {
+    type Err = &'static str;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let zip = if s.ends_with(".zip") {
+            true
+        } else if s.ends_with(".flac") {
+            false
+        } else {
+            return Err("not audio or a ZIP archive");
+        };
+        Ok(Upload {
+            path: PathBuf::from(s),
+            zip,
+        })
+    }
+}
+```
+
+`a.txt` fails with ``couldn't parse `a.txt`: `FILE`: not audio or a ZIP archive``.
+Without the `FromStr`, it is a compile error. (Don't name a command after the type
+in snake_case, here `upload`: the derive writes a function `upload()` beside the
+type, and the two clash.)
 
 Several options that belong together can share one struct, spelled with
 `#[derive(Bpaf)]` as in bpaf. This is also how `Globals` is written. Each field's
@@ -306,7 +387,7 @@ localhost: search None artist=None bpm=None unplayed=false added=Some(DaysBack(7
 $ playr search --added -7
 Error: `--added` requires an argument `DAYS`, got a flag `-7`, try `--added=-7` to use it as an argument
 $ playr search --added=-x
-Error: couldn't parse `-x`: `-x` is not a number of days back, such as -7
+Error: couldn't parse `-x`: `--added`: not a number of days back, such as -7
 ```
 
 hicli keeps to the standard rule rather than special-casing hyphen values: a parser
@@ -549,6 +630,71 @@ arguments that fail to parse as usage errors, and a command can return
 inspects an error to choose an exit code. For any other code, return
 `Ok(Success::code(n))`. See [ADR-012](docs/adr/012-command-errors-convert-through-into-failure.md).
 
+### A context that connects only when asked
+
+`run` builds the context before the command runs, and it doesn't tell the closure
+which command that is. Keep the closure cheap: store what was parsed. Anything
+slow or fallible, such as a connection, goes in a `OnceLock` and is opened by the
+first command that asks for it:
+
+```rust
+/// Built once, after parsing, and handed to every command.
+pub struct Ctx {
+    pub node: Node,
+    session: OnceLock<Session>,
+}
+
+impl Ctx {
+    /// The session with the node, opened the first time a command asks.
+    pub fn session(&self) -> Result<&Session, Failure> {
+        // `OnceLock::get_or_try_init` is unstable.
+        if let Some(session) = self.session.get() {
+            return Ok(session);
+        }
+        let opened = Session::open(&self.node)?;
+        Ok(self.session.get_or_init(|| opened))
+    }
+}
+
+fn mk_ctx(g: Globals) -> Result<Ctx, Failure> {
+    Ok(Ctx {
+        node: g.node,
+        session: OnceLock::new(),
+    })
+}
+```
+
+A command that talks to the node says so, with `?`:
+
+```rust
+/// Check that the node answers
+#[command]
+fn ping(ctx: &Ctx) -> Outcome {
+    let session = ctx.session()?;
+    println!("pong from {}", session.node);
+    Ok(())
+}
+```
+
+`sort` and `generate-completions` never call `session()`, so they work when no node
+answers. If opening fails, the error comes from the command that asked: exit 1, or
+2 if it is a `Failure::usage`. The list of commands that need a connection is not
+written anywhere; each one says it where it calls `session()`. A test can check
+that a command never connected:
+
+```rust
+#[test]
+fn sort_never_opens_a_session() {
+    let (globals, invocation) = app().parse(cli! { sort bpm }).expect("parses");
+    let ctx = mk_ctx(globals).expect("building the context is cheap");
+    invocation.run(&ctx).expect("sorts");
+    assert!(ctx.session.get().is_none(), "sort opened a session");
+}
+```
+
+hicli has no API for this, and doesn't need one. See
+[ADR-014](docs/adr/014-a-lazy-context-needs-no-api.md).
+
 ### Choice values
 
 `playr sort bpm` takes one of a fixed set of words. Write an enum whose variants
@@ -556,7 +702,7 @@ have no fields and derive `Choice`. Add `Arg` with `#[arg(positional = "KEY")]`,
 and the enum itself is the argument:
 
 ```rust
-/// What to sort by: bpm, title or artist
+/// What to sort by
 //
 // A choice is the argument: its names parse, complete and appear in errors.
 #[derive(Debug, Clone, Copy, PartialEq, Choice, Arg)]
@@ -578,16 +724,19 @@ error that lists the names, and suggests one if it is close:
 
 ```console
 $ playr sort key
-Error: couldn't parse `key`: expected `bpm`, `title` or `artist`
+Error: couldn't parse `key`: `KEY`: expected `bpm`, `title` or `artist`
 $ playr sort bmp
-Error: couldn't parse `bmp`: expected `bpm`, `title` or `artist`; did you mean `bpm`?
+Error: couldn't parse `bmp`: `KEY`: expected `bpm`, `title` or `artist`; did you mean `bpm`?
 ```
 
 The names complete on their own, with no completer to write. `sort <TAB>` offers
 `bpm`, `title` and `artist` (and the `--descending` flag), and `sort t<TAB>` offers
 `title`. A shell that shows
-descriptions shows each variant's doc comment beside it. A choice inside a newtype
-completes the same way: `struct SortOpt(pub Option<SortKey>)` with
+descriptions shows each variant's doc comment beside it. The help row ends with
+the names, in bold on a terminal: `KEY  What to sort by [bpm, title, artist]` (see
+`sort --help` [below](#help-text)). So don't list them in the doc comment too; they
+would appear twice. A choice inside a newtype completes and lists its names the
+same way: `struct SortOpt(pub Option<SortKey>)` with
 `#[arg(long = "sort", metavar = "KEY")]` is an optional `--sort=KEY`.
 
 ### Help text
@@ -643,7 +792,7 @@ Usage: playr sort [-d] KEY
 Reads one track id per line and prints them sorted.
 
 Available positional items:
-    KEY               What to sort by: bpm, title or artist
+    KEY               What to sort by [bpm, title, artist]
 
 Available options:
     -d, --descending  Sort descending (Z→A, high→low)
@@ -750,10 +899,11 @@ results to the shell unchanged.
 
 Command names complete automatically. To install completion, render the script from a
 hidden command. `hicli::Shell` is a `Choice`, so `generate-completions <TAB>` offers
-`bash`, `zsh` and `fish`:
+`bash`, `zsh` and `fish`, and its help row lists them
+(`SHELL  A shell to print completions for [bash, zsh, fish]`):
 
 ```rust
-/// A shell to print completions for: bash, zsh or fish
+/// A shell to print completions for
 #[derive(Debug, Clone, Arg)]
 #[arg(positional = "SHELL")]
 pub struct ShellArg(pub hicli::Shell);
@@ -799,6 +949,10 @@ mod tests {
         output_names_are_checked: { playback set-output HDMI } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
+            assert_eq!(
+                e.unwrap_stderr(),
+                "couldn't parse `HDMI`: `NAME`: a name uses only a-z, 0-9 and -"
+            );
         },
     }
 
@@ -823,6 +977,7 @@ mod tests {
     fn the_command_is_still_a_function() {
         let ctx = Ctx {
             node: Node::localhost(),
+            session: OnceLock::new(),
         };
         assert!(upload(AudioFile("/no/such/file.flac".into()), &ctx).is_err());
     }
@@ -859,8 +1014,10 @@ mod tests {
    value checked by `FromStr`, such as a `Name` or a number, doesn't complete until
    the partial word parses, and never completes from an empty word. Spell the type
    with `#[arg(…)]` to fix that.
-6. **`#[arg(complete = …)]` goes only on a single-value type.** On a multi-field
-   struct it is a compile error.
+6. **`#[arg(complete = …)]` on a `#[derive(Bpaf, Arg)]` type goes only on a
+   single-field one.** On a multi-field bpaf struct it is a compile error. A struct
+   with several fields spelled with `#[arg(…)]` is one word, so it completes like
+   any other.
 7. **`Globals` doesn't derive `Arg`.** It is parsed once at the top level.
 8. **A `#[group] pub mod x;` that lives in its own file must be declared at the top
    level of a file**, not inside an inline module.
@@ -886,6 +1043,36 @@ mod tests {
     - A `--` right after the external's name is eaten by bpaf; the binary only sees
       the words after it.
     - See `ExternalCommand` on [docs.rs](https://docs.rs/hicli) for the rest.
+
+## Upgrading from 0.5
+
+Most code builds unchanged, but help and error text changes. Check these:
+
+- **Re-bless your help and error snapshots.** An error from a type spelled with
+  `#[arg(…)]` now names the argument after the value:
+  ``couldn't parse `bmp`: `KEY`: expected `bpm`, `title` or `artist`; did you mean
+  `bpm`?``. The help row of a `Choice`, and of a type that holds one, ends with its
+  names: `KEY  What to sort by [bpm, title, artist]`. Types spelled with
+  `#[derive(Bpaf)]`, and hand-written `Arg` impls, are unchanged.
+- **Remove choice names you listed by hand.** A doc comment such as
+  `/// What to sort by: bpm, title or artist` now shows the names twice. Write
+  `/// What to sort by`.
+- **A type's own `FromStr` now runs.** In 0.5, `#[arg(…)]` on `Limit(NonZeroUsize)`
+  parsed with `NonZeroUsize`'s `FromStr` and ignored `Limit`'s, so the type's rule
+  never ran. Now `Limit`'s runs, and it may reject words that 0.5 accepted. A
+  `FromStr` error that repeats the word or names the argument now says them twice:
+  shorten it to what is wrong (see
+  [What a `FromStr` error should say](#what-a-fromstr-error-should-say)).
+- **A newtype where neither the type nor its field implements `FromStr`** is now
+  E0599, ``the method `parse_word` exists for reference
+  `&hicli::__private::FromStrOf<Wrap, Opaque>`, but its trait bounds were not
+  satisfied``, with notes naming both bounds (`Wrap: FromStr`, `Opaque: FromStr`).
+  It was E0277. Implement `FromStr` for either one.
+- **`#[arg(positional|long|short …)]` on a struct with several fields** no longer
+  says to use `#[derive(Bpaf)]`. It is spelled as one word when the struct
+  implements `FromStr`, and is E0277 (`T: FromStr`) when it doesn't.
+
+The full list is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Upgrading from 0.4
 
@@ -913,8 +1100,8 @@ Most code builds unchanged. Check these:
   (E0277). Remove the entry, or spell the type with `#[arg(…)]`. An `# Arguments`
   heading after `# Examples` is still examples text.
 - **`Shell`'s error type and text.** `"tcsh".parse::<Shell>()` fails with
-  `UnknownChoice`, which displays ``expected `bash`, `zsh` or `fish`; did you mean
-  `bash`?``. It used to be ``unknown shell `tcsh`: expected one of `bash`, `zsh`,
+  `UnknownChoice`, which displays ``expected `bash`, `zsh` or `fish` `` (and
+  `"bsah"` adds ``; did you mean `bash`?``). It used to be ``unknown shell `tcsh`: expected one of `bash`, `zsh`,
   `fish` ``. `UnknownShell` is a deprecated alias of `UnknownChoice`. It was a tuple
   struct, so code that built or matched `UnknownShell(…)` no longer compiles.
 - **`cli!` splits words only at whitespace**, as a shell does. In tests, a few
@@ -978,7 +1165,7 @@ Usage lines and parsing stay the same, and so does the help row of a one-paragra
 doc comment (only the first paragraph is printed now). The derive still writes the
 snake_case constructor (`source_name()`), so a `#[bpaf(external(source_name))]`
 that embeds the type elsewhere keeps working. Keep `#[derive(Bpaf)]` for a type
-with several fields, and for one that needs another bpaf attribute, such as
+with several options or positionals, and for one that needs another bpaf attribute, such as
 `fallback`, `env` or a guard. Your crate needs the direct `bpaf` dependency only
 while something still uses `#[derive(Bpaf)]`.
 
@@ -1010,7 +1197,7 @@ The full list is in [`CHANGELOG.md`](CHANGELOG.md#breaking--upgrading-from-01).
   `hicli::curried_command`, `hicli::group_args` and `Node::by_default`. Anything the
   macros generate, you can also write yourself.
 - **Coming from clap:** the help layout is bpaf's, not clap's. Globals are parsed once
-  and can't be overridden per subcommand. A one-value argument is spelled with
+  and can't be overridden per subcommand. A one-word argument is spelled with
   `#[arg(…)]` on its type, and anything bigger with bpaf's own attributes.
   `--help` exits 0 and usage errors exit 2.
 - **Why it is designed this way:** [`docs/adr/`](docs/adr/). The main ones are
@@ -1018,6 +1205,10 @@ The full list is in [`CHANGELOG.md`](CHANGELOG.md#breaking--upgrading-from-01).
   [006](docs/adr/006-an-argument-is-a-type.md) (an argument is a type),
   [016](docs/adr/016-hicli-spells-one-value-argument-types.md) (`#[arg(…)]`,
   `Choice` and the help rule),
+  [018](docs/adr/018-a-spelled-type-parses-itself-and-names-itself.md) (which
+  `FromStr` parses a word, and errors that name the argument),
+  [014](docs/adr/014-a-lazy-context-needs-no-api.md) (a context that connects on
+  first use),
   [011](docs/adr/011-curried-commands-and-default-commands.md) (curried groups and
   default commands) and
   [012](docs/adr/012-command-errors-convert-through-into-failure.md) (errors).

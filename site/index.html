@@ -349,9 +349,9 @@ pi.local: output is now hdmi</code></pre>
             its doc comment is its help. Define it once and use it in every command that needs it.
           </p>
           <p>
-            The type inside says what a valid value is. bpaf parses it with that type’s
-            <code>FromStr</code>, so bad values never reach a command: a value that doesn’t parse
-            is a usage error, and no command runs.
+            A <code>FromStr</code> says what a valid value is: the newtype’s own if it has one,
+            else the one of the type inside. Bad values never reach a command: a value that
+            doesn’t parse is a usage error that names the argument, and no command runs.
           </p>
         </div>
         <div class="lesson__code stack">
@@ -364,7 +364,7 @@ pi.local: output is now hdmi</code></pre>
           </figure>
           <figure class="screen screen--small">
 <pre><code><span class="t-p">$ playr playback set-output HDMI</span>
-Error: couldn't parse `HDMI`: a name uses only a-z, 0-9 and -
+Error: couldn't parse `HDMI`: `NAME`: a name uses only a-z, 0-9 and -
 <span class="t-p">$ echo $?</span>
 2</code></pre>
           </figure>

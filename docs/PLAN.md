@@ -213,27 +213,39 @@ pub fn completion_script(shell: Shell, bin: &str) -> String;
   command's outcome → `Success`'s code (silent) or `Failure`'s code (2 usage / 1 runtime,
   message to stderr). `hicli` never calls `std::process::exit`: every path
   returns a code (or, from `App::run` itself, an `ExitCode`) to the consumer's
-  `main`.
+  `main`. An expensive context part is built lazily by the consumer (ADR-014):
+  a `OnceLock` behind a `Ctx` method the command calls with `?`; `mk_ctx` never
+  sees the selected command.
 - **An argument is a type (ADR-006):** `#[command]` never synthesises a call by
   name — it calls `<T as Arg>::parser()` for each owned parameter. `Arg` is
   hand-implementable (the same relationship `#[command]` has to `hicli::command`)
   or derived with `#[derive(Arg)]`, in one of two modes (ADR-016):
   - **spelled** — `#[arg(positional = "KEY")]`, `#[arg(long = "sort", short = 's',
-    metavar = "FIELD")]`, … on a newtype, a one-named-field struct or a
-    `#[derive(Choice)]` enum. hicli writes the bpaf chain (`::hicli::bpaf::…` paths
+    metavar = "FIELD")]`, … on a newtype, a one-named-field struct, a struct with
+    several fields that implements `FromStr` (one word, parsed whole — ADR-018) or
+    a `#[derive(Choice)]` enum. hicli writes the bpaf chain (`::hicli::bpaf::…` paths
     only, so no direct `bpaf` dependency), the type's doc comment's **first
     paragraph** is its help row, `complete = f` is `fn(&str)` and is handed the
-    raw word, a `Choice` inside completes automatically (an autoref probe in
+    raw word, a `Choice` inside completes automatically and appends its names to
+    the help row (`What to sort by [bpm, title, artist]`; an autoref probe in
     `hicli::__private`), and the type implements `ArgHelp`, so a command's
-    `# Arguments` entry can replace the row. The keys are `positional`, `long`,
-    `short`, `metavar`, `complete` — a key is added only when a consumer earns it;
+    `# Arguments` entry can replace the row. A word is parsed by the type's own
+    `FromStr` when it has one, else by its field's (a second autoref probe,
+    `FromStrOf`); inside `Option`/`Vec`, by the inner type's per word; a path
+    with no `complete = f` stays typed (non-UTF-8 kept unless the type has its
+    own `FromStr`). Every spelled parse error is prefixed with the argument's
+    spelling — `--long`, else `-s`, or a positional's metavar:
+    ``couldn't parse `0`: `--limit`: must be at least 1`` (ADR-018). The keys are
+    `positional`, `long`, `short`, `metavar`, `complete` — a key is added only
+    when a consumer earns it. A unit struct and an enum with data are rejected;
   - **bpaf mode** — no spelling key: beside `#[derive(Bpaf)]`, it writes one impl
     calling the constructor `#[derive(Bpaf)]` already generated, spanned at the
     type's ident so a missing `#[derive(Bpaf)]` reports at the type. An optional
     `#[arg(complete = …)]` — a function over the parsed `&T`, or the shorthands
-    `files`/`dirs` — attaches completion; it is a compile error on a multi-field
-    struct or an enum, because a whole-value completer cannot tell which field is
-    mid-word.
+    `files`/`dirs` — attaches completion; in bpaf mode it is a compile error on a
+    multi-field struct or an enum, because a whole-value completer cannot tell
+    which field is mid-word (a spelled multi-field struct is one word, so it may
+    complete).
 
   Either way completion attaches to the *type*, so every command that takes it
   inherits the completion for free.
@@ -456,7 +468,8 @@ bpaf has built-in suggestions for both misspelled commands (since 0.5.1) and fla
 1. **Golden matrix** in tests (via `cli!`/`cli_test!` + `unwrap_stderr()`): misspelled
    top-level/nested commands, long flags, short/long confusion — assert stderr names the target.
 2. **Gap-closer using the same registry:** on `Err(ParseFailure::Stderr)` with no suggestion, run
-   a Levenshtein pass (≤ 2; `strsim`) over the registered **top-level command names**, applied to
+   an edit-distance pass (`strsim::osa_distance`; one edit under six letters, two from six —
+   see ADR-002's 2026-11-09 amendment) over the registered **top-level command names**, applied to
    the command position only, and append `` did you mean `<name>`? ``. Nested commands and flags
    are covered by bpaf's own suggestions (see the ADR `suggestion-registry-is-top-level-only`).
    The `(name, help)` pair supplied at registration feeds help and completion, rendered by
@@ -517,6 +530,15 @@ groups, argument types, `# Arguments` entries and `Choice` variants (replacing A
 "first line"). Earned by mdma-cli's migration (#8, #23); keys are added when our analysis of consumer code
 shows they improve it. **`cli!` as a proc macro (ADR-017)** — a word is a run of touching tokens (#22).
 
+**Also in: a spelled type parses itself and names itself (ADR-018)** — earned by mdma-cli's
+validated newtypes: a spelled type's word goes through its own `FromStr` first, else its field's
+(an autoref probe, no key); a struct with several fields that implements `FromStr` is spelled as
+one word, parsed whole; every spelled parse error names the argument
+(``couldn't parse `0`: `--limit`: must be at least 1``); a `Choice`'s help row ends with its
+names. Types bpaf spells and hand-written `Arg` impls are not named — that part of #26 waits on
+bpaf. **A lazy context needs no API (ADR-014)** — #7 is answered by a documented `OnceLock`
+recipe (README, `examples/playr.rs`), not by handing `mk_ctx` the selected command.
+
 **Deferred:** nested `args` groups (they parse at runtime but have no constructor or macro form);
 a default in a curried group; a top-level default; a default that also answers to its own name
 (recipe: a second `#[command]` calling the same function); a dedicated `source NAME --help` page;
@@ -551,7 +573,10 @@ glued form. This keeps the standard rule that a word starting with `-` is an opt
   an empty group, a module-relative context type, `#[group]` on a non-module, a `#[group]` file
   module whose file is missing, a `#[group] mod b;` nested inside an inline `#[group]` module, a command
   parameter whose type does not implement `Arg`, `#[derive(Arg)]` without `#[derive(Bpaf)]`,
-  `#[arg(complete = …)]` on a multi-field struct or an enum, `#[derive(Arg)]` on a generic type,
+  `#[arg(complete = …)]` on a bpaf-mode multi-field struct or an enum, `#[derive(Arg)]` on a
+  generic type, ADR-018's spelled rejections — a struct with several fields and no `FromStr`
+  (one E0277), a newtype where neither the type nor its field has `FromStr` (E0599 naming both
+  bounds), a `FromStr` whose error is not `Display` —
   and ADR-008's attribute keys and examples slot — an unknown key, `name`/`hide` given twice, an
   empty name or alias, one with whitespace or a leading `-`, a repeated alias, an alias equal to the
   command's or the group's own name, an examples heading with nothing under it —
