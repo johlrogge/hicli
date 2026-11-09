@@ -10,8 +10,9 @@ ADR-003 (the exit code is a value; hicli never calls `std::process::exit`).
 
 **Amended by [ADR-016](016-hicli-spells-one-value-argument-types.md)
 (2026-11-06).** `Shell` is a `#[derive(Choice)]`: its `FromStr::Err` is
-`UnknownChoice`, and `"tcsh"` fails with ``expected `bash`, `zsh` or `fish`;
-did you mean `bash`?``. **`UnknownShell` is deprecated** (since 0.5.0), an
+`UnknownChoice`, and `"tcsh"` fails with ``expected `bash`, `zsh` or `fish` ``
+(0.5 added ``; did you mean `bash`?``; since the 2026-11-09 amendment to
+ADR-002, two edits is too many for a four-letter word). **`UnknownShell` is deprecated** (since 0.5.0), an
 alias of `UnknownChoice`; it is no longer a tuple struct. Decision 5 stands —
 hicli still ships no `Arg` for `Shell` — but the documented newtype is spelled
 by hicli, and completes the shell names with no completer:

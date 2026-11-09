@@ -105,7 +105,7 @@
       <div class="cover__corner cover__corner--br" aria-hidden="true"></div>
 
       <div class="cover__top">
-        <p class="cover__grade">v0.5</p>
+        <p class="cover__grade">v0.6</p>
         <p class="cover__pencil" aria-hidden="true">name: <span class="cover__scrawl">playr</span></p>
       </div>
 
@@ -130,7 +130,7 @@
         <figure class="answer answer--install">
           <figcaption>Cargo.toml</figcaption>
 <pre><code><span class="t-h">[dependencies]</span>
-hicli = <span class="t-s">"0.5"</span>
+hicli = <span class="t-s">"0.6"</span>
 bpaf = <span class="t-s">"0.9"</span>   <span class="t-c"># only for #[derive(Bpaf)], e.g. on Globals</span></code></pre>
         </figure>
 
@@ -139,7 +139,7 @@ bpaf = <span class="t-s">"0.9"</span>   <span class="t-c"># only for #[derive(Bp
           <li><a class="btn" href="https://crates.io/crates/hicli">crates.io</a></li>
           <li><a class="btn" href="https://github.com/johlrogge/hicli">GitHub</a></li>
         </ul>
-        <p class="fineprint">0.5, pre-1.0: a minor version may break things, and every break is listed in the changelog. MSRV: Rust 1.99.</p>
+        <p class="fineprint">0.6, pre-1.0: a minor version may break things, and every break is listed in the changelog. MSRV: Rust 1.99.</p>
       </div>
 
       <p class="cover__authors">#[command] <span aria-hidden="true">•</span> #[group] <span aria-hidden="true">•</span> app!</p>
@@ -349,9 +349,9 @@ pi.local: output is now hdmi</code></pre>
             its doc comment is its help. Define it once and use it in every command that needs it.
           </p>
           <p>
-            The type inside says what a valid value is. bpaf parses it with that type’s
-            <code>FromStr</code>, so bad values never reach a command: a value that doesn’t parse
-            is a usage error, and no command runs.
+            A <code>FromStr</code> says what a valid value is: the newtype’s own if it has one,
+            else the one of the type inside. Bad values never reach a command: a value that
+            doesn’t parse is a usage error that names the argument, and no command runs.
           </p>
         </div>
         <div class="lesson__code stack">
@@ -364,7 +364,7 @@ pi.local: output is now hdmi</code></pre>
           </figure>
           <figure class="screen screen--small">
 <pre><code><span class="t-p">$ playr playback set-output HDMI</span>
-Error: couldn't parse `HDMI`: a name uses only a-z, 0-9 and -
+Error: couldn't parse `HDMI`: `NAME`: a name uses only a-z, 0-9 and -
 <span class="t-p">$ echo $?</span>
 2</code></pre>
           </figure>

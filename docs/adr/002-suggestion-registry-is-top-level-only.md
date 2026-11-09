@@ -17,6 +17,15 @@ Vocabulary renamed by [ADR-007](007-hicli-and-the-command-attribute.md) (`verban
 
 Scope unchanged by [ADR-011](011-curried-commands-and-default-commands.md) (2026-11-03): suggestions inside curried groups remain out of scope, and a typo under a group's default command reads as the default's query.
 
+**Amended (2026-11-09): the distance rule.** The pass is no longer plain
+Levenshtein within two edits. It uses optimal-string-alignment distance
+(`strsim::osa_distance`), so a swapped pair of letters is one edit, and allows
+`(typed.chars().count() / 3).clamp(1, 2)` edits: one for a word under six
+letters, two from six. `bmp` still suggests `bpm`; `nope` no longer suggests
+`role`. Ties still go to the nearest, then the earlier name. The same rule
+serves `UnknownChoice`, after its case-insensitive exact match. Scope is
+unchanged.
+
 ## Decision
 
 `App::names` remains a flat list of **top-level** command names (leaves, mounted

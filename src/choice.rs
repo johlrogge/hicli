@@ -7,8 +7,13 @@
 //!
 //! A choice is a value. It is also an argument when `#[derive(Arg)]` spells it
 //! (`#[derive(Choice, Arg)] #[arg(positional = "KEY")]`); the chain that
-//! expansion ends in is `crate::private::choice`, which completes with
-//! [`complete_choice`] and parses with the `FromStr` the derive wrote.
+//! expansion ends in is `crate::private::choice`, which ends the help row with
+//! the names (`What to sort by [bpm, title, artist]`, each name bold in
+//! colour), completes with [`complete_choice`], parses with the `FromStr` the
+//! derive wrote, and prefixes an error with the argument's name
+//! (``couldn't parse `bmp`: `KEY`: expected `bpm`, `title` or `artist`; did you
+//! mean `bpm`?``). A spelled newtype over a choice, or an `Option`/`Vec` of
+//! one, gets the same help row through `crate::private::Probe` (ADR-018).
 
 use std::fmt;
 use std::str::FromStr;
@@ -68,7 +73,8 @@ use crate::arg::Candidate;
 /// Without `#[derive(Arg)]` a choice is only a value, and a command cannot
 /// take it as a parameter. By hand, complete at the **string** level, so the
 /// completer fires on the empty word and on a half-typed one, and parse after —
-/// the chain spelled mode writes:
+/// the core of the chain spelled mode writes, which also lists the names in
+/// the help row and names the argument in the error:
 ///
 /// ```
 /// use hicli::bpaf::{positional, Parser};
@@ -117,7 +123,8 @@ use crate::arg::Candidate;
 /// # The error names the choices
 ///
 /// [`UnknownChoice`] lists every name and, when one is close — the same word
-/// in another case, or one or two edits away — suggests it. It does **not**
+/// in another case, or one edit away (two from six letters; a swapped pair of
+/// letters is one edit) — suggests it. It does **not**
 /// repeat the word that was typed: `bpaf` already prints
 /// ``couldn't parse `bmp`: `` in front of it.
 ///
@@ -169,7 +176,8 @@ impl UnknownChoice {
     /// The error for `typed`, which is none of `C`'s names.
     ///
     /// The suggestion is the first name equal to `typed` ignoring ASCII case;
-    /// failing that, the name one or two edits away, the nearest first.
+    /// failing that, the nearest name one edit away — two for a word of six
+    /// letters or more — counting a swapped pair of letters as one edit.
     ///
     /// ```
     /// use hicli::{Choice, UnknownChoice};
@@ -410,7 +418,7 @@ mod tests {
 
     #[test]
     fn the_suggestion_ignores_case_and_matching_does_not() {
-        // `BPM` is three edits from `bpm`, too far for Levenshtein: the
+        // `BPM` is three edits from `bpm`, too far for the edit distance: the
         // case-insensitive pass is what finds it.
         assert_eq!(
             error::<SortKey>("BPM"),
@@ -427,6 +435,32 @@ mod tests {
         assert_eq!(
             error::<SortKey>("popularity"),
             "expected `bpm`, `title` or `by-artist`"
+        );
+    }
+
+    #[test]
+    fn a_short_word_allows_one_edit_only() {
+        // `tcsh` is two edits from `bash`: too many for four letters.
+        assert_eq!(
+            error::<crate::Shell>("tcsh"),
+            "expected `bash`, `zsh` or `fish`"
+        );
+        assert_eq!(error::<Two>("flsh"), "expected `fast` or `slow`");
+        assert_eq!(
+            error::<Two>("fas"),
+            "expected `fast` or `slow`; did you mean `fast`?"
+        );
+    }
+
+    #[test]
+    fn a_six_letter_word_allows_two_edits() {
+        assert_eq!(
+            error::<SortKey>("titlexx"),
+            "expected `bpm`, `title` or `by-artist`; did you mean `title`?"
+        );
+        assert_eq!(
+            error::<SortKey>("byartst"),
+            "expected `bpm`, `title` or `by-artist`; did you mean `by-artist`?"
         );
     }
 

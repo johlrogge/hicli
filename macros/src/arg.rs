@@ -101,12 +101,10 @@ const NEEDS_METAVAR: &str = "an option with a value needs `metavar = \"…\"`: t
 const OPTIONAL_SWITCH: &str = "a switch is a plain `bool`, `false` when absent: spell \
                                `Option<bool>` and `Vec<bool>` as `bool`";
 
-/// S7: spelling keys on a struct with more than one field.
-const MULTI_FIELD: &str = "a multi-field argument type is spelled by #[derive(Bpaf)]";
-
-/// S7b: a spelled type of any other shape.
-const SPELLED_SHAPE: &str = "#[arg(positional|long|short …)] spells a newtype, a struct with one \
-                             named field, or a fieldless enum that derives Choice";
+/// S7: a spelled type of a shape that cannot be one word.
+const SPELLED_SHAPE: &str = "#[arg(positional|long|short …)] spells a struct — a newtype, a \
+                             struct with one named field, or a struct with several fields that \
+                             implements FromStr — or a fieldless enum that derives Choice";
 
 /// S8: `#[bpaf(…)]` attributes on a spelled type.
 const BPAF_ATTRS: &str = "#[arg(positional…)] spells this type: remove #[derive(Bpaf)] and its \
@@ -362,6 +360,9 @@ enum Shape<'a> {
     Named(&'a Ident, &'a Type),
     /// A fieldless enum: the type *is* the value, and a `Choice`.
     Choice,
+    /// A struct with several fields: one word, parsed whole by its own
+    /// `FromStr` (ADR-018).
+    Whole,
 }
 
 /// How many values the field holds, read off its type's last path segment.
@@ -427,8 +428,8 @@ fn shape<'a>(input: &'a DeriveInput, at: &Attribute) -> Result<Shape<'a>> {
                 let ident = field.ident.as_ref().expect("a named field has an ident");
                 Ok(Shape::Named(ident, &field.ty))
             }
-            Fields::Unnamed(f) if f.unnamed.len() > 1 => Err(Error::new_spanned(at, MULTI_FIELD)),
-            Fields::Named(f) if f.named.len() > 1 => Err(Error::new_spanned(at, MULTI_FIELD)),
+            Fields::Unnamed(f) if f.unnamed.len() > 1 => Ok(Shape::Whole),
+            Fields::Named(f) if f.named.len() > 1 => Ok(Shape::Whole),
             _ => Err(Error::new_spanned(at, SPELLED_SHAPE)),
         },
         Data::Enum(e) => {
@@ -494,14 +495,14 @@ fn spelled(input: &DeriveInput, args: ArgArgs, at: &Attribute) -> Result<TokenSt
             let (a, i) = arity(t);
             (a, Some(i))
         }
-        Shape::Choice => (Arity::One, None),
+        Shape::Choice | Shape::Whole => (Arity::One, None),
     };
     let switch = inner.is_some_and(|i| is_named(i, "bool"));
     if switch {
         if arity != Arity::One {
             let t = match &shape {
                 Shape::Tuple(t) | Shape::Named(_, t) => *t,
-                Shape::Choice => unreachable!("a choice has no field"),
+                Shape::Choice | Shape::Whole => unreachable!("only a field is a switch"),
             };
             return Err(Error::new_spanned(t, OPTIONAL_SWITCH));
         }
@@ -560,23 +561,9 @@ fn chain(
 ) -> TokenStream {
     let ty = &input.ident;
     let string = quote!(::std::string::String);
-    // The value type: `Self` for a choice enum, the field's (unwrapped) type
-    // otherwise.
-    let value = match inner {
-        Some(i) => quote!(#i),
-        None => quote!(Self),
-    };
-    let value_span = inner.map_or_else(|| ty.span(), Spanned::span);
     let completion = args.completion();
-    // A path type keeps bpaf's own `OsString` conversion, which needs no
-    // UTF-8, unless a completer has to see the word as a string.
-    let os = inner.is_some_and(|i| is_named(i, "PathBuf") || is_named(i, "OsString"));
-    let typed = match completion {
-        Completion::Files | Completion::Dirs => true,
-        Completion::With(_) => false,
-        Completion::None => os,
-    };
-    let parsed_as = if typed { value.clone() } else { string.clone() };
+    // The name a parse error is prefixed with (ADR-018).
+    let name = LitStr::new(&spelling(args, ty), Span::call_site());
 
     let named = || {
         let long = args.long.as_ref().map(|l| match &l.value {
@@ -595,79 +582,179 @@ fn chain(
         }
     };
 
-    let mut prelude = TokenStream::new();
-    let mut body = if switch {
-        let n = named();
-        quote!(#n.help(help).switch())
-    } else {
-        let head = match &args.positional {
-            Some(p) => {
-                let meta = match &p.value {
-                    Some(m) => m.clone(),
-                    None => LitStr::new(&screaming_kebab(ty), p.at.span()),
-                };
-                quote!(::hicli::bpaf::positional::<#parsed_as>(#meta).help(help))
-            }
-            None => {
-                let n = named();
-                let meta = &args
-                    .metavar
-                    .as_ref()
-                    .expect("checked: an option has a metavar")
-                    .value;
-                quote!(#n.help(help).argument::<#parsed_as>(#meta))
-            }
-        };
-        match completion {
-            Completion::Files => quote!(::hicli::complete_files(#head)),
-            Completion::Dirs => quote!(::hicli::complete_dirs(#head)),
-            Completion::None if typed => head,
-            Completion::None => {
-                let parse = quote_spanned!(value_span=> .parse(|w: #string| w.parse::<#value>()));
-                match shape {
-                    // One `Choice` bound for both steps, so an enum that is
-                    // not a choice is one E0277, not that and a `FromStr` one.
-                    Shape::Choice => quote!(::hicli::__private::choice::<Self>(#head)),
-                    _ => {
-                        prelude = quote! {
-                            #[allow(unused_imports)]
-                            use ::hicli::__private::{ChoiceCompleter as _, NoCompleter as _};
-                            let __complete = (&::hicli::__private::Probe::<#value>::NEW).completer();
-                        };
-                        quote! {
-                            #head
-                                .complete(move |w: &#string| __complete(w.as_str()))
-                                #parse
-                        }
-                    }
-                }
-            }
-            Completion::With(f) => {
-                let parse = quote_spanned!(value_span=> .parse(|w: #string| w.parse::<#value>()));
-                quote! {
-                    #head
-                        .complete(|w: &#string| #f(w.as_str()))
-                        #parse
-                }
-            }
+    // The head: `positional::<P>(META).help(H)` or `long(…).help(H).argument::<P>(META)`.
+    let head = |parsed_as: &TokenStream, help: TokenStream| match &args.positional {
+        Some(p) => {
+            let meta = match &p.value {
+                Some(m) => m.clone(),
+                None => LitStr::new(&screaming_kebab(ty), p.at.span()),
+            };
+            quote!(::hicli::bpaf::positional::<#parsed_as>(#meta).help(#help))
+        }
+        None => {
+            let n = named();
+            let meta = &args
+                .metavar
+                .as_ref()
+                .expect("checked: an option has a metavar")
+                .value;
+            quote!(#n.help(#help).argument::<#parsed_as>(#meta))
         }
     };
-    match arity {
-        Arity::One => {}
-        Arity::Optional => body = quote!(#body.optional()),
-        Arity::Many => body = quote!(#body.many()),
-    }
-    match shape {
-        Shape::Tuple(_) => body = quote!(#body.map(#ty)),
-        Shape::Named(field, _) => body = quote!(#body.map(|v| #ty { #field: v })),
-        Shape::Choice => {}
-    }
+
+    let body = match shape {
+        _ if switch => {
+            let n = named();
+            let map = wrap(ty, shape);
+            quote!(#n.help(help).switch().map(#map))
+        }
+        // One `Choice` bound for the whole chain, so an enum that is not a
+        // choice is one E0277, not that and a `FromStr` one.
+        Shape::Choice => {
+            let h = head(&string, quote!(help));
+            quote!(::hicli::__private::choice::<Self, _>(#name, help, |help| #h))
+        }
+        Shape::Whole => {
+            let h = head(&string, quote!(help));
+            let h = match completion {
+                Completion::None => h,
+                Completion::Files => quote!(::hicli::complete_files(#h)),
+                Completion::Dirs => quote!(::hicli::complete_dirs(#h)),
+                Completion::With(f) => quote!(#h.complete(|w: &#string| #f(w.as_str()))),
+            };
+            // Spanned at the type: a missing `FromStr` is reported on it.
+            let parse = quote_spanned! {ty.span()=>
+                .parse(|w: #string| w.parse::<Self>().map_err(|e| ::hicli::__private::named(#name, e)))
+            };
+            quote!(#h #parse)
+        }
+        Shape::Tuple(field) | Shape::Named(_, field) => {
+            let value = inner.expect("a field has a value type");
+            return field_chain(ty, shape, field, value, arity, completion, &name, head);
+        }
+    };
     quote! {
         #[allow(unused_imports)]
         use ::hicli::bpaf::Parser as _;
-        #prelude
         #body
     }
+}
+
+/// The function that wraps a field's value into the type: `T` or
+/// `|v| T { field: v }`.
+fn wrap(ty: &Ident, shape: &Shape<'_>) -> TokenStream {
+    match shape {
+        Shape::Named(field, _) => quote!(|v| #ty { #field: v }),
+        _ => quote!(#ty),
+    }
+}
+
+/// The body of `parser_with_help` for a one-field type that is not a switch:
+/// the probe prelude, the head, its completion, the parse and the arity.
+#[allow(clippy::too_many_arguments)]
+fn field_chain(
+    ty: &Ident,
+    shape: &Shape<'_>,
+    field: &Type,
+    value: &Type,
+    arity: Arity,
+    completion: &Completion,
+    name: &LitStr,
+    head: impl Fn(&TokenStream, TokenStream) -> TokenStream,
+) -> TokenStream {
+    let string = quote!(::std::string::String);
+    // A path value keeps bpaf's own `OsString` conversion, which needs no
+    // UTF-8, unless a completer has to see the word as a string.
+    let os_head = is_os(value) && !matches!(completion, Completion::With(_));
+    let parsed_as = if os_head {
+        quote!(#value)
+    } else {
+        string.clone()
+    };
+    let probe = quote!((&::hicli::__private::Probe::<#value>::NEW));
+    let complete_probe = if matches!(completion, Completion::None) && !os_head {
+        quote!(let __complete = #probe.completer();)
+    } else {
+        TokenStream::new()
+    };
+    let h = head(&parsed_as, quote!(__help));
+    let h = match completion {
+        Completion::Files => quote!(::hicli::complete_files(#h)),
+        Completion::Dirs => quote!(::hicli::complete_dirs(#h)),
+        Completion::None if os_head => h,
+        Completion::None => quote!(#h.complete(move |w: &#string| __complete(w.as_str()))),
+        Completion::With(f) => quote!(#h.complete(|w: &#string| #f(w.as_str()))),
+    };
+    let map = wrap(ty, shape);
+    let named = quote!(::hicli::__private::named);
+    let body = match arity {
+        Arity::One => {
+            let of = quote!((&::hicli::__private::FromStrOf::<#ty, #field>(#map)));
+            if os_head {
+                quote_spanned! {field.span()=>
+                    #h.parse(|w: #field| #of.parse_os(w).map_err(|e| #named(#name, e)))
+                }
+            } else {
+                quote_spanned! {field.span()=>
+                    #h.parse(|w: #string| #of.parse_word(w.as_str()).map_err(|e| #named(#name, e)))
+                }
+            }
+        }
+        Arity::Optional | Arity::Many => {
+            let parsed = if os_head {
+                h
+            } else {
+                let parse = quote_spanned! {value.span()=>
+                    .parse(|w: #string| w.parse::<#value>().map_err(|e| #named(#name, e)))
+                };
+                quote!(#h #parse)
+            };
+            if arity == Arity::Optional {
+                quote!(#parsed.optional().map(#map))
+            } else {
+                quote!(#parsed.many().map(#map))
+            }
+        }
+    };
+    quote! {
+        #[allow(unused_imports)]
+        use ::hicli::bpaf::Parser as _;
+        #[allow(unused_imports)]
+        use ::hicli::__private::{
+            IsChoice as _, NotChoice as _, SelfFromStr as _, FieldFromStr as _, SelfFromOs as _,
+            FieldFromOs as _,
+        };
+        let __help = #probe.help_row(help);
+        #complete_probe
+        #body
+    }
+}
+
+/// The argument's spelling, as a parse error names it: a positional's
+/// metavar, else `--long`, else `-s`.
+fn spelling(args: &ArgArgs, ty: &Ident) -> String {
+    if let Some(p) = &args.positional {
+        return p
+            .value
+            .as_ref()
+            .map_or_else(|| screaming_kebab(ty), LitStr::value);
+    }
+    if let Some(l) = &args.long {
+        return format!(
+            "--{}",
+            l.value.as_ref().map_or_else(|| kebab(ty), LitStr::value)
+        );
+    }
+    let s = args
+        .short
+        .as_ref()
+        .expect("spelled: positional, long or short");
+    format!("-{}", s.value.value())
+}
+
+/// Is `ty` a path value bpaf reads without UTF-8: `PathBuf` or `OsString`?
+fn is_os(ty: &Type) -> bool {
+    is_named(ty, "PathBuf") || is_named(ty, "OsString")
 }
 
 #[cfg(test)]
@@ -920,12 +1007,21 @@ mod tests {
         .to_string()
     }
 
-    /// The probe prelude for `T`.
-    fn probe(t: TokenStream) -> TokenStream {
+    /// The probe prelude for `T`: the help row, and the completer when `complete`.
+    fn probe(t: TokenStream, complete: bool) -> TokenStream {
+        let c = if complete {
+            quote!(let __complete = (&::hicli::__private::Probe::<#t>::NEW).completer();)
+        } else {
+            TokenStream::new()
+        };
         quote! {
             #[allow(unused_imports)]
-            use ::hicli::__private::{ChoiceCompleter as _, NoCompleter as _};
-            let __complete = (&::hicli::__private::Probe::<#t>::NEW).completer();
+            use ::hicli::__private::{
+                IsChoice as _, NotChoice as _, SelfFromStr as _, FieldFromStr as _,
+                SelfFromOs as _, FieldFromOs as _,
+            };
+            let __help = (&::hicli::__private::Probe::<#t>::NEW).help_row(help);
+            #c
         }
     }
 
@@ -934,7 +1030,7 @@ mod tests {
         let got = expansion(
             "/// The event's title\n#[arg(positional = \"TITLE\")]\npub struct Title(String);",
         );
-        let p = probe(quote!(String));
+        let p = probe(quote!(String), true);
         let want = three(
             quote!(pub),
             "Title",
@@ -942,10 +1038,12 @@ mod tests {
             "The event's title",
             quote! {
                 #p
-                ::hicli::bpaf::positional::<::std::string::String>("TITLE").help(help)
+                ::hicli::bpaf::positional::<::std::string::String>("TITLE").help(__help)
                     .complete(move |w: &::std::string::String| __complete(w.as_str()))
-                    .parse(|w: ::std::string::String| w.parse::<String>())
-                    .map(Title)
+                    .parse(|w: ::std::string::String|
+                        (&::hicli::__private::FromStrOf::<Title, String>(Title))
+                            .parse_word(w.as_str())
+                            .map_err(|e| ::hicli::__private::named("TITLE", e)))
             },
         );
         assert_eq!(got, want);
@@ -956,7 +1054,7 @@ mod tests {
         let got = expansion(
             "/// A shell\n#[arg(positional = \"SHELL\")]\npub struct ShellArg(pub hicli::Shell);",
         );
-        let p = probe(quote!(hicli::Shell));
+        let p = probe(quote!(hicli::Shell), true);
         let want = three(
             quote!(pub),
             "ShellArg",
@@ -964,10 +1062,12 @@ mod tests {
             "A shell",
             quote! {
                 #p
-                ::hicli::bpaf::positional::<::std::string::String>("SHELL").help(help)
+                ::hicli::bpaf::positional::<::std::string::String>("SHELL").help(__help)
                     .complete(move |w: &::std::string::String| __complete(w.as_str()))
-                    .parse(|w: ::std::string::String| w.parse::<hicli::Shell>())
-                    .map(ShellArg)
+                    .parse(|w: ::std::string::String|
+                        (&::hicli::__private::FromStrOf::<ShellArg, hicli::Shell>(ShellArg))
+                            .parse_word(w.as_str())
+                            .map_err(|e| ::hicli::__private::named("SHELL", e)))
             },
         );
         assert_eq!(got, want);
@@ -980,7 +1080,7 @@ mod tests {
              #[arg(long = \"sort\", short = 's', metavar = \"FIELD\")]\n\
              pub struct SortOpt(pub Option<SortField>);",
         );
-        let p = probe(quote!(SortField));
+        let p = probe(quote!(SortField), true);
         let want = three(
             quote!(pub),
             "SortOpt",
@@ -988,15 +1088,86 @@ mod tests {
             "Sort the listing by this field",
             quote! {
                 #p
-                ::hicli::bpaf::long("sort").short('s').help(help)
+                ::hicli::bpaf::long("sort").short('s').help(__help)
                     .argument::<::std::string::String>("FIELD")
                     .complete(move |w: &::std::string::String| __complete(w.as_str()))
-                    .parse(|w: ::std::string::String| w.parse::<SortField>())
+                    .parse(|w: ::std::string::String|
+                        w.parse::<SortField>().map_err(|e| ::hicli::__private::named("--sort", e)))
                     .optional()
                     .map(SortOpt)
             },
         );
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_one_value_named_field_parses_through_the_probe() {
+        let got = expansion(
+            "/// The port\n#[arg(long, metavar = \"PORT\")]\npub struct Port { pub port: u16 }",
+        );
+        let p = probe(quote!(u16), true);
+        let want = three(
+            quote!(pub),
+            "Port",
+            "port",
+            "The port",
+            quote! {
+                #p
+                ::hicli::bpaf::long("port").help(__help)
+                    .argument::<::std::string::String>("PORT")
+                    .complete(move |w: &::std::string::String| __complete(w.as_str()))
+                    .parse(|w: ::std::string::String|
+                        (&::hicli::__private::FromStrOf::<Port, u16>(|v| Port { port: v }))
+                            .parse_word(w.as_str())
+                            .map_err(|e| ::hicli::__private::named("--port", e)))
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_whole_struct_parses_through_its_own_from_str() {
+        let got = expansion(
+            "/// A file\n#[arg(positional = \"FILE\", complete = files)]\n\
+             pub struct Upload { pub path: PathBuf, pub zip: bool }",
+        );
+        let want = three(
+            quote!(pub),
+            "Upload",
+            "upload",
+            "A file",
+            quote! {
+                ::hicli::complete_files(
+                    ::hicli::bpaf::positional::<::std::string::String>("FILE").help(help)
+                )
+                .parse(|w: ::std::string::String|
+                    w.parse::<Self>().map_err(|e| ::hicli::__private::named("FILE", e)))
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelling_names_the_argument() {
+        let args = |src: &str| {
+            let input: DeriveInput = syn::parse_str(src).expect("the type parses");
+            let (args, _) = read_attrs(&input.attrs).expect("reads");
+            spelling(&args, &input.ident)
+        };
+        assert_eq!(
+            args("#[arg(long = \"sort\", short = 's', metavar = \"F\")] struct S(u8);"),
+            "--sort"
+        );
+        assert_eq!(
+            args("#[arg(short = 'n', metavar = \"N\")] struct N(u8);"),
+            "-n"
+        );
+        assert_eq!(args("#[arg(positional)] struct SortBy(u8);"), "SORT-BY");
+        assert_eq!(
+            args("#[arg(long, metavar = \"M\")] struct SortBy(u8);"),
+            "--sort-by"
+        );
+        assert_eq!(args("#[arg(positional = \"KEY\")] struct K(u8);"), "KEY");
     }
 
     #[test]
@@ -1021,15 +1192,18 @@ mod tests {
         let got = expansion(
             "/// Tags\n#[arg(positional = \"TAG\", complete = tags)]\npub struct Tags(Vec<String>);",
         );
+        let p = probe(quote!(String), false);
         let want = three(
             quote!(pub),
             "Tags",
             "tags",
             "Tags",
             quote! {
-                ::hicli::bpaf::positional::<::std::string::String>("TAG").help(help)
+                #p
+                ::hicli::bpaf::positional::<::std::string::String>("TAG").help(__help)
                     .complete(|w: &::std::string::String| tags(w.as_str()))
-                    .parse(|w: ::std::string::String| w.parse::<String>())
+                    .parse(|w: ::std::string::String|
+                        w.parse::<String>().map_err(|e| ::hicli::__private::named("TAG", e)))
                     .many()
                     .map(Tags)
             },
@@ -1042,16 +1216,21 @@ mod tests {
         let got = expansion(
             "/// A file\n#[arg(positional = \"FILE\", complete = files)]\npub struct Input(std::path::PathBuf);",
         );
+        let p = probe(quote!(std::path::PathBuf), false);
         let want = three(
             quote!(pub),
             "Input",
             "input",
             "A file",
             quote! {
+                #p
                 ::hicli::complete_files(
-                    ::hicli::bpaf::positional::<std::path::PathBuf>("FILE").help(help)
+                    ::hicli::bpaf::positional::<std::path::PathBuf>("FILE").help(__help)
                 )
-                .map(Input)
+                .parse(|w: std::path::PathBuf|
+                    (&::hicli::__private::FromStrOf::<Input, std::path::PathBuf>(Input))
+                        .parse_os(w)
+                        .map_err(|e| ::hicli::__private::named("FILE", e)))
             },
         );
         assert_eq!(got, want);
@@ -1062,13 +1241,40 @@ mod tests {
         let got = expansion(
             "/// Where to write\n#[arg(long = \"out\", metavar = \"DIR\")]\npub struct Out(PathBuf);",
         );
+        let p = probe(quote!(PathBuf), false);
         let want = three(
             quote!(pub),
             "Out",
             "out",
             "Where to write",
             quote! {
-                ::hicli::bpaf::long("out").help(help).argument::<PathBuf>("DIR").map(Out)
+                #p
+                ::hicli::bpaf::long("out").help(__help).argument::<PathBuf>("DIR")
+                    .parse(|w: PathBuf|
+                        (&::hicli::__private::FromStrOf::<Out, PathBuf>(Out))
+                            .parse_os(w)
+                            .map_err(|e| ::hicli::__private::named("--out", e)))
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_optional_path_is_typed_and_unparsed() {
+        let got = expansion(
+            "/// Where to write\n#[arg(long = \"out\", metavar = \"DIR\")]\npub struct Out(Option<PathBuf>);",
+        );
+        let p = probe(quote!(PathBuf), false);
+        let want = three(
+            quote!(pub),
+            "Out",
+            "out",
+            "Where to write",
+            quote! {
+                #p
+                ::hicli::bpaf::long("out").help(__help).argument::<PathBuf>("DIR")
+                    .optional()
+                    .map(Out)
             },
         );
         assert_eq!(got, want);
@@ -1085,8 +1291,27 @@ mod tests {
             "sort_key",
             "What to sort by",
             quote! {
-                ::hicli::__private::choice::<Self>(
+                ::hicli::__private::choice::<Self, _>("KEY", help, |help|
                     ::hicli::bpaf::positional::<::std::string::String>("KEY").help(help)
+                )
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn spelled_self_choice_enum_option() {
+        let got = expansion(
+            "/// What to sort by\n#[arg(long = \"by\", metavar = \"KEY\")]\npub enum SortKey { Bpm, Title }",
+        );
+        let want = three(
+            quote!(pub),
+            "SortKey",
+            "sort_key",
+            "What to sort by",
+            quote! {
+                ::hicli::__private::choice::<Self, _>("--by", help, |help|
+                    ::hicli::bpaf::long("by").help(help).argument::<::std::string::String>("KEY")
                 )
             },
         );
@@ -1098,17 +1323,21 @@ mod tests {
         let got = expansion(
             "/// The node\n#[arg(long, metavar = \"PORT\", complete = known_ports)]\npub struct Port { pub port: u16 }",
         );
+        let p = probe(quote!(u16), false);
         let want = three(
             quote!(pub),
             "Port",
             "port",
             "The node",
             quote! {
-                ::hicli::bpaf::long("port").help(help)
+                #p
+                ::hicli::bpaf::long("port").help(__help)
                     .argument::<::std::string::String>("PORT")
                     .complete(|w: &::std::string::String| known_ports(w.as_str()))
-                    .parse(|w: ::std::string::String| w.parse::<u16>())
-                    .map(|v| Port { port: v })
+                    .parse(|w: ::std::string::String|
+                        (&::hicli::__private::FromStrOf::<Port, u16>(|v| Port { port: v }))
+                            .parse_word(w.as_str())
+                            .map_err(|e| ::hicli::__private::named("--port", e)))
             },
         );
         assert_eq!(got, want);
@@ -1204,15 +1433,7 @@ mod tests {
     }
 
     #[test]
-    fn s7_a_multi_field_or_other_shape() {
-        assert_eq!(
-            rejection("/// x\n#[arg(long)]\npub struct R { a: String, b: String }"),
-            MULTI_FIELD
-        );
-        assert_eq!(
-            rejection("/// x\n#[arg(positional)]\npub struct R(String, String);"),
-            MULTI_FIELD
-        );
+    fn s7_a_unit_struct_or_an_enum_with_data_is_another_shape() {
         assert_eq!(
             rejection("/// x\n#[arg(positional)]\npub struct R;"),
             SPELLED_SHAPE
@@ -1220,6 +1441,25 @@ mod tests {
         assert_eq!(
             rejection("/// x\n#[arg(positional)]\npub enum R { A(String) }"),
             SPELLED_SHAPE
+        );
+    }
+
+    #[test]
+    fn s7_a_struct_with_several_fields_is_parsed_whole() {
+        let whole = |meta: &str| {
+            quote! {
+                ::hicli::bpaf::positional::<::std::string::String>(#meta).help(help)
+                    .parse(|w: ::std::string::String|
+                        w.parse::<Self>().map_err(|e| ::hicli::__private::named(#meta, e)))
+            }
+        };
+        assert_eq!(
+            expansion("/// x\n#[arg(positional)]\npub struct R(String, String);"),
+            three(quote!(pub), "R", "r", "x", whole("R"))
+        );
+        assert_eq!(
+            expansion("/// x\n#[arg(positional)]\npub struct R { a: String, b: String }"),
+            three(quote!(pub), "R", "r", "x", whole("R"))
         );
     }
 

@@ -40,7 +40,8 @@
 //!   process, so `App::run` itself is covered by ordinary tests. The [`cli!`] /
 //!   [`cli_test!`] macros let tests read like the terminal.
 //! - **Typo suggestions.** On a usage error with no built-in `bpaf`
-//!   suggestion, a Levenshtein pass over the listed (non-hidden) **top-level**
+//!   suggestion, an edit-distance pass (one edit under six letters, two from
+//!   six; a swapped pair counts as one) over the listed (non-hidden) **top-level**
 //!   command names — applied to the command position only — appends a `did you
 //!   mean` hint. Aliases and hidden names are recognised as exact matches but
 //!   never suggested, so a hint never reveals what `--help` does not show. This
@@ -1027,7 +1028,10 @@ pub mod testing;
 #[doc(hidden)]
 pub mod __private {
     //! Named by `#[derive(Arg)]`'s spelled expansion only; not API.
-    pub use crate::private::{choice, no_candidates, ChoiceCompleter, NoCompleter, Probe};
+    pub use crate::private::{
+        choice, named, no_candidates, FieldFromOs, FieldFromStr, FromStrOf, IsChoice, NotChoice,
+        OsWordError, Probe, SelfFromOs, SelfFromStr,
+    };
 }
 mod private;
 
@@ -1054,9 +1058,9 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// Implement [`Arg`](trait@Arg) for an argument type — and leave the type
 /// exactly as it is.
 ///
-/// It has two modes, chosen by the keys of `#[arg(…)]` (ADR-016): **spelled
-/// mode**, where hicli spells a one-value type from `positional`, `long`,
-/// `short` and its doc comment, and **bpaf mode**, where `#[derive(Bpaf)]` on
+/// It has two modes, chosen by the keys of `#[arg(…)]` (ADR-016, ADR-018):
+/// **spelled mode**, where hicli spells a one-word type from `positional`,
+/// `long`, `short` and its doc comment, and **bpaf mode**, where `#[derive(Bpaf)]` on
 /// the same type spells it and this derive calls the constructor that wrote.
 ///
 /// # Spelled mode
@@ -1090,10 +1094,25 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// #[arg(positional = "ID")]
 /// pub struct Id(pub String);
 ///
+/// /// How many to take
+/// #[derive(Debug, Clone, Arg)]
+/// #[arg(long = "limit", short = 'l', metavar = "N")]
+/// pub struct Limit(pub std::num::NonZeroUsize);
+///
+/// // The type's own rule: it wins over `NonZeroUsize`'s.
+/// impl std::str::FromStr for Limit {
+///     type Err = &'static str;
+///     fn from_str(s: &str) -> Result<Self, Self::Err> {
+///         s.parse().map(Limit).map_err(|_| "must be at least 1")
+///     }
+/// }
+///
 /// let s = <SortOpt as Arg>::parser().to_options().run_inner(&["-s", "bpm"][..]).unwrap();
 /// assert_eq!(s.0, Some(SortField::Bpm));
 /// let id = <Id as Arg>::parser().to_options().run_inner(&["e-17"][..]).unwrap();
 /// assert_eq!(id.0, "e-17");
+/// let e = <Limit as Arg>::parser().to_options().run_inner(&["-l", "0"][..]).unwrap_err();
+/// assert_eq!(e.unwrap_stderr(), "couldn't parse `0`: `--limit`: must be at least 1");
 /// ```
 ///
 /// | key | meaning |
@@ -1108,12 +1127,27 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// needs it, not before. A type that needs more — a fallback, an `env`, a
 /// guard — is spelled in bpaf mode, or by hand.
 ///
-/// The type is a newtype, a struct with one named field, or a fieldless enum
-/// that derives [`Choice`](trait@Choice). `Option<T>` is optional, `Vec<T>`
-/// repeats, and a `bool` with a name is a switch. The value is parsed with its
-/// `FromStr`, after completion, so a half-typed word still completes; a
-/// `PathBuf` or `OsString` without a dynamic completer keeps `bpaf`'s own
-/// conversion and accepts a non-UTF-8 word.
+/// The type is a newtype, a struct with one named field, a struct with several
+/// fields that implements `FromStr`, or a fieldless enum that derives
+/// [`Choice`](trait@Choice). `Option<I>` is optional, `Vec<I>` repeats, and a
+/// `bool` with a name is a switch. Each word is parsed after completion, so a
+/// half-typed word still completes, and by the most specific `FromStr` there
+/// is (ADR-018):
+///
+/// | the type | a word is parsed by |
+/// |---|---|
+/// | `T(I)`, `T { f: I }` | `T`'s own `FromStr` if it has one, else `I`'s, then wrapped |
+/// | `T(Option<I>)`, `T(Vec<I>)` | `I`'s `FromStr`, per word; `T`'s own is never used |
+/// | `T(PathBuf)` / `T(OsString)`, no `complete = f` | `T`'s `FromStr` (the word must be UTF-8), else the path as `bpaf` read it, non-UTF-8 kept |
+/// | `T(Option<PathBuf>)` …, no `complete = f` | the path as `bpaf` read it |
+/// | a struct with several fields | its own `FromStr`, on the one word |
+/// | a [`Choice`](trait@Choice) enum | its `FromStr` |
+///
+/// **A parse error names the argument**, by its long name, else its short
+/// one, or a positional's metavar — the spelling, not what was typed, so
+/// `-l 0` above reports `--limit`. The error type must implement `Display`.
+/// Write the message as what is wrong with the word, a phrase that reads after
+/// the name: bpaf prints the word and hicli prints the name.
 ///
 /// **The help row is the type's doc comment's first paragraph**, its lines
 /// joined by a space. Everything after the first blank line is rustdoc only and
@@ -1122,9 +1156,11 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// command changes the row only through its `# Arguments` section (see
 /// [`#[command]`](macro@command#overriding-an-arguments-help)).
 ///
-/// **A [`Choice`](trait@Choice) completes itself.** A choice inside the type —
-/// or the enum itself, `#[derive(Choice, Arg)]` — offers its names, with each
-/// variant's description, with no `complete` key.
+/// **A [`Choice`](trait@Choice) completes and lists itself.** A choice inside
+/// the type — or the enum itself, `#[derive(Choice, Arg)]` — offers its names,
+/// with each variant's description, with no `complete` key, and its help row
+/// ends with the names: `Sort the listing by this field [bpm, title]`. Don't
+/// list them in the doc comment as well.
 ///
 /// The derive writes three items: the snake_case constructor `#[derive(Bpaf)]`
 /// would have written (`SortOpt` → `sort_opt()`, so `#[bpaf(external(sort_opt))]`
@@ -1143,8 +1179,9 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// #[automatically_derived]
 /// impl ::hicli::ArgHelp for SortOpt {
 ///     fn parser_with_help(help: &'static str) -> impl ::hicli::bpaf::Parser<Self> {
-///         // `long("sort").short('s').help(help).argument::<String>("FIELD")`,
-///         // completed with `SortField`'s names, parsed into a `SortField`,
+///         // `long("sort").short('s').help(…).argument::<String>("FIELD")`,
+///         // the help row ending in `SortField`'s names, completed with them,
+///         // parsed into a `SortField` with errors named `--sort`,
 ///         // `.optional()`, `.map(SortOpt)`
 ///     }
 /// }
@@ -1159,7 +1196,7 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// spelling — the metavar, positional-vs-option, guards and fallbacks all stay
 /// in `#[derive(Bpaf)]`, which needs a direct `bpaf = "0.9"` dependency because
 /// its expansion names `::bpaf::…` paths. This is the form for a type with
-/// several fields:
+/// several options or positionals:
 ///
 /// ```
 /// use hicli::bpaf::{Bpaf, Parser};
@@ -1249,9 +1286,16 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 ///   `long`/`short`; a positional `bool`; `metavar` on a `bool` or with
 ///   `positional`; an option with a value but no `metavar`; `Option<bool>` /
 ///   `Vec<bool>`; `complete` on a `bool`; a bad `short` or an empty `long`; a
-///   multi-field struct (spell it with `#[derive(Bpaf)]`); any `#[bpaf(…)]`
-///   attribute; an enum that is not a [`Choice`](trait@Choice) (E0277); a
-///   completer that is not `fn(&str) -> Vec<Candidate>` (a type error);
+///   unit struct or an enum with data; any `#[bpaf(…)]` attribute; an enum
+///   that is not a [`Choice`](trait@Choice) (E0277); a struct with several
+///   fields that does not implement `FromStr` (E0277); a newtype where neither
+///   the type nor its field implements `FromStr` (E0599, with notes naming
+///   both bounds, `Wrap: FromStr` and `Opaque: FromStr`: ``the method
+///   `parse_word` exists for reference
+///   `&hicli::__private::FromStrOf<Wrap, Opaque>`, but its trait bounds were
+///   not satisfied``); a `FromStr` whose error is not
+///   `Display` (E0277); a completer that is not `fn(&str) -> Vec<Candidate>`
+///   (a type error);
 /// - in bpaf mode: **`metavar` alone** — it names an option's value, so it
 ///   goes with `long` or `short`;
 /// - **a second `#[arg(…)]` attribute** — one attribute, one answer; two would
@@ -1314,7 +1358,8 @@ pub use choice::{complete_choice, Choice, UnknownChoice};
 ///
 /// Matching is **exact and case-sensitive**: `Bpm` is not `bpm`. The error's
 /// suggestion is not — `Bpm` is answered with *did you mean `bpm`?* — and
-/// otherwise suggests a name one or two edits away. Explicit discriminants are
+/// otherwise suggests a name one edit away (two from six letters; a swapped
+/// pair of letters is one edit). Explicit discriminants are
 /// allowed and play no part.
 ///
 /// # What it writes

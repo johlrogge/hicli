@@ -39,10 +39,13 @@ replacement. The essentials are split across these releases:
   `# Arguments` section overriding a help row through `ArgHelp`, and one help
   rule (the first paragraph) everywhere; plus `cli!` words split at whitespace
   only (#22, ADR-017).
-- **Next:** `mk_ctx` seeing the selected command (#7), pending mdma-cli's
-  review of the proposed answer: a lazy context (`ctx.node()?`) and no new API
-  (ADR-014 once accepted). Parse errors naming the failed option (#26) need a
-  bpaf change and are on hold.
+- **0.6.0:** from our analysis of
+  mdma-cli's code (ADR-018): a spelled type parses through its own `FromStr`
+  first, a struct with several fields may be spelled when it implements
+  `FromStr`, spelled parse errors name the argument (#26 for spelled types; types
+  bpaf spells still wait on bpaf, and the maintainer files that upstream), and a
+  `Choice` lists its names in its help row; a lazy context with no new API
+  answers #7 (ADR-014).
 - **Unscheduled:** owned command names (#10), the
   positionals-last check (#11), globals-aware completion (#13), and the
   nice-to-haves #14–#18.
@@ -55,10 +58,10 @@ replacement. The essentials are split across these releases:
 - Second/third adopters: mdma-cli, ctx
 - Verify `#[group] pub mod x;` under rust-analyzer (manual editor check) — the
   ADR-010 spike confirmed `rustc`'s behaviour only
-- Deferred until a consumer needs it: richer `ArgSchema` for externals, opt-in
+- Deferred until our analysis of consumer code justifies it: richer `ArgSchema` for externals, opt-in
   `--dump-command-manifest` handshake, per-binary hash pin, auto-registration
   sugar
-- Deferred until a consumer's pain names it (ADR-006): a field-composing
+- Deferred until our analysis of consumer code justifies it (ADR-006): a field-composing
   `#[derive(Arg)]` for composite types, completion masks on the shell
   shorthands (`complete = files("*.toml")`), globals-aware completion
 
@@ -66,6 +69,11 @@ replacement. The essentials are split across these releases:
 
 <!-- Completed milestones -->
 
+- 0.6.0, spelled types parse themselves (ADR-018, ADR-014, 2026-11-09, #7, #26 in
+  part): a spelled type's own `FromStr` first, multi-field `FromStr` structs,
+  argument-named parse errors, a `Choice`'s names in its help row, length-scaled
+  typo suggestions, and the lazy-context recipe; validated by a trial migration
+  of mdma-cli that deleted its `impl_arg!` and local `Choice`
 - 0.5.0, spelled argument types (ADR-016, ADR-017, 2026-11-06, #8 #22 #23):
   `#[derive(Choice)]`, a spelled `#[derive(Arg)]` whose type doc is its help,
   `# Arguments` overrides through `ArgHelp`, the first-paragraph help rule, and
