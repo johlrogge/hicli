@@ -130,7 +130,8 @@ plain otherwise); the brackets and commas are text. It is on the same row, so
 bpaf wraps it with the help. It applies wherever the value is a `Choice`: a
 self-spelled enum, a newtype over a choice (found by the probe), `Option<C>`
 and `Vec<C>`, and when a command's `# Arguments` entry replaces the prose.
-A choice with no variants gets no suffix. A doc comment that listed the names
+A choice with no variants gets no suffix. A help ending in a full stop gets
+the list before it: `… takes precedence [never].` A doc comment that listed the names
 by hand now shows them twice: drop them from the doc comment.
 
 ### 5. What the expansion calls

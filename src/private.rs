@@ -105,19 +105,27 @@ pub fn no_candidates(_: &str) -> Vec<Candidate> {
 }
 
 /// A choice's help row: `help`, then ` [a, b, c]` with each name a literal
-/// (bold in colour); nothing is appended when `C` has no variants.
+/// (bold in colour); nothing is appended when `C` has no variants. A help
+/// ending in a single full stop gets the list before it: `… precedence
+/// [never].` — an ellipsis or other punctuation stays before the list.
 pub fn choice_help<C: Choice>(help: &str) -> Doc {
-    let mut doc = Doc::from(help);
-    if !C::VARIANTS.is_empty() {
-        doc.text(" [");
-        for (i, c) in C::VARIANTS.iter().enumerate() {
-            if i > 0 {
-                doc.text(", ");
-            }
-            doc.literal(c.name());
-        }
-        doc.text("]");
+    if C::VARIANTS.is_empty() {
+        return Doc::from(help);
     }
+    let (body, stop) = match help.strip_suffix('.') {
+        Some(body) if !body.ends_with('.') => (body, "."),
+        _ => (help, ""),
+    };
+    let mut doc = Doc::from(body);
+    doc.text(" [");
+    for (i, c) in C::VARIANTS.iter().enumerate() {
+        if i > 0 {
+            doc.text(", ");
+        }
+        doc.literal(c.name());
+    }
+    doc.text("]");
+    doc.text(stop);
     doc
 }
 
@@ -391,6 +399,30 @@ mod tests {
     }
 
     #[test]
+    fn the_names_go_before_a_final_full_stop() {
+        assert_eq!(
+            choice_help::<Shell>("Never played takes precedence.").monochrome(true),
+            "Never played takes precedence [bash, zsh, fish]."
+        );
+    }
+
+    #[test]
+    fn the_names_go_after_an_ellipsis_or_other_punctuation() {
+        assert_eq!(
+            choice_help::<Shell>("And more...").monochrome(true),
+            "And more... [bash, zsh, fish]"
+        );
+        assert_eq!(
+            choice_help::<Shell>("Which one?").monochrome(true),
+            "Which one? [bash, zsh, fish]"
+        );
+        assert_eq!(
+            choice_help::<Shell>("The shell").monochrome(true),
+            "The shell [bash, zsh, fish]"
+        );
+    }
+
+    #[test]
     fn a_choice_without_variants_gets_no_suffix() {
         assert_eq!(choice_help::<Nothing>("x").monochrome(true), "x");
     }
@@ -414,7 +446,7 @@ mod tests {
         .unwrap_stderr();
         assert_eq!(
             e,
-            "couldn't parse `tcsh`: `SHELL`: expected `bash`, `zsh` or `fish`; did you mean `bash`?"
+            "couldn't parse `tcsh`: `SHELL`: expected `bash`, `zsh` or `fish`"
         );
         let ok = choice::<Shell, _>("SHELL", "s", |h| {
             bpaf::positional::<String>("SHELL").help(h)

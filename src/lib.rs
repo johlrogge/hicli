@@ -40,7 +40,8 @@
 //!   process, so `App::run` itself is covered by ordinary tests. The [`cli!`] /
 //!   [`cli_test!`] macros let tests read like the terminal.
 //! - **Typo suggestions.** On a usage error with no built-in `bpaf`
-//!   suggestion, a Levenshtein pass over the listed (non-hidden) **top-level**
+//!   suggestion, an edit-distance pass (one edit under six letters, two from
+//!   six; a swapped pair counts as one) over the listed (non-hidden) **top-level**
 //!   command names — applied to the command position only — appends a `did you
 //!   mean` hint. Aliases and hidden names are recognised as exact matches but
 //!   never suggested, so a hint never reveals what `--help` does not show. This
@@ -1357,7 +1358,8 @@ pub use choice::{complete_choice, Choice, UnknownChoice};
 ///
 /// Matching is **exact and case-sensitive**: `Bpm` is not `bpm`. The error's
 /// suggestion is not — `Bpm` is answered with *did you mean `bpm`?* — and
-/// otherwise suggests a name one or two edits away. Explicit discriminants are
+/// otherwise suggests a name one edit away (two from six letters; a swapped
+/// pair of letters is one edit). Explicit discriminants are
 /// allowed and play no part.
 ///
 /// # What it writes

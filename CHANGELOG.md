@@ -31,8 +31,12 @@ Before 1.0, a minor version may carry breaking changes; they are listed under
   (#26, in part).
 - A `Choice`'s help row ends with its names, for example
   `KEY  What to sort by [bpm, title, artist]`. This applies to a choice enum, a
-  newtype over one, `Option`/`Vec` of one, and an `# Arguments` override. The names
-  are bold in colour.
+  newtype over one, `Option`/`Vec` of one, and an `# Arguments` override. A help
+  ending in a full stop gets the names before it:
+  `Never played takes precedence [never].` The names are bold in colour.
+- Typo suggestions (commands and choices) allow one edit for words under six letters
+  and two from six, and count a swapped pair of letters as one edit: `bmp` still
+  suggests `bpm`, `nope` no longer suggests `role`.
 
 ### Breaking
 
