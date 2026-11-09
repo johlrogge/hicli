@@ -1,5 +1,21 @@
-error: a multi-field argument type is spelled by #[derive(Bpaf)]
- --> tests/ui/arg_spelled_multi_field.rs:7:1
+error[E0277]: the trait bound `Range: FromStr` is not satisfied
+ --> tests/ui/arg_spelled_multi_field.rs:8:12
   |
-7 | #[arg(long = "range", metavar = "N")]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+8 | pub struct Range {
+  |            ^^^^^ unsatisfied trait bound
+  |
+help: the trait `FromStr` is not implemented for `Range`
+ --> tests/ui/arg_spelled_multi_field.rs:8:1
+  |
+8 | pub struct Range {
+  | ^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `FromStr`:
+            ByteString
+            CString
+            IpAddr
+            Ipv4Addr
+            Ipv6Addr
+            NonZero<i128>
+            NonZero<i16>
+            NonZero<i32>
+          and $N others

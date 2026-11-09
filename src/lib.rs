@@ -1027,7 +1027,10 @@ pub mod testing;
 #[doc(hidden)]
 pub mod __private {
     //! Named by `#[derive(Arg)]`'s spelled expansion only; not API.
-    pub use crate::private::{choice, no_candidates, ChoiceCompleter, NoCompleter, Probe};
+    pub use crate::private::{
+        choice, named, no_candidates, FieldFromOs, FieldFromStr, FromStrOf, IsChoice, NotChoice,
+        OsWordError, Probe, SelfFromOs, SelfFromStr,
+    };
 }
 mod private;
 

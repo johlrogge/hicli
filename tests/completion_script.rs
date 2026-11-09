@@ -56,7 +56,7 @@ pub fn store(home: Home, ctx: &Ctx) {
 // The recipe from `completion_script`'s docs, compiled for real. Its doc
 // comment's first paragraph is its help row.
 
-/// A shell to print completions for: bash, zsh or fish
+/// A shell to print completions for
 #[derive(Debug, Clone, Arg)]
 #[arg(positional = "SHELL")]
 pub struct ShellArg(pub hicli::Shell);
@@ -240,7 +240,7 @@ fn an_unknown_shell_is_a_usage_error_naming_the_choices() {
             assert_eq!(exit_code_for(&e), 2);
             assert_eq!(
                 e.unwrap_stderr(),
-                "couldn't parse `tcsh`: expected `bash`, `zsh` or `fish`; did you mean `bash`?"
+                "couldn't parse `tcsh`: `SHELL`: expected `bash`, `zsh` or `fish`; did you mean `bash`?"
             );
         }
         Err(_) => panic!("not a usage error"),

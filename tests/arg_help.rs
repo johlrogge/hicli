@@ -92,7 +92,7 @@ fn an_override_replaces_the_row_and_the_section_is_not_details() {
          Prints one track per line.\n\
          \n\
          Available options:\n\
-         \x20   -s, --sort=FIELD  Order for this listing\n\
+         \x20   -s, --sort=FIELD  Order for this listing [bpm, title]\n\
          \x20   -h, --help        Prints help information\n"
     );
 }
@@ -106,7 +106,7 @@ fn without_an_entry_the_row_is_the_types_help() {
          Usage: search [-s=FIELD]\n\
          \n\
          Available options:\n\
-         \x20   -s, --sort=FIELD  Sort the listing by this field\n\
+         \x20   -s, --sort=FIELD  Sort the listing by this field [bpm, title]\n\
          \x20   -h, --help        Prints help information\n"
     );
 }
@@ -120,7 +120,7 @@ fn a_choice_enum_parameter_can_be_overridden_too() {
          Usage: group KEY\n\
          \n\
          Available positional items:\n\
-         \x20   KEY         The field that names each group\n\
+         \x20   KEY         The field that names each group [artist, album]\n\
          \n\
          Available options:\n\
          \x20   -h, --help  Prints help information\n"
@@ -142,7 +142,7 @@ fn completion_and_errors_are_the_same_with_or_without_an_override() {
         );
         assert_eq!(
             error_of(vec![cmd.to_string(), "--sort".into(), "bmp".into()]),
-            "couldn't parse `bmp`: expected `bpm` or `title`; did you mean `bpm`?",
+            "couldn't parse `bmp`: `--sort`: expected `bpm` or `title`; did you mean `bpm`?",
             "{cmd}"
         );
         let (_, inv) = app()
@@ -163,7 +163,10 @@ fn parser_with_help_drives_alone() {
         .run_inner(&["--help"][..])
         .expect_err("help")
         .unwrap_stdout();
-    assert!(help.contains("-s, --sort=FIELD  x\n"), "{help}");
+    assert!(
+        help.contains("-s, --sort=FIELD  x [bpm, title]\n"),
+        "{help}"
+    );
     // `Arg::parser` is the same chain, with the type's own help.
     let help = <SortOpt as Arg>::parser()
         .to_options()
@@ -171,7 +174,7 @@ fn parser_with_help_drives_alone() {
         .expect_err("help")
         .unwrap_stdout();
     assert!(
-        help.contains("-s, --sort=FIELD  Sort the listing by this field\n"),
+        help.contains("-s, --sort=FIELD  Sort the listing by this field [bpm, title]\n"),
         "{help}"
     );
 }

@@ -208,7 +208,7 @@ pub struct Apply(pub bool);
 #[arg(positional = "FILE", complete = files)]
 pub struct AudioFile(pub PathBuf);
 
-/// What to sort by: bpm, title or artist
+/// What to sort by
 //
 // A choice is the argument: its names parse, complete and appear in errors.
 #[derive(Debug, Clone, Copy, PartialEq, Choice, Arg)]
@@ -227,7 +227,7 @@ pub enum SortKey {
 #[arg(short = 'd', long = "descending")]
 pub struct Descending(pub bool);
 
-/// A shell to print completions for: bash, zsh or fish
+/// A shell to print completions for
 #[derive(Debug, Clone, Arg)]
 #[arg(positional = "SHELL")]
 pub struct ShellArg(pub hicli::Shell);
@@ -541,7 +541,7 @@ Usage: playr sort [-d] KEY
 Reads one track id per line and prints them sorted.
 
 Available positional items:
-    KEY               What to sort by: bpm, title or artist
+    KEY               What to sort by [bpm, title, artist]
 
 Available options:
     -d, --descending  Sort descending (Z→A, high→low)
@@ -565,12 +565,12 @@ Examples:
         assert_eq!(exit_code_for(&e), 2);
         assert_eq!(
             e.unwrap_stderr(),
-            "couldn't parse `key`: expected `bpm`, `title` or `artist`"
+            "couldn't parse `key`: `KEY`: expected `bpm`, `title` or `artist`"
         );
         let e = app().parse(cli! { sort bmp }).err().expect("a usage error");
         assert_eq!(
             e.unwrap_stderr(),
-            "couldn't parse `bmp`: expected `bpm`, `title` or `artist`; did you mean `bpm`?"
+            "couldn't parse `bmp`: `KEY`: expected `bpm`, `title` or `artist`; did you mean `bpm`?"
         );
     }
 
