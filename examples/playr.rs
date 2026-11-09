@@ -1,5 +1,5 @@
-//! `playr`, the README's running example: every Rust block in the README is an
-//! excerpt of this file, and every console block is its output.
+//! `playr`, the README's running example: every `playr` Rust block in the
+//! README is an excerpt of this file, and every console block is its output.
 //!
 //! Try:
 //! ```text
@@ -20,6 +20,7 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 use bpaf::Bpaf;
 use hicli::{app, command, group, App, Arg, Candidate, Choice, Failure, Outcome};
@@ -37,10 +38,39 @@ pub struct Globals {
 /// Built once, after parsing, and handed to every command.
 pub struct Ctx {
     pub node: Node,
+    session: OnceLock<Session>,
+}
+
+impl Ctx {
+    /// The session with the node, opened the first time a command asks.
+    pub fn session(&self) -> Result<&Session, Failure> {
+        // `OnceLock::get_or_try_init` is unstable.
+        if let Some(session) = self.session.get() {
+            return Ok(session);
+        }
+        let opened = Session::open(&self.node)?;
+        Ok(self.session.get_or_init(|| opened))
+    }
 }
 
 fn mk_ctx(g: Globals) -> Result<Ctx, Failure> {
-    Ok(Ctx { node: g.node })
+    Ok(Ctx {
+        node: g.node,
+        session: OnceLock::new(),
+    })
+}
+
+/// A connection to the node: costly to open, so only a command that talks to
+/// the node opens it.
+pub struct Session {
+    pub node: Node,
+}
+
+impl Session {
+    /// A real client connects here, and fails when nothing answers.
+    fn open(node: &Node) -> Result<Session, Failure> {
+        Ok(Session { node: node.clone() })
+    }
 }
 
 // ---- domain types ---------------------------------------------------------
@@ -135,7 +165,7 @@ impl FromStr for DaysBack {
     fn from_str(s: &str) -> Result<Self, String> {
         match s.strip_prefix('-').map(str::parse) {
             Some(Ok(days)) => Ok(DaysBack(days)),
-            _ => Err(format!("`{s}` is not a number of days back, such as -7")),
+            _ => Err("not a number of days back, such as -7".to_string()),
         }
     }
 }
@@ -236,8 +266,10 @@ pub struct ShellArg(pub hicli::Shell);
 
 /// Check that the node answers
 #[command]
-fn ping(ctx: &Ctx) {
-    println!("pong from {}", ctx.node);
+fn ping(ctx: &Ctx) -> Outcome {
+    let session = ctx.session()?;
+    println!("pong from {}", session.node);
+    Ok(())
 }
 
 /// Playback control
@@ -411,6 +443,10 @@ mod tests {
         output_names_are_checked: { playback set-output HDMI } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(exit_code_for(&e), 2);
+            assert_eq!(
+                e.unwrap_stderr(),
+                "couldn't parse `HDMI`: `NAME`: a name uses only a-z, 0-9 and -"
+            );
         },
         added_takes_the_glued_form: { search --added=-7 } => |r| {
             assert!(r.is_ok(), "--added=-7 parses");
@@ -420,6 +456,37 @@ mod tests {
             assert_eq!(exit_code_for(&e), 2);
             assert!(e.unwrap_stderr().contains("try `--added=-7`"));
         },
+        added_names_itself_in_errors: { search --added=-x } => |r| {
+            let e = r.err().expect("a usage error");
+            assert_eq!(
+                e.unwrap_stderr(),
+                "couldn't parse `-x`: `--added`: not a number of days back, such as -7"
+            );
+        },
+        a_bpaf_spelled_value_is_not_named: { --node "pi.local:http" ping } => |r| {
+            let e = r.err().expect("a usage error");
+            assert_eq!(
+                e.unwrap_stderr(),
+                "couldn't parse `pi.local:http`: `http` is not a port number"
+            );
+        },
+    }
+
+    #[test]
+    fn sort_never_opens_a_session() {
+        let (globals, invocation) = app().parse(cli! { sort bpm }).expect("parses");
+        let ctx = mk_ctx(globals).expect("building the context is cheap");
+        invocation.run(&ctx).expect("sorts");
+        assert!(ctx.session.get().is_none(), "sort opened a session");
+    }
+
+    #[test]
+    fn ping_opens_the_session() {
+        let (globals, invocation) = app().parse(cli! { ping }).expect("parses");
+        let ctx = mk_ctx(globals).expect("building the context is cheap");
+        assert!(ctx.session.get().is_none(), "mk_ctx opened a session");
+        invocation.run(&ctx).expect("pongs");
+        assert!(ctx.session.get().is_some(), "ping did not open a session");
     }
 
     #[test]
@@ -591,6 +658,24 @@ Available options:
     }
 
     #[test]
+    fn generate_completions_help_lists_the_shells() {
+        assert_eq!(
+            page(&["generate-completions", "--help"]),
+            "\
+Print the shell completion script
+
+Usage: playr generate-completions SHELL
+
+Available positional items:
+    SHELL       A shell to print completions for [bash, zsh, fish]
+
+Available options:
+    -h, --help  Prints help information
+"
+        );
+    }
+
+    #[test]
     fn shells_complete() {
         assert_eq!(
             app().complete(cli! { generate-completions "" }),
@@ -612,6 +697,7 @@ Available options:
     fn the_command_is_still_a_function() {
         let ctx = Ctx {
             node: Node::localhost(),
+            session: OnceLock::new(),
         };
         assert!(upload(AudioFile("/no/such/file.flac".into()), &ctx).is_err());
     }
