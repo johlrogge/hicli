@@ -52,7 +52,7 @@ Run `just ci` before considering any change done.
   stable-toolchain CLIs pin.
 - **`bpaf` is re-exported, not wrapped opaquely.** Don't hide `bpaf` types behind
   newtypes without a reason spelled out in `docs/PLAN.md`. Consumers using
-  `#[derive(Bpaf)]` (for `Globals` or a multi-field argument struct) also add
+  `#[derive(Bpaf)]` (for `Globals` or a struct of several options) also add
   `bpaf = "0.9"` directly (the derive expands to `::bpaf::…` paths that don't
   resolve through a re-export) — hicli states the required version, cargo
   unifies it; see ADR-004. A type spelled by hicli's `#[derive(Arg)]
@@ -83,13 +83,17 @@ Run `just ci` before considering any change done.
   for mdma-cli's choices and shared argument types (ADR-016) — `Choice` +
   `#[derive(Choice)]` (a fieldless enum is a fixed set of words that parses,
   completes and names itself in errors), spelled `#[derive(Arg)]` with
-  `#[arg(positional|long|short, metavar, complete)]` on a one-value type
+  `#[arg(positional|long|short, metavar, complete)]` on a one-word type
   (hicli writes the bpaf chain; the type's doc comment's first paragraph is its
   help; a `Choice` inside completes via an autoref probe; keys are added when
   our analysis of consumer code shows they improve it), and `ArgHelp` + a command's `# Arguments`
   doc-comment section (a per-command help override, no parameter attributes).
   The help is a doc comment's **first paragraph** everywhere (ADR-016). `cli!`
-  is a proc macro whose words are runs of touching tokens (ADR-017).
+  is a proc macro whose words are runs of touching tokens (ADR-017). And — for
+  mdma-cli's validated newtypes (ADR-018) — a spelled type parsing through its
+  own `FromStr`, a multi-field struct that parses from one word, parse errors
+  that name the argument, and a `Choice` listing its names in its help row;
+  #7 is answered by ADR-014 with no API.
   **The bar for a new mechanism** is our own analysis of real consumer code
   (mdma-cli, moniker, ctx): it removes redundancy, makes the code more
   expressive, or makes it more consistent. We own the experience; a consumer not

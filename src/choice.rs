@@ -7,8 +7,13 @@
 //!
 //! A choice is a value. It is also an argument when `#[derive(Arg)]` spells it
 //! (`#[derive(Choice, Arg)] #[arg(positional = "KEY")]`); the chain that
-//! expansion ends in is `crate::private::choice`, which completes with
-//! [`complete_choice`] and parses with the `FromStr` the derive wrote.
+//! expansion ends in is `crate::private::choice`, which ends the help row with
+//! the names (`What to sort by [bpm, title, artist]`, each name bold in
+//! colour), completes with [`complete_choice`], parses with the `FromStr` the
+//! derive wrote, and prefixes an error with the argument's name
+//! (``couldn't parse `bmp`: `KEY`: expected `bpm`, `title` or `artist`; did you
+//! mean `bpm`?``). A spelled newtype over a choice, or an `Option`/`Vec` of
+//! one, gets the same help row through `crate::private::Probe` (ADR-018).
 
 use std::fmt;
 use std::str::FromStr;
@@ -68,7 +73,8 @@ use crate::arg::Candidate;
 /// Without `#[derive(Arg)]` a choice is only a value, and a command cannot
 /// take it as a parameter. By hand, complete at the **string** level, so the
 /// completer fires on the empty word and on a half-typed one, and parse after —
-/// the chain spelled mode writes:
+/// the core of the chain spelled mode writes, which also lists the names in
+/// the help row and names the argument in the error:
 ///
 /// ```
 /// use hicli::bpaf::{positional, Parser};

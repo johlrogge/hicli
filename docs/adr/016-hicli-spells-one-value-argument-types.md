@@ -13,6 +13,10 @@ allowed on a *type*; decision 1 stands), ADR-009 (`Shell` is a `Choice`) and
 ADR-011 (a default's doc comment is one paragraph). ADR-014 is reserved for
 johlrogge/hicli#7.
 
+Amended by ADR-018 (2026-11-09): a spelled type parses through its own FromStr
+first; a struct with several fields that implements FromStr may be spelled; a
+parse error names the argument; a Choice's help row lists its names.
+
 ## Context
 
 mdma-cli's migration from clap had two pains that 0.4 could not answer:
@@ -81,7 +85,8 @@ the bpaf chain itself. The type is a tuple newtype, a struct with one named
 field, or a fieldless enum that derives `Choice`. `Option<T>` is optional,
 `Vec<T>` repeats (recognised syntactically, as `bpaf_derive` does), a `bool`
 with a name is a switch. The chain parses a `String`, attaches completion,
-then converts with `FromStr` — because bpaf's `complete` runs only when the
+then converts with `FromStr` — since ADR-018, the type's own `FromStr` when it
+has one, else its field's — because bpaf's `complete` runs only when the
 inner parser succeeded, completing the word *before* it is validated is what
 lets a half-typed word complete. A `PathBuf` or `OsString` with no dynamic
 completer stays a typed parser, keeping bpaf's non-UTF-8 conversion.
@@ -107,8 +112,9 @@ Rejected at compile time, each with its own message: no or a blank doc
 comment; `positional` with `long`/`short`; a positional `bool`; `metavar` on a
 `bool` or with `positional`; an option with a value but no `metavar`;
 `Option<bool>`/`Vec<bool>`; `complete` on a `bool`; a bad `short` or an empty
-`long`; a duplicated or unknown key; spelling keys on a multi-field struct
-("a multi-field argument type is spelled by #[derive(Bpaf)]"); `#[bpaf(…)]`
+`long`; a duplicated or unknown key; spelling keys on a unit struct or an
+enum with data (lifted for a struct with several fields by ADR-018, which
+parses it through its own `FromStr`); `#[bpaf(…)]`
 attributes on a spelled type; an enum that is not a `Choice` (E0277, the
 trait's note). A spelled type that also derives `Bpaf` is E0428 (two
 constructors), and a completer of the wrong signature is a type error.
@@ -120,17 +126,21 @@ macro sees tokens, not traits, so it asks the compiler through method
 resolution:
 
 ```rust
-use ::hicli::__private::{ChoiceCompleter as _, NoCompleter as _};
+use ::hicli::__private::{IsChoice as _, NotChoice as _};
 let __complete = (&::hicli::__private::Probe::<SortField>::NEW).completer();
 ```
 
-`ChoiceCompleter` is implemented for `Probe<T>` where `T: Choice`;
-`NoCompleter` for `&Probe<T>` for every `T`. On the receiver `&Probe<T>`, lookup
-finds `ChoiceCompleter` first when it applies and auto-references to
-`NoCompleter` otherwise, which returns `no_candidates`. The type is concrete at
-every call, which is what makes this sound on stable. The probe was proved by
-a unit test before anything was built on it (`src/private.rs`); the fallback,
-had it not resolved, was an explicit `complete = choices` key.
+`IsChoice` is implemented for `Probe<T>` where `T: Choice`; `NotChoice` for
+`&Probe<T>` for every `T`. On the receiver `&Probe<T>`, lookup finds
+`IsChoice` first when it applies and auto-references to `NotChoice`
+otherwise, which returns `no_candidates`. The type is concrete at every call,
+which is what makes this sound on stable. The probe was proved by a unit test
+before anything was built on it (`src/private.rs`); the fallback, had it not
+resolved, was an explicit `complete = choices` key.
+
+ADR-018 renames the traits `IsChoice`/`NotChoice` (they were
+`ChoiceCompleter`/`NoCompleter`) and adds `help_row`, which appends a choice's
+names to the help row.
 
 ### 4. A self-spelled `Choice` goes through `__private::choice`
 
@@ -139,11 +149,15 @@ The spec had a self-spelled choice enum (`#[derive(Choice, Arg)]` with
 inline. As built, its chain ends in one helper instead:
 
 ```rust
-::hicli::__private::choice::<Self>(::hicli::bpaf::positional::<String>("KEY").help(help))
+::hicli::__private::choice::<Self, _>("KEY", help, |help| {
+    ::hicli::bpaf::positional::<String>("KEY").help(help)
+})
 ```
 
-`fn choice<C: Choice>(word: impl Parser<String>) -> impl Parser<C>` does both
-steps under **one** `C: Choice` bound. An enum spelled by `#[arg(…)]` that
+`fn choice<C: Choice, P: Parser<String>>(name, help, head: impl FnOnce(Doc) -> P)
+-> impl Parser<C>` does both steps under **one** `C: Choice` bound. Since
+ADR-018 the call is `choice::<Self, _>(name, help, |help| head)`: it also
+writes the help row and names the argument in the error. An enum spelled by `#[arg(…)]` that
 forgot `#[derive(Choice)]` is then a single E0277 carrying `Choice`'s own note,
 instead of that plus a `FromStr` error listing the standard library's
 implementors. Everything in `hicli::__private` is `#[doc(hidden)]`, named by
@@ -256,7 +270,8 @@ rendering, completion protocol. The direction this sets:
   never post to a repository the maintainer does not own.
   ADR-013 §4's usage-line wrap is a workaround for bpaf#471, kept only until
   bpaf fixes it; an error that names the value but not the option (#26) waits
-  on a bpaf issue the same way.
+  on a bpaf issue the same way — for spelled types ADR-018 names the argument
+  in the derive layer; types bpaf spells still wait.
 - **Revisit replacing the runtime only on real pain** — a limit bpaf will not
   take upstream and a consumer cannot live with. Not before, and not for
   uniformity's sake: the derive layer moving to hicli is not a plan to move
@@ -302,6 +317,8 @@ rendering, completion protocol. The direction this sets:
   items.** Rejected by the user: two rules for the same doc comment shape.
 - **Spelling multi-field structs.** Rejected: that is `#[derive(Bpaf)]`'s job,
   and the field-composing derive (decision 8) is its eventual answer.
+  Revisited by ADR-018: a struct with several fields that parses itself from
+  one word is spelled; composing fields stays deferred (decision 8).
 - **Replacing bpaf's runtime.** Not now; see decision 9.
 
 ## Consequences

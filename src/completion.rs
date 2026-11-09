@@ -93,7 +93,7 @@ pub type UnknownShell = UnknownChoice;
 /// in `--help` theirs to choose. Something like:
 ///
 /// ```text
-/// /// A shell to print completions for: bash, zsh or fish
+/// /// A shell to print completions for
 /// #[derive(Debug, Clone, Arg)]
 /// #[arg(positional = "SHELL")]
 /// pub struct ShellArg(pub hicli::Shell);
@@ -107,8 +107,10 @@ pub type UnknownShell = UnknownChoice;
 ///
 /// (`tests/completion_script.rs` compiles and runs exactly this, with a literal
 /// binary name). `Shell` is a [`Choice`](trait@crate::Choice), so the spelled
-/// newtype completes `bash`, `zsh` and `fish` and names them in its error,
-/// with no completer of its own. The user installs it with, for example,
+/// newtype completes `bash`, `zsh` and `fish`, lists them in its help row
+/// (`A shell to print completions for [bash, zsh, fish]`) and names them in
+/// its error, with no completer of its own — so its doc comment doesn't list
+/// them. The user installs it with, for example,
 /// `mdma generate-completions bash > ~/.local/share/bash-completion/completions/mdma`.
 ///
 /// # Why not `bpaf`'s `--bpaf-complete-style-*`

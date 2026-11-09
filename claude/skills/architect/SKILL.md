@@ -28,10 +28,13 @@ that is a design regression worth calling out.
 **An argument is a type** (ADR-006: `docs/adr/006-an-argument-is-a-type.md`). Each owned
 parameter is a consumer-written type implementing `hicli::Arg`, derived in one of two modes
 (ADR-016): **spelled** — `#[derive(Arg)] #[arg(positional | long | short, metavar, complete)]` on
-a newtype, a one-named-field struct or a `#[derive(Choice)]` enum, where hicli writes the bpaf
-chain, the type's doc comment's first paragraph is its help row, and the type also implements
-`ArgHelp` — or **bpaf mode** — `#[derive(Bpaf, Arg)]`, `Arg` writing one impl that calls the
-constructor `#[derive(Bpaf)]` already generated (the form for multi-field structs). `#[command]`
+a newtype, a one-named-field struct, a struct with several fields that implements `FromStr` (one
+word, parsed whole — ADR-018) or a `#[derive(Choice)]` enum, where hicli writes the bpaf chain,
+the type's doc comment's first paragraph is its help row (a `Choice`'s names appended), a word
+parses through the type's own `FromStr` first and its field's otherwise, a parse error names the
+argument (ADR-018), and the type also implements `ArgHelp` — or **bpaf mode** —
+`#[derive(Bpaf, Arg)]`, `Arg` writing one impl that calls the constructor `#[derive(Bpaf)]`
+already generated (the form for a struct of several options). `#[command]`
 emits `<T as Arg>::parser()` for each owned parameter, never a name it synthesises. Completion is
 not a second concept: `#[arg(complete = f | files | dirs)]` on the type attaches a completer to
 the parser the type already returns (spelled: `f(&str)`, the raw word; a `Choice` inside completes
@@ -74,9 +77,16 @@ calling out.
   choices, suggests a close one, never repeats the typed word) and `complete_choice` (ADR-016).
   `Shell` (`src/completion.rs`) is a `#[derive(Choice)]`; `UnknownShell` is a deprecated alias.
 - `src/private.rs` — `hicli::__private`, `#[doc(hidden)]`, named only by spelled
-  `#[derive(Arg)]` expansions: the autoref `Probe` (`ChoiceCompleter` for `Probe<T: Choice>`,
-  `NoCompleter` for `&Probe<T>`) and `choice::<C>`, a self-spelled choice enum's chain tail under a
-  single `C: Choice` bound (one E0277, not two). Not API; may change in any release.
+  `#[derive(Arg)]` expansions: the autoref `Probe` (`IsChoice` for `Probe<T: Choice>`,
+  `NotChoice` for `&Probe<T>`; `completer()` and `help_row(help) -> Doc`, which appends a
+  choice's names via `choice_help`); the autoref `FromStrOf<T, I>(fn(I) -> T)` (ADR-018) with
+  `SelfFromStr`/`FieldFromStr` (`parse_word(&str)`: `T`'s own `FromStr` first, else `I`'s and
+  wrap) and `SelfFromOs`/`FieldFromOs` (`parse_os(I)` for a typed path head: `T`'s `FromStr` on
+  UTF-8 text, else the path unchanged; `OsWordError`), all bounding only `FromStr`, never `Err`;
+  `named(name, error)`, the `` `--long`: `` prefix on every spelled parse error; and
+  `choice::<C, _>(name, help, |help| head)`, a self-spelled choice enum's whole chain — help row,
+  completion, parse, name — under a single `C: Choice` bound (one E0277, not two). Not API; may
+  change in any release.
 - `src/macro_support.rs` — **gone (ADR-005).** The dash rule and the doc-comment split it used to
   hold now live once, in the proc-macro crate (`macros/src/shared.rs`), because a proc macro can
   read a doc comment's text and rewrite idents; a `macro_rules!` macro could not, which is why this
@@ -115,11 +125,19 @@ calling out.
     (shared `shared::snake_case`, spanned at the type's ident), optionally wrapped in
     `complete_with`/`complete_files`/`complete_dirs` from `#[arg(complete = fn | files | dirs)]`;
     rejects a multi-field struct or an enum under `#[arg(complete = …)]` (a whole-value completer
-    cannot tell which field is mid-word) and `metavar` alone. **Spelled mode** (ADR-016): three
-    items — the snake_case constructor bpaf would have written, `Arg`, and `ArgHelp` whose chain
-    parses a `String`, completes it (probe, `f(&str)`, or shell `files`/`dirs`), then `FromStr`s
-    it, `.optional()`/`.many()` last; every key and shape rejection is a constant message with a
-    trybuild case. Both modes reject a union and a generic type.
+    cannot tell which field is mid-word) and `metavar` alone. **Spelled mode** (ADR-016,
+    ADR-018): three items — the snake_case constructor bpaf would have written, `Arg`, and
+    `ArgHelp`. Shapes: a newtype / one-named-field struct, `Shape::Whole` (several fields, parsed
+    whole by `w.parse::<Self>()`, no probe — E0277 without `FromStr`), a self-spelled `Choice`
+    (through `__private::choice`), a `bool` switch; a unit struct or an enum with data is
+    `SPELLED_SHAPE`. The head reads a `String` (or a typed `PathBuf`/`OsString` when the value is
+    a path and there is no `complete = f`), `.help(__help)` from the probe's `help_row`,
+    completes (probe, `f(&str)`, or shell `files`/`dirs`), then parses through
+    `FromStrOf`'s `parse_word`/`parse_os` — inside `Option`/`Vec` through the inner type's
+    `FromStr` per word — with `map_err(|e| named(spelling, e))`, `spelling` being `--long`, else
+    `-s`, else the positional's metavar; `.optional()`/`.many()` last. Every key and shape
+    rejection is a constant message with a trybuild case. Both modes reject a union and a generic
+    type.
   - `choice.rs` — `#[derive(Choice)]`: `Choice` + `FromStr` + `Display` from the variants
     (kebab-case or `#[choice(name = …)]`, description = first paragraph).
   - `cli.rs` — `cli!` (ADR-017): a word is a run of tokens that touch, by span line/column.
@@ -164,7 +182,7 @@ module is `/// events and instances` + `#[group] pub mod event;` (keys `ctx`/`al
 attribute); `#[group]` reads and parses `event.rs` (resolved by the Reference's mod-rs/non-mod-rs
 rules) and emits the declaration plus the same shape of handle. `commands!`/`app!` assemble the tree —
 a bare path is always a handle (`create` → `__hicli_create()`); consumers that use
-`#[derive(Bpaf)]` (globals, multi-field argument structs) add a direct `bpaf = "0.9"` dependency
+`#[derive(Bpaf)]` (globals, structs of several options) add a direct `bpaf = "0.9"` dependency
 — a spelled type needs none (ADR-016) — (`#[derive(Bpaf)]` expands to `::bpaf::…` paths that only resolve against
 a crate's own extern prelude — `use hicli::bpaf` does not help), so "consumers pin one `bpaf`
 version through hicli" is now "hicli states the version, cargo unifies it." See
@@ -178,7 +196,7 @@ version through hicli" is now "hicli states the version, cargo unifies it." See
 #[arg(positional = "ID", complete = complete_ids)]   // fn(&str) -> Vec<Candidate>, the raw word
 pub struct Id(pub String);
 
-// bpaf mode, unchanged — the form for a multi-field struct:
+// bpaf mode, unchanged — the form for a struct of several options:
 #[derive(Debug, Clone, Bpaf, Arg)]
 #[arg(complete = complete_ids)]        // fn(&Id) -> Vec<Candidate>, the parsed value
 pub struct Id(#[bpaf(positional("ID"))] pub String);
@@ -284,7 +302,9 @@ parsers were synthesised inside `#[command]`'s own expansion. Group-level curryi
 (`#[group(args = T)]`, `#[group(curried = T)]`, `#[command(curried)]`) and a group's
 `#[command(default)]` were earned by mdma-cli's migration (ADR-011), as were `Choice`, spelled
 `#[derive(Arg)]` and `# Arguments` overrides (ADR-016, whose five spelling keys grow when consumer code shows the next one would
-improve it). **The bar for adding more is our own analysis of real consumer code**: study how
+improve it), and a spelled type's own `FromStr`, multi-field one-word structs, named parse errors
+and a `Choice`'s names in its help row (ADR-018, from mdma-cli's validated newtypes); #7's lazy
+context needed no API (ADR-014). **The bar for adding more is our own analysis of real consumer code**: study how
 mdma-cli, moniker and ctx use hicli and look for redundancy, weak expressiveness and
 inconsistency. Don't wait for a consumer to ask ("a faster horse"); a clean migration is not
 evidence there is nothing to improve. Every proposal points at concrete consumer code it makes

@@ -39,10 +39,13 @@ replacement. The essentials are split across these releases:
   `# Arguments` section overriding a help row through `ArgHelp`, and one help
   rule (the first paragraph) everywhere; plus `cli!` words split at whitespace
   only (#22, ADR-017).
-- **Next:** `mk_ctx` seeing the selected command (#7), pending mdma-cli's
-  review of the proposed answer: a lazy context (`ctx.node()?`) and no new API
-  (ADR-014 once accepted). Parse errors naming the failed option (#26) need a
-  bpaf change and are on hold.
+- **0.6.0 (in progress, feature/0.6-spelled-parsing):** from our analysis of
+  mdma-cli's code (ADR-018): a spelled type parses through its own `FromStr`
+  first, a struct with several fields may be spelled when it implements
+  `FromStr`, spelled parse errors name the argument (#26 for spelled types; types
+  bpaf spells still wait on bpaf, and the maintainer files that upstream), and a
+  `Choice` lists its names in its help row; a lazy context with no new API
+  answers #7 (ADR-014).
 - **Unscheduled:** owned command names (#10), the
   positionals-last check (#11), globals-aware completion (#13), and the
   nice-to-haves #14–#18.
@@ -55,10 +58,10 @@ replacement. The essentials are split across these releases:
 - Second/third adopters: mdma-cli, ctx
 - Verify `#[group] pub mod x;` under rust-analyzer (manual editor check) — the
   ADR-010 spike confirmed `rustc`'s behaviour only
-- Deferred until a consumer needs it: richer `ArgSchema` for externals, opt-in
+- Deferred until our analysis of consumer code justifies it: richer `ArgSchema` for externals, opt-in
   `--dump-command-manifest` handshake, per-binary hash pin, auto-registration
   sugar
-- Deferred until a consumer's pain names it (ADR-006): a field-composing
+- Deferred until our analysis of consumer code justifies it (ADR-006): a field-composing
   `#[derive(Arg)]` for composite types, completion masks on the shell
   shorthands (`complete = files("*.toml")`), globals-aware completion
 

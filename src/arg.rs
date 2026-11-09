@@ -14,7 +14,16 @@
 //! - **bpaf mode** — no `positional`, `long` or `short` key. The spelling lives
 //!   in `#[derive(Bpaf)]` on the same type, exactly as it did before spelled
 //!   mode existed, and the derive calls its constructor. This is the form for a
-//!   type with several fields.
+//!   type with several options or positionals.
+//!
+//! **A spelled type parses itself and names itself** (ADR-018). Its word goes
+//! through the type's own `FromStr` when it has one — where a newtype over a
+//! foreign value keeps its rule — and through its field's otherwise; a struct
+//! with several fields that implements `FromStr` is one word, parsed whole.
+//! Each parse error is prefixed with the argument's spelling,
+//! ``couldn't parse `0`: `--limit`: must be at least 1``, so a `FromStr` error
+//! should say only what is wrong with the word. Types spelled by
+//! `#[derive(Bpaf)]` and hand-written impls are not named.
 //!
 //! ```
 //! use hicli::Arg;
