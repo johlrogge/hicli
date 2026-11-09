@@ -59,7 +59,8 @@ variants: each is spelled as its ident in kebab-case or its
 `#[choice(name = "…")]`; matching is exact and case-sensitive; a variant's
 description is the first paragraph of its doc comment. `UnknownChoice` lists
 the names and suggests one (the same word in another case first, then one or
-two edits away), and does not repeat the typed word, because bpaf prints
+two edits away — narrowed by ADR-002's 2026-11-09 amendment to one edit under
+six letters), and does not repeat the typed word, because bpaf prints
 ``couldn't parse `key`: `` in front of it:
 
 ```text

@@ -468,7 +468,8 @@ bpaf has built-in suggestions for both misspelled commands (since 0.5.1) and fla
 1. **Golden matrix** in tests (via `cli!`/`cli_test!` + `unwrap_stderr()`): misspelled
    top-level/nested commands, long flags, short/long confusion — assert stderr names the target.
 2. **Gap-closer using the same registry:** on `Err(ParseFailure::Stderr)` with no suggestion, run
-   a Levenshtein pass (≤ 2; `strsim`) over the registered **top-level command names**, applied to
+   an edit-distance pass (`strsim::osa_distance`; one edit under six letters, two from six —
+   see ADR-002's 2026-11-09 amendment) over the registered **top-level command names**, applied to
    the command position only, and append `` did you mean `<name>`? ``. Nested commands and flags
    are covered by bpaf's own suggestions (see the ADR `suggestion-registry-is-top-level-only`).
    The `(name, help)` pair supplied at registration feeds help and completion, rendered by

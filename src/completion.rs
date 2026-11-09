@@ -34,10 +34,15 @@ use crate::{Choice, UnknownChoice};
 ///     "powershell".parse::<Shell>().unwrap_err().to_string(),
 ///     "expected `bash`, `zsh` or `fish`"
 /// );
-/// // Two edits from `bash` (and from `zsh`: the tie goes to the earlier name).
+/// // A swapped pair of letters is one edit: close enough to suggest.
+/// assert_eq!(
+///     "bsah".parse::<Shell>().unwrap_err().to_string(),
+///     "expected `bash`, `zsh` or `fish`; did you mean `bash`?"
+/// );
+/// // Two edits from `bash`: too many for a four-letter word.
 /// assert_eq!(
 ///     "tcsh".parse::<Shell>().unwrap_err().to_string(),
-///     "expected `bash`, `zsh` or `fish`; did you mean `bash`?"
+///     "expected `bash`, `zsh` or `fish`"
 /// );
 /// ```
 ///

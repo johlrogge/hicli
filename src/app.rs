@@ -534,7 +534,7 @@ fn suggested(failure: ParseFailure, registry: &Registry, args: &[String]) -> Par
     }
 }
 
-/// The suggestion gap-closer: a Levenshtein pass (edit distance 1..=2) over the
+/// The suggestion gap-closer: an edit-distance pass ([`closest`]) over the
 /// listed top-level command names, applied to the **command position only**.
 ///
 /// A word that is any known spelling — an alias, a hidden command's name — is
@@ -576,14 +576,18 @@ fn suggest(registry: &Registry, args: &[String]) -> Option<String> {
     None
 }
 
-/// The name in `names` closest to `word` — one or two edits away (Levenshtein)
-/// — or `None` if none is. The nearest wins; a tie goes to the earlier name.
-/// An exact match is no suggestion.
+/// The name in `names` closest to `word`, or `None` if none is close enough.
+///
+/// Distance is optimal string alignment, so a swapped pair of letters is one
+/// edit. A word under six letters allows one edit, a longer one two. The
+/// nearest wins; a tie goes to the earlier name. An exact match is no
+/// suggestion.
 pub(crate) fn closest<'a>(word: &str, names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let allowed = (word.chars().count() / 3).clamp(1, 2);
     let mut best: Option<(usize, &str)> = None;
     for name in names {
-        let d = strsim::levenshtein(word, name);
-        if (1..=2).contains(&d) && best.is_none_or(|(bd, _)| d < bd) {
+        let d = strsim::osa_distance(word, name);
+        if (1..=allowed).contains(&d) && best.is_none_or(|(bd, _)| d < bd) {
             best = Some((d, name));
         }
     }
@@ -714,6 +718,30 @@ mod tests {
         assert_eq!(closest("snyc", names), Some("sync"));
         assert_eq!(closest("stats", names), Some("status"));
         assert_eq!(closest("cancle", names), Some("cancel"));
+    }
+
+    #[test]
+    fn closest_counts_a_swapped_pair_as_one_edit() {
+        assert_eq!(closest("bmp", ["bpm", "title"]), Some("bpm"));
+        assert_eq!(closest("statsu", ["sync", "status"]), Some("status"));
+        assert_eq!(closest("cancle", ["cancel"]), Some("cancel"));
+    }
+
+    #[test]
+    fn closest_allows_one_edit_under_six_letters() {
+        assert_eq!(closest("nope", ["role"]), None);
+        assert_eq!(closest("tcsh", ["bash", "zsh", "fish"]), None);
+        assert_eq!(closest("lst", ["list"]), Some("list"));
+        assert_eq!(closest("ac", ["aa"]), Some("aa"));
+        // five letters, two edits: too far.
+        assert_eq!(closest("stuts", ["status"]), None);
+    }
+
+    #[test]
+    fn closest_allows_two_edits_from_six_letters() {
+        assert_eq!(closest("stattt", ["status"]), Some("status"));
+        // three edits is too far however long the word.
+        assert_eq!(closest("configurxyz", ["configure"]), None);
     }
 
     #[test]

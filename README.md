@@ -1100,8 +1100,8 @@ Most code builds unchanged. Check these:
   (E0277). Remove the entry, or spell the type with `#[arg(…)]`. An `# Arguments`
   heading after `# Examples` is still examples text.
 - **`Shell`'s error type and text.** `"tcsh".parse::<Shell>()` fails with
-  `UnknownChoice`, which displays ``expected `bash`, `zsh` or `fish`; did you mean
-  `bash`?``. It used to be ``unknown shell `tcsh`: expected one of `bash`, `zsh`,
+  `UnknownChoice`, which displays ``expected `bash`, `zsh` or `fish` `` (and
+  `"bsah"` adds ``; did you mean `bash`?``). It used to be ``unknown shell `tcsh`: expected one of `bash`, `zsh`,
   `fish` ``. `UnknownShell` is a deprecated alias of `UnknownChoice`. It was a tuple
   struct, so code that built or matched `UnknownShell(…)` no longer compiles.
 - **`cli!` splits words only at whitespace**, as a shell does. In tests, a few

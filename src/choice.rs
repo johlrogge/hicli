@@ -123,7 +123,8 @@ use crate::arg::Candidate;
 /// # The error names the choices
 ///
 /// [`UnknownChoice`] lists every name and, when one is close — the same word
-/// in another case, or one or two edits away — suggests it. It does **not**
+/// in another case, or one edit away (two from six letters; a swapped pair of
+/// letters is one edit) — suggests it. It does **not**
 /// repeat the word that was typed: `bpaf` already prints
 /// ``couldn't parse `bmp`: `` in front of it.
 ///
@@ -175,7 +176,8 @@ impl UnknownChoice {
     /// The error for `typed`, which is none of `C`'s names.
     ///
     /// The suggestion is the first name equal to `typed` ignoring ASCII case;
-    /// failing that, the name one or two edits away, the nearest first.
+    /// failing that, the nearest name one edit away — two for a word of six
+    /// letters or more — counting a swapped pair of letters as one edit.
     ///
     /// ```
     /// use hicli::{Choice, UnknownChoice};
@@ -416,7 +418,7 @@ mod tests {
 
     #[test]
     fn the_suggestion_ignores_case_and_matching_does_not() {
-        // `BPM` is three edits from `bpm`, too far for Levenshtein: the
+        // `BPM` is three edits from `bpm`, too far for the edit distance: the
         // case-insensitive pass is what finds it.
         assert_eq!(
             error::<SortKey>("BPM"),
@@ -433,6 +435,32 @@ mod tests {
         assert_eq!(
             error::<SortKey>("popularity"),
             "expected `bpm`, `title` or `by-artist`"
+        );
+    }
+
+    #[test]
+    fn a_short_word_allows_one_edit_only() {
+        // `tcsh` is two edits from `bash`: too many for four letters.
+        assert_eq!(
+            error::<crate::Shell>("tcsh"),
+            "expected `bash`, `zsh` or `fish`"
+        );
+        assert_eq!(error::<Two>("flsh"), "expected `fast` or `slow`");
+        assert_eq!(
+            error::<Two>("fas"),
+            "expected `fast` or `slow`; did you mean `fast`?"
+        );
+    }
+
+    #[test]
+    fn a_six_letter_word_allows_two_edits() {
+        assert_eq!(
+            error::<SortKey>("titlexx"),
+            "expected `bpm`, `title` or `by-artist`; did you mean `title`?"
+        );
+        assert_eq!(
+            error::<SortKey>("byartst"),
+            "expected `bpm`, `title` or `by-artist`; did you mean `by-artist`?"
         );
     }
 
