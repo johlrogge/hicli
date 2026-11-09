@@ -7,6 +7,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Before 1.0, a minor version may carry breaking changes; they are listed under
 "Breaking" with what to change.
 
+## [Unreleased]
+
+### Added
+
+- A struct with several fields can be spelled with `#[arg(positional|long|short …)]`
+  when it implements `FromStr`: it is one word, parsed whole
+  (`#[arg(positional = "FILE", complete = files)] struct Upload { path: PathBuf, zip: bool }`)
+  (ADR-018).
+
+### Changed
+
+- A spelled one-value type parses through its own `FromStr` when it has one, else
+  through its field's. In 0.5 the type's own rule was ignored: `LimitArg(NonZeroUsize)`
+  didn't enforce "at least 1", and `ExistingFile(PathBuf)` didn't check that the file
+  exists. In `T(Option<I>)` and `T(Vec<I>)`, each word still parses through `I`'s
+  `FromStr` (ADR-018).
+- A spelled parse error names the argument:
+  ``couldn't parse `0`: `--limit`: must be at least 1``. An option is named by its
+  long name, else its short one; a positional by its metavar. Choice errors do too
+  (``couldn't parse `bmp`: `--sort`: expected `bpm` or `title`; did you mean `bpm`?``).
+  Types spelled by `#[derive(Bpaf)]` and hand-written `Arg` impls are unchanged
+  (#26, in part).
+- A `Choice`'s help row ends with its names, for example
+  `KEY  What to sort by [bpm, title, artist]`. This applies to a choice enum, a
+  newtype over one, `Option`/`Vec` of one, and an `# Arguments` override. The names
+  are bold in colour.
+
+### Breaking
+
+- Help and error snapshots change: re-bless them.
+- Remove choice names that a doc comment lists by hand; they now appear twice.
+- A type with its own `FromStr` may now reject words that 0.5 accepted.
+- A newtype where neither the type nor its field has `FromStr` is now E0599 naming
+  both bounds (it was E0277).
+- Spelling keys on a multi-field struct no longer give "spelled by
+  `#[derive(Bpaf)]`"; without `FromStr`, they give E0277 (`T: FromStr`).
+
+### Documentation
+
+- The lazy-context recipe: a context part that is expensive or fallible is a
+  `OnceLock` built the first time a command asks for it; `mk_ctx` needs no access to
+  the selected command (#7, ADR-014).
+
 ## [0.5.0] — 2026-11-06
 
 ### Added
