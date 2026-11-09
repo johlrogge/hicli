@@ -39,7 +39,7 @@ replacement. The essentials are split across these releases:
   `# Arguments` section overriding a help row through `ArgHelp`, and one help
   rule (the first paragraph) everywhere; plus `cli!` words split at whitespace
   only (#22, ADR-017).
-- **0.6.0 (in progress, feature/0.6-spelled-parsing):** from our analysis of
+- **0.6.0:** from our analysis of
   mdma-cli's code (ADR-018): a spelled type parses through its own `FromStr`
   first, a struct with several fields may be spelled when it implements
   `FromStr`, spelled parse errors name the argument (#26 for spelled types; types
@@ -69,6 +69,11 @@ replacement. The essentials are split across these releases:
 
 <!-- Completed milestones -->
 
+- 0.6.0, spelled types parse themselves (ADR-018, ADR-014, 2026-11-09, #7, #26 in
+  part): a spelled type's own `FromStr` first, multi-field `FromStr` structs,
+  argument-named parse errors, a `Choice`'s names in its help row, length-scaled
+  typo suggestions, and the lazy-context recipe; validated by a trial migration
+  of mdma-cli that deleted its `impl_arg!` and local `Choice`
 - 0.5.0, spelled argument types (ADR-016, ADR-017, 2026-11-06, #8 #22 #23):
   `#[derive(Choice)]`, a spelled `#[derive(Arg)]` whose type doc is its help,
   `# Arguments` overrides through `ArgHelp`, the first-paragraph help rule, and
