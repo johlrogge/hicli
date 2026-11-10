@@ -153,8 +153,9 @@ bpaf = <span class="t-s">"0.9"</span>   <span class="t-c"># only for #[derive(Bp
         <ol>
           <li><a href="#chapter-1"><span class="num">1</span> Your program, CLI-enabled</a></li>
           <li><a href="#chapter-2"><span class="num">2</span> One function, one command</a></li>
-          <li><a href="#chapter-3"><span class="num">3</span> Opinionated, on purpose</a></li>
-          <li><a href="#chapter-4"><span class="num">4</span> Testing without a terminal</a></li>
+          <li><a href="#chapter-3"><span class="num">3</span> Types that document themselves</a></li>
+          <li><a href="#chapter-4"><span class="num">4</span> Opinionated, on purpose</a></li>
+          <li><a href="#chapter-5"><span class="num">5</span> Testing without a terminal</a></li>
         </ol>
       </nav>
     </div>
@@ -352,6 +353,7 @@ pi.local: output is now hdmi</code></pre>
             A <code>FromStr</code> says what a valid value is: the newtype’s own if it has one,
             else the one of the type inside. Bad values never reach a command: a value that
             doesn’t parse is a usage error that names the argument, and no command runs.
+            <a href="#chapter-3">Chapter 3</a> has more on what a type can say.
           </p>
         </div>
         <div class="lesson__code stack">
@@ -533,11 +535,264 @@ Error: uploading missing.flac: reading the file: No such file or directory (os e
 
   <!-- ============================== CHAPTER 3 ============================== -->
   <section class="sheet sheet--green" id="chapter-3" aria-labelledby="k3-title">
-    <svg class="stain stain--corner" aria-hidden="true" focusable="false"><use href="#ring-b"/></svg>
     <div class="sheet__frame">
       <header class="chapter__head">
         <p class="chapter__label">Chapter 3</p>
-        <h2 id="k3-title">Opinionated, on purpose</h2>
+        <h2 id="k3-title">Types that document themselves</h2>
+        <p class="chapter__intro">
+          Write what an argument is once, on its type. Its help, its allowed values, its
+          completion and its error messages follow it into every command that takes it. A command
+          can still say something more specific. The examples below are from the test suite, so
+          the output is exactly what hicli prints.
+        </p>
+      </header>
+
+      <div class="lesson">
+        <div class="lesson__text">
+          <h3><span class="num">3.1</span> The type’s doc comment is its help</h3>
+          <p>
+            The first paragraph of the doc comment on an argument type is its help row, in
+            every command that takes it. <code>SortOpt</code> is spelled with
+            <code>#[arg(…)]</code>: an option <code>--sort</code> (or <code>-s</code>) whose
+            value is a <code>Choice</code>. Two commands take it and neither repeats a word of it.
+          </p>
+          <p>
+            The doc comment is required, so there is no argument without help. Anything after
+            its first blank line is for rustdoc and is never printed.
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+            <figcaption>src/main.rs</figcaption>
+<pre><code><span class="t-doc">/// The field a listing is sorted by.</span>
+<span class="t-a">#[derive(Debug, Clone, Copy, Choice)]</span>
+<span class="t-k">pub enum</span> <span class="t-f">SortField</span> {
+    <span class="t-doc">/// Beats per minute</span>
+    Bpm,
+    <span class="t-doc">/// Track title</span>
+    Title,
+}
+
+<span class="t-doc">/// Sort the listing by this field</span>
+<span class="t-a">#[derive(Debug, Clone, Arg)]</span>
+<span class="t-a">#[arg(long = "sort", short = 's', metavar = "FIELD")]</span>
+<span class="t-k">pub struct</span> <span class="t-f">SortOpt</span>(<span class="t-k">pub</span> Option&lt;SortField&gt;);
+
+<span class="t-doc">/// List tracks</span>
+<span class="t-a">#[command]</span>
+<span class="t-k">pub fn</span> <span class="t-f">list</span>(by: SortOpt, ctx: &amp;Ctx) { <span class="t-c">/* … */</span> }
+
+<span class="t-doc">/// Search tracks</span>
+<span class="t-a">#[command]</span>
+<span class="t-k">pub fn</span> <span class="t-f">search</span>(by: SortOpt, ctx: &amp;Ctx) { <span class="t-c">/* … */</span> }</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+        </div>
+      </div>
+
+      <div class="pair">
+        <figure class="screen screen--small">
+          <figcaption>tracks list --help</figcaption>
+<pre><code><span class="t-p">$ tracks list --help</span>
+<span class="t-hl">List tracks</span>
+
+Usage: tracks list [-s=FIELD]
+
+Available options:
+    -s, --sort=FIELD  <span class="t-hl">Sort the listing by this field</span> [bpm, title]
+    -h, --help        Prints help information</code></pre>
+        </figure>
+        <figure class="screen screen--small">
+          <figcaption>tracks search --help</figcaption>
+<pre><code><span class="t-p">$ tracks search --help</span>
+<span class="t-hl">Search tracks</span>
+
+Usage: tracks search [-s=FIELD]
+
+Available options:
+    -s, --sort=FIELD  <span class="t-hl">Sort the listing by this field</span> [bpm, title]
+    -h, --help        Prints help information</code></pre>
+        </figure>
+      </div>
+
+      <div class="lesson lesson--flip">
+        <div class="lesson__text">
+          <h3><span class="num">3.2</span> The command adds the context</h3>
+          <p>
+            The type’s doc is the default. A command that can say something more specific lists
+            the parameter in an <code># Arguments</code> section of its own doc comment, named
+            after the parameter. That replaces the help row for this command only.
+          </p>
+          <p>
+            Only the row changes. Usage, completion and errors stay the type’s, and the section
+            is read, not printed. There are no parameter attributes: this is the one place a
+            command talks about its arguments. Naming a parameter that doesn’t exist is a
+            compile error.
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+            <figcaption>src/main.rs</figcaption>
+<pre><code><span class="t-doc">/// List tracks</span>
+<span class="t-doc">///</span>
+<span class="t-doc">/// Prints one track per line.</span>
+<span class="t-doc">///</span>
+<span class="t-doc">/// # Arguments</span>
+<span class="t-doc">///</span>
+<span class="t-doc">/// * `by` - Order for this listing</span>
+<span class="t-a">#[command]</span>
+<span class="t-k">pub fn</span> <span class="t-f">list</span>(by: SortOpt, ctx: &amp;Ctx) { <span class="t-c">/* … */</span> }</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+        </div>
+      </div>
+
+      <div class="pair">
+        <figure class="screen screen--small">
+          <figcaption>with the override</figcaption>
+<pre><code><span class="t-p">$ tracks list --help</span>
+<span class="t-hl">List tracks</span>
+
+Usage: tracks list [-s=FIELD]
+
+Prints one track per line.
+
+Available options:
+    -s, --sort=FIELD  <span class="t-hl">Order for this listing</span> [bpm, title]
+    -h, --help        Prints help information</code></pre>
+        </figure>
+        <figure class="screen screen--small">
+          <figcaption>the type’s help, without one</figcaption>
+<pre><code><span class="t-p">$ tracks search --help</span>
+<span class="t-hl">Search tracks</span>
+
+Usage: tracks search [-s=FIELD]
+
+Available options:
+    -s, --sort=FIELD  <span class="t-hl">Sort the listing by this field</span> [bpm, title]
+    -h, --help        Prints help information</code></pre>
+        </figure>
+      </div>
+
+      <div class="lesson">
+        <div class="lesson__text">
+          <h3><span class="num">3.3</span> A choice is a type that lists its names</h3>
+          <p>
+            A fieldless enum with <code>#[derive(Choice)]</code> is a fixed set of words. Add
+            <code>Arg</code> and <code>#[arg(positional = "KEY")]</code> and the enum itself is the
+            argument. It parses, completes and names itself in errors, with no completer to
+            write. Its help row ends with the names, so don’t list them in the doc comment.
+          </p>
+          <p>
+            Each variant’s doc comment is the description a shell shows beside it when
+            completing. A wrong word lists the names and, if one is close, suggests it.
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+            <figcaption>examples/playr.rs</figcaption>
+<pre><code><span class="t-doc">/// What to sort by</span>
+<span class="t-a">#[derive(Debug, Clone, Copy, PartialEq, Choice, Arg)]</span>
+<span class="t-a">#[arg(positional = "KEY")]</span>
+<span class="t-k">pub enum</span> <span class="t-f">SortKey</span> {
+    <span class="t-doc">/// Beats per minute</span>
+    Bpm,
+    <span class="t-doc">/// Track title</span>
+    Title,
+    <span class="t-doc">/// Artist name</span>
+    Artist,
+}</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+          <figure class="screen screen--small">
+<pre><code><span class="t-p">$ playr sort --help</span>
+<span class="t-hl">Sort track ids read from stdin</span>
+
+Usage: playr sort [-d] KEY
+
+Reads one track id per line and prints them sorted.
+
+Available positional items:
+    KEY               <span class="t-hl">What to sort by</span> [bpm, title, artist]
+
+Available options:
+    -d, --descending  Sort descending (Z→A, high→low)
+    -h, --help        Prints help information
+
+Examples:
+  playr search --artist CBL | playr sort bpm --descending
+
+<span class="t-p">$ playr sort key</span>
+Error: couldn't parse `key`: `KEY`: expected `bpm`, `title` or `artist`
+<span class="t-p">$ playr sort bmp</span>
+Error: couldn't parse `bmp`: `KEY`: expected `bpm`, `title` or `artist`; did you mean `bpm`?</code></pre>
+          </figure>
+        </div>
+      </div>
+
+      <div class="lesson lesson--flip">
+        <div class="lesson__text">
+          <h3><span class="num">3.4</span> Validated newtypes, with errors that name the argument</h3>
+          <p>
+            A spelled type is parsed by its own <code>FromStr</code> first, and only then by the
+            type inside it. So a newtype over <code>NonZeroUsize</code> or <code>PathBuf</code>
+            can carry its own rule, and every command that takes it gets the rule for free.
+            A struct with several fields works too, when it is one word that its
+            <code>FromStr</code> takes apart.
+          </p>
+          <p>
+            Say what is wrong with the word, as a phrase that reads after the argument’s name.
+            hicli adds the word and the argument, spelled the way the user typed it
+            (<code>--limit</code>, even for <code>-l 0</code>).
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+            <figcaption>src/main.rs</figcaption>
+<pre><code><span class="t-doc">/// How many to take</span>
+<span class="t-a">#[derive(Debug, Clone, Copy, Arg)]</span>
+<span class="t-a">#[arg(long = "limit", short = 'l', metavar = "N")]</span>
+<span class="t-k">pub struct</span> <span class="t-f">Limit</span>(<span class="t-k">pub</span> NonZeroUsize);
+
+<span class="t-k">impl</span> FromStr <span class="t-k">for</span> Limit {
+    <span class="t-k">type</span> Err = &amp;<span class="t-k">'static</span> str;
+    <span class="t-k">fn</span> <span class="t-f">from_str</span>(s: &amp;str) -&gt; Result&lt;Self, Self::Err&gt; {
+        s.parse().map(Limit).map_err(|_| <span class="t-s">"must be at least 1"</span>)
+    }
+}</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+          <figure class="screen screen--small">
+<pre><code><span class="t-p">$ tracks take --limit 0</span>
+Error: couldn't parse `0`: `--limit`: must be at least 1
+<span class="t-p">$ tracks take -l 0</span>
+Error: couldn't parse `0`: `--limit`: must be at least 1</code></pre>
+          </figure>
+        </div>
+      </div>
+
+      <aside class="exercise exercise--small" aria-labelledby="exercise-3-title">
+        <h3 id="exercise-3-title"><span class="num">3.5</span> Exercise</h3>
+        <p>You want <code>--sort</code> to say “Order for this listing” in one command and the type’s default everywhere else. How many attributes go on the parameter?</p>
+        <details class="key">
+          <summary>Answer</summary>
+          <p class="key__answer">
+            None. There are no parameter attributes: one <code># Arguments</code> line in that
+            command’s doc comment. <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </p>
+        </details>
+      </aside>
+    </div>
+    <p class="sheet__folio" aria-hidden="true">4</p>
+  </section>
+
+  <!-- ============================== CHAPTER 4 ============================== -->
+  <section class="sheet sheet--blue" id="chapter-4" aria-labelledby="k4-title">
+    <svg class="stain stain--corner" aria-hidden="true" focusable="false"><use href="#ring-b"/></svg>
+    <div class="sheet__frame">
+      <header class="chapter__head">
+        <p class="chapter__label">Chapter 4</p>
+        <h2 id="k4-title">Opinionated, on purpose</h2>
       </header>
 
       <div class="stance">
@@ -596,15 +851,15 @@ Error: uploading missing.flac: reading the file: No such file or directory (os e
       </ol>
       <p class="pencil-note pencil-note--red pencil-note--end">every rule here buys you a plain function. <svg class="star star--inline" aria-hidden="true" focusable="false"><use href="#star"/></svg></p>
     </div>
-    <p class="sheet__folio" aria-hidden="true">4</p>
+    <p class="sheet__folio" aria-hidden="true">5</p>
   </section>
 
-  <!-- ============================== CHAPTER 4 ============================== -->
-  <section class="sheet sheet--blue" id="chapter-4" aria-labelledby="k4-title">
+  <!-- ============================== CHAPTER 5 ============================== -->
+  <section class="sheet sheet--green" id="chapter-5" aria-labelledby="k5-title">
     <div class="sheet__frame">
       <header class="chapter__head">
-        <p class="chapter__label">Chapter 4</p>
-        <h2 id="k4-title">Testing without a terminal</h2>
+        <p class="chapter__label">Chapter 5</p>
+        <h2 id="k5-title">Testing without a terminal</h2>
       </header>
 
       <div class="testing">
@@ -652,8 +907,8 @@ Error: uploading missing.flac: reading the file: No such file or directory (os e
         </figure>
       </div>
 
-      <aside class="exercise exercise--small" aria-labelledby="exercise-4-title">
-        <h3 id="exercise-4-title"><span class="num">4.1</span> Exercise</h3>
+      <aside class="exercise exercise--small" aria-labelledby="exercise-5-title">
+        <h3 id="exercise-5-title"><span class="num">5.1</span> Exercise</h3>
         <p>How many processes does the test module above spawn?</p>
         <details class="key">
           <summary>Answer</summary>
@@ -664,7 +919,7 @@ Error: uploading missing.flac: reading the file: No such file or directory (os e
         </details>
       </aside>
     </div>
-    <p class="sheet__folio" aria-hidden="true">5</p>
+    <p class="sheet__folio" aria-hidden="true">6</p>
   </section>
 
 </main>
