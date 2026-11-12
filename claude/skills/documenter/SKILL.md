@@ -1,8 +1,3 @@
----
-name: documenter
-description: hicli's documentation targets for the documenter — README, QUICKREF, CHANGELOG, PLAN and the promo site — and what each release must update.
----
-
 # hicli documentation targets
 
 hicli has more user-facing documentation than the README. Keep all of it in step with the
