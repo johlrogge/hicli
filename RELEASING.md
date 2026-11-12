@@ -115,7 +115,10 @@ Run these agents in order before cutting a release:
 
 2. **product-owner** — confirm the release delivers intended value
 
-3. **documenter** — update README.md / docs/PLAN.md to reflect the release
+3. **documenter** — update README.md, QUICKREF.md, CHANGELOG.md, docs/PLAN.md **and the
+   promo site (`site/`)** to reflect the release, on the release branch before it is
+   finished. The site deploys from `master`, so it goes live with the release; the
+   checklist for it lives in the documenter skill (`claude/skills/documenter/SKILL.md`)
 
 4. Verify crates.io readiness:
    - `just publish-dry` succeeds — both crates, in order (see "Two crates, one
