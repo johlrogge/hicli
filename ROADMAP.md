@@ -46,6 +46,13 @@ replacement. The essentials are split across these releases:
   bpaf spells still wait on bpaf, and the maintainer files that upstream), and a
   `Choice` lists its names in its help row; a lazy context with no new API
   answers #7 (ADR-014).
+- **0.7.0:** from our analysis of mdma-cli's composites and the last
+  `#[derive(Bpaf)]` a user needed, globals (ADR-019): `#[derive(Arg)]` composes a
+  struct of argument types (a field's doc overrides its type's help, the struct's
+  doc is its heading), `Option<T>` means "T, if given" in parameters and fields
+  (guarded at compile time by `Arg::OPTIONAL`), `env = "VAR"` on spelled options
+  with errors that name the variable, and globals as a spelled newtype or a composed
+  struct with no `bpaf` dependency; plus `QUICKREF.md` (also `hicli::quick_reference`).
 - **Unscheduled:** owned command names (#10), the
   positionals-last check (#11), globals-aware completion (#13), and the
   nice-to-haves #14–#18.
@@ -61,13 +68,22 @@ replacement. The essentials are split across these releases:
 - Deferred until our analysis of consumer code justifies it: richer `ArgSchema` for externals, opt-in
   `--dump-command-manifest` handshake, per-binary hash pin, auto-registration
   sugar
-- Deferred until our analysis of consumer code justifies it (ADR-006): a field-composing
-  `#[derive(Arg)]` for composite types, completion masks on the shell
-  shorthands (`complete = files("*.toml")`), globals-aware completion
+- Deferred until our analysis of consumer code justifies it (ADR-006, ADR-019):
+  completion masks on the shell shorthands (`complete = files("*.toml")`),
+  globals-aware completion; from ADR-019, `fallback`/`default` and `some` as
+  spelling keys, `Vec<T>` of an argument type, tuple-struct composition, a
+  composite's heading override, and `Option` for a curried parameter or a group's
+  `args`
 
 ## Done
 
 <!-- Completed milestones -->
+
+- 0.7.0, a struct of arguments is composed (ADR-019, 2026-11-12): composed
+  `#[derive(Arg)]` structs with field-doc overrides and a heading, `Option<T>` as
+  "T, if given" guarded by `Arg::OPTIONAL`, `env = "VAR"`, globals without `bpaf`
+  (playr no longer depends on it), and `QUICKREF.md`; breaking changes in the
+  README's "Upgrading from 0.6"
 
 - 0.6.0, spelled types parse themselves (ADR-018, ADR-014, 2026-11-09, #7, #26 in
   part): a spelled type's own `FromStr` first, multi-field `FromStr` structs,

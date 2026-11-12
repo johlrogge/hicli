@@ -15,8 +15,8 @@ in-process, without spawning a binary.
 [![crates.io](https://img.shields.io/crates/v/hicli.svg)](https://crates.io/crates/hicli)
 [![docs.rs](https://docs.rs/hicli/badge.svg)](https://docs.rs/hicli)
 
-> 0.6.0, pre-1.0: a minor version may break things. Every break is listed in
-> [`CHANGELOG.md`](CHANGELOG.md), and [Upgrading from 0.5](#upgrading-from-05)
+> 0.7.0, pre-1.0: a minor version may break things. Every break is listed in
+> [`CHANGELOG.md`](CHANGELOG.md), and [Upgrading from 0.6](#upgrading-from-06)
 > covers this release's. MSRV: Rust 1.99.
 
 ## Quick start
@@ -930,7 +930,7 @@ bold, metavariables underlined, and `Error: ` in bold red. It needs both stdout 
 stderr to be terminals, so `playr --help | less` and `playr --help 2>/dev/null` print
 plain text. `NO_COLOR=1` turns colour off and `FORCE_COLOR=1` forces it on; there is
 no `--color` flag. To never print colour, depend on
-`hicli = { version = "0.6", default-features = false }`. For bright colours, add
+`hicli = { version = "0.7", default-features = false }`. For bright colours, add
 `bpaf = { version = "0.9", features = ["bright-color"] }`. `App::parse` and the
 snapshot tests built on it always get plain text without the `Error: ` prefix. See
 [ADR-015](docs/adr/015-coloured-output-through-print-message.md).
