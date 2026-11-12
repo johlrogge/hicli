@@ -105,7 +105,7 @@
       <div class="cover__corner cover__corner--br" aria-hidden="true"></div>
 
       <div class="cover__top">
-        <p class="cover__grade">v0.6</p>
+        <p class="cover__grade">v0.7</p>
         <p class="cover__pencil" aria-hidden="true">name: <span class="cover__scrawl">playr</span></p>
       </div>
 
@@ -130,8 +130,7 @@
         <figure class="answer answer--install">
           <figcaption>Cargo.toml</figcaption>
 <pre><code><span class="t-h">[dependencies]</span>
-hicli = <span class="t-s">"0.6"</span>
-bpaf = <span class="t-s">"0.9"</span>   <span class="t-c"># only for #[derive(Bpaf)], e.g. on Globals</span></code></pre>
+hicli = <span class="t-s">"0.7"</span></code></pre>
         </figure>
 
         <ul class="links" aria-label="Project links">
@@ -139,7 +138,7 @@ bpaf = <span class="t-s">"0.9"</span>   <span class="t-c"># only for #[derive(Bp
           <li><a class="btn" href="https://crates.io/crates/hicli">crates.io</a></li>
           <li><a class="btn" href="https://github.com/johlrogge/hicli">GitHub</a></li>
         </ul>
-        <p class="fineprint">0.6, pre-1.0: a minor version may break things, and every break is listed in the changelog. MSRV: Rust 1.99.</p>
+        <p class="fineprint">0.7, pre-1.0: a minor version may break things, and every break is listed in the changelog. MSRV: Rust 1.99.</p>
       </div>
 
       <p class="cover__authors">#[command] <span aria-hidden="true">•</span> #[group] <span aria-hidden="true">•</span> app!</p>
@@ -383,13 +382,24 @@ Error: couldn't parse `HDMI`: `NAME`: a name uses only a-z, 0-9 and -
             and handed to every command that takes <code>&amp;Ctx</code>.
           </p>
           <p>
+            The globals are an argument type too. One global is a spelled newtype, as here, and
+            several are a struct of such types (<a href="#chapter-3">chapter 3</a>). Either way
+            they are accepted before or after the subcommand, and there is no <code>bpaf</code>
+            dependency.
+          </p>
+          <p>
             Exit codes: <code>0</code> on success, <code>1</code> for a runtime failure,
             <code>2</code> for a usage error. <code>run</code> returns the <code>ExitCode</code>;
             it never calls <code>process::exit</code>.
           </p>
         </div>
         <figure class="answer lesson__code">
-<pre><code><span class="t-k">fn</span> <span class="t-f">app</span>() -&gt; App&lt;Globals, Ctx&gt; {
+<pre><code><span class="t-doc">/// The node to talk to</span>
+<span class="t-a">#[derive(Debug, Clone, Arg)]</span>
+<span class="t-a">#[arg(long = "node", metavar = "HOST", env = "PLAYR_NODE")]</span>
+<span class="t-k">pub struct</span> <span class="t-f">Globals</span>(<span class="t-k">pub</span> Option&lt;Node&gt;);
+
+<span class="t-k">fn</span> <span class="t-f">app</span>() -&gt; App&lt;Globals, Ctx&gt; {
     app! {
         globals: globals(),
         commands: [ping, playback, search, library, source, upload, sort, generate_completions],
@@ -399,7 +409,7 @@ Error: couldn't parse `HDMI`: `NAME`: a name uses only a-z, 0-9 and -
 }
 
 <span class="t-k">fn</span> <span class="t-f">main</span>() -&gt; ExitCode {
-    app().run(|g| Ok(Ctx { node: g.node }))
+    app().run(|g| Ok(Ctx { node: g.<span class="t-n">0</span>.unwrap_or_else(Node::localhost) }))
 }</code></pre>
           <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
         </figure>
@@ -771,8 +781,239 @@ Error: couldn't parse `0`: `--limit`: must be at least 1</code></pre>
         </div>
       </div>
 
+      <div class="lesson">
+        <div class="lesson__text">
+          <h3><span class="num">3.5</span> A struct of arguments is composed</h3>
+          <p>
+            Options that belong together share one struct that derives <code>Arg</code>. Every
+            field is an argument type, and each keeps its type’s help, completion and named
+            errors. You don’t write a parser.
+          </p>
+          <p>
+            <strong>A field’s doc comment replaces its type’s help</strong>, so one type can read
+            differently in each struct. <strong>The struct’s doc comment is a heading</strong>
+            over its rows; a struct with none has no heading. A field with no doc comment keeps
+            its type’s row, which is why neither is required.
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+            <figcaption>src/main.rs</figcaption>
+<pre><code><span class="t-doc">/// Output directory</span>
+<span class="t-a">#[derive(Debug, Clone, PartialEq, Arg)]</span>
+<span class="t-a">#[arg(long = "output", metavar = "DIR", complete = dirs)]</span>
+<span class="t-k">pub struct</span> <span class="t-f">OutputDir</span>(<span class="t-k">pub</span> Option&lt;PathBuf&gt;);
+
+<span class="t-doc">/// Export options</span>
+<span class="t-a">#[derive(Debug, Clone, PartialEq, Arg)]</span>
+<span class="t-k">pub struct</span> <span class="t-f">ExportArgs</span> {
+    <span class="t-k">pub</span> artist: Artist,
+    <span class="t-doc">/// Convert lossless sources to this</span>
+    <span class="t-k">pub</span> format: LosslessFormat,
+    <span class="t-doc">/// Where the export goes. Default: ./export/</span>
+    <span class="t-k">pub</span> output: OutputDir,
+    <span class="t-k">pub</span> unplayed: Unplayed,
+    <span class="t-k">pub</span> playlist: Playlist,
+    <span class="t-k">pub</span> query: Query,
+}
+
+<span class="t-c">// no doc comment: no heading</span>
+<span class="t-a">#[derive(Debug, Clone, PartialEq, Arg)]</span>
+<span class="t-k">pub struct</span> <span class="t-f">RekordboxArgs</span> {
+    <span class="t-doc">/// Defaults to ~/Music/rekordbox</span>
+    <span class="t-k">pub</span> output: OutputDir,
+    <span class="t-k">pub</span> port: Port,
+}</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+        </div>
+      </div>
+
+      <div class="pair">
+        <figure class="screen screen--small">
+          <figcaption>export --help</figcaption>
+<pre><code><span class="t-p">$ export --help</span>
+Export tracks
+
+Usage: export [--artist=NAME] [--lossless-format=FORMAT] [--output=DIR] [--unplayed]
+              [--playlist=NAME]... [QUERY]
+
+<span class="t-hl">Export options</span>
+        --artist=NAME    Only tracks by this artist
+        --lossless-format=FORMAT  Convert lossless sources to this [original, aiff]
+        --output=DIR     <span class="t-hl">Where the export goes. Default: ./export/</span>
+        --unplayed       Only tracks that were never played
+        --playlist=NAME  A playlist to export
+    QUERY                Free-text query
+
+Available options:
+    -h, --help           Prints help information</code></pre>
+        </figure>
+        <figure class="screen screen--small">
+          <figcaption>rekordbox --help</figcaption>
+<pre><code><span class="t-p">$ rekordbox --help</span>
+Export to rekordbox
+
+Usage: rekordbox [--output=DIR] [--port=PORT]
+
+Available options:
+        --output=DIR  <span class="t-hl">Defaults to ~/Music/rekordbox</span>
+        --port=PORT   A port on the node
+    -h, --help        Prints help information</code></pre>
+        </figure>
+      </div>
+
+      <div class="lesson lesson--flip">
+        <div class="lesson__text">
+          <h3><span class="num">3.6</span> Several globals are a struct too</h3>
+          <p>
+            A struct of arguments can be the app’s globals, with no <code>#[derive(Bpaf)]</code>
+            and no <code>bpaf</code> dependency. Its doc comment is the <code>Global options</code>
+            heading, and a global can still go after the subcommand.
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+            <figcaption>tests/arg_compose.rs</figcaption>
+<pre><code><span class="t-doc">/// Global options</span>
+<span class="t-a">#[derive(Debug, Clone, PartialEq, Arg)]</span>
+<span class="t-k">pub struct</span> <span class="t-f">Globals</span> {
+    <span class="t-k">pub</span> node: NodeOpt,
+    <span class="t-k">pub</span> verbose: Verbose,
+}
+
+app! { globals: globals(), commands: [ping] }</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+          <figure class="screen screen--small">
+<pre><code><span class="t-p">$ app --help</span>
+Usage: [--node=HOST] [-v] COMMAND ...
+
+<span class="t-hl">Global options</span>
+        --node=HOST  The node to talk to
+    -v, --verbose    Print more
+
+Available options:
+    -h, --help       Prints help information
+
+Available commands:
+    ping             Check the node</code></pre>
+          </figure>
+        </div>
+      </div>
+
+      <div class="lesson">
+        <div class="lesson__text">
+          <h3><span class="num">3.7</span> <span><code>Option&lt;T&gt;</code> is “T, if given”</span></h3>
+          <p>
+            Write <code>Option&lt;Limit&gt;</code> as a parameter, or as a struct field, and the
+            argument may be left out. <code>Limit</code> stays required, with its own
+            <code>FromStr</code>, help, completion and errors, and the usage line shows it
+            optional. The function is still plain Rust: <code>list(None, &amp;ctx)</code> works.
+          </p>
+          <p>
+            A type that already succeeds without its argument, such as one that holds an
+            <code>Option</code> inside, can’t be wrapped again, since the result would always be
+            <code>Some</code>. That is a compile error, checked through <code>Arg::OPTIONAL</code>.
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+            <figcaption>tests/arg_optional.rs</figcaption>
+<pre><code><span class="t-doc">/// How many to take</span>
+<span class="t-a">#[derive(Debug, Clone, Copy, PartialEq, Eq, Arg)]</span>
+<span class="t-a">#[arg(long = "limit", metavar = "N")]</span>
+<span class="t-k">pub struct</span> <span class="t-f">Limit</span>(<span class="t-k">pub</span> NonZeroUsize);
+
+<span class="t-c">// FromStr: "must be at least 1"</span>
+
+<span class="t-doc">/// List tracks</span>
+<span class="t-a">#[command]</span>
+<span class="t-k">pub fn</span> <span class="t-f">list</span>(limit: Option&lt;Limit&gt;, ctx: &amp;Ctx) { <span class="t-c">/* … */</span> }</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+          <figure class="screen screen--small">
+<pre><code><span class="t-p">$ list --help</span>
+List tracks
+
+Usage: list <span class="t-hl">[--limit=N]</span>
+
+Available options:
+        --limit=N  How many to take
+    -h, --help     Prints help information
+<span class="t-p">$ list --limit 0</span>
+couldn't parse `0`: `--limit`: must be at least 1</code></pre>
+          </figure>
+        </div>
+      </div>
+
+      <div class="pair">
+        <figure class="answer">
+          <figcaption>tests/ui/command_option_already_optional.rs</figcaption>
+<pre><code><span class="t-doc">/// Only tracks added in the last DAYS days</span>
+<span class="t-a">#[derive(Debug, Clone, Arg)]</span>
+<span class="t-a">#[arg(long = "added", metavar = "DAYS")]</span>
+<span class="t-k">pub struct</span> <span class="t-f">Added</span>(<span class="t-k">pub</span> Option&lt;<span class="t-k">u32</span>&gt;);
+
+<span class="t-doc">/// search tracks</span>
+<span class="t-a">#[command]</span>
+<span class="t-k">fn</span> <span class="t-f">search</span>(a: Option&lt;Added&gt;) { <span class="t-c">/* … */</span> }</code></pre>
+        </figure>
+        <figure class="screen screen--small">
+          <figcaption>the compile error</figcaption>
+<pre><code><span class="t-hl">error[E0080]: evaluation panicked: `Added` succeeds when its argument is absent, so `Option&lt;Added&gt;` would always be `Some`: use `Added` as it is, or make `Added` required and write `Option&lt;Added&gt;` where it may be left out</span>
+  --&gt; tests/ui/command_option_already_optional.rs:15:21
+   |
+15 | fn search(a: Option&lt;Added&gt;) {
+   |                     ^^^^^ evaluation of `_` failed here</code></pre>
+        </figure>
+      </div>
+
+      <div class="lesson lesson--flip">
+        <div class="lesson__text">
+          <h3><span class="num">3.8</span> An option can fall back to the environment</h3>
+          <p>
+            <code>env = "PLAYR_NODE"</code> on a spelled option makes the variable its fallback.
+            The command line wins, a value from the environment counts as given, and help shows
+            the variable. A bad value names the option and the variable, and never echoes the
+            value, because the environment is where secrets live.
+          </p>
+          <p>
+            Help prints the variable’s value when it is set, so don’t put a secret in a field
+            that has <code>env</code>. A default belongs where the context is built, as in 2.4.
+          </p>
+        </div>
+        <div class="lesson__code stack">
+          <figure class="answer">
+            <figcaption>examples/playr.rs</figcaption>
+<pre><code><span class="t-doc">/// The node to talk to</span>
+<span class="t-a">#[derive(Debug, Clone, Arg)]</span>
+<span class="t-a">#[arg(long = "node", metavar = "HOST", env = "PLAYR_NODE")]</span>
+<span class="t-k">pub struct</span> <span class="t-f">Globals</span>(<span class="t-k">pub</span> Option&lt;Node&gt;);</code></pre>
+            <svg class="star" aria-hidden="true" focusable="false"><use href="#star"/></svg>
+          </figure>
+          <figure class="screen screen--small">
+<pre><code><span class="t-p">$ playr --help</span>
+playr: control the music player
+
+Usage: playr [--node=HOST] COMMAND ...
+
+Available options:
+        --node=HOST  The node to talk to
+                     <span class="t-hl">[env:PLAYR_NODE: N/A]</span>
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+<span class="t-c"># …</span>
+<span class="t-p">$ PLAYR_NODE=pi.local:http playr ping</span>
+Error: couldn't parse: `--node` from `$PLAYR_NODE`: `http` is not a port number
+<span class="t-p">$ playr --node pi.local:http ping</span>
+Error: couldn't parse `pi.local:http`: `--node`: `http` is not a port number</code></pre>
+          </figure>
+        </div>
+      </div>
+
       <aside class="exercise exercise--small" aria-labelledby="exercise-3-title">
-        <h3 id="exercise-3-title"><span class="num">3.5</span> Exercise</h3>
+        <h3 id="exercise-3-title"><span class="num">3.9</span> Exercise</h3>
         <p>You want <code>--sort</code> to say “Order for this listing” in one command and the type’s default everywhere else. How many attributes go on the parameter?</p>
         <details class="key">
           <summary>Answer</summary>
@@ -838,7 +1079,7 @@ Error: couldn't parse `0`: `--limit`: must be at least 1</code></pre>
         </li>
         <li>
           <h3>The help looks like bpaf’s, not clap’s.</h3>
-          <p>A one-value argument is spelled with <code>#[arg(…)]</code> on its type, and anything bigger with bpaf’s own attributes. <code>--help</code> exits 0 and usage errors exit 2.</p>
+          <p>A one-value argument is spelled with <code>#[arg(…)]</code> on its type, and a struct of them is composed from its fields. A guard or a fallback shown in help still needs bpaf’s own attributes. <code>--help</code> exits 0 and usage errors exit 2.</p>
         </li>
         <li>
           <h3>One default command per group.</h3>
