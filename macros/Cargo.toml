@@ -1,6 +1,6 @@
 [package]
 name = "hicli-macros"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 # Matches `hicli`'s: `#[group]` on a file-module declaration needs attribute
 # macros on non-inline modules, stable since 1.99 (ADR-010).

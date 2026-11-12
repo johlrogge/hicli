@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `Yes` succeeds when its argument is absent, so `Option<Yes>` would always be `Some`: use `Yes` as it is, or make `Yes` required and write `Option<Yes>` where it may be left out
+  --> tests/ui/command_option_of_a_switch.rs:12:22
+   |
+12 | fn empty(yes: Option<Yes>) {
+   |                      ^^^ evaluation of `_` failed here

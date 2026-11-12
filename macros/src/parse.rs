@@ -11,8 +11,8 @@ use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, Error, FnArg, Ident, ItemFn, LitStr, Pat, Result, Signature, Token, Type};
 
 use crate::shared::{
-    cfg_attrs, check_spelling, dashed, handle_ident, parse_keys, read_doc, Arguments, CommandMeta,
-    Spelling, COMMAND_NEEDS_DOC,
+    cfg_attrs, check_spelling, dashed, handle_ident, option_inner, parse_keys, read_doc, Arguments,
+    CommandMeta, Spelling, COMMAND_NEEDS_DOC, DOUBLE_OPTION,
 };
 
 /// The message for an argument `#[command]` does not take.
@@ -23,6 +23,12 @@ const UNKNOWN_ARG: &str = "#[command] takes `name = \"...\"`, `alias = \"...\"` 
 const CURRIED_NOTHING: &str = "a `curried` command receives its group's argument as its first \
                                owned parameter, and this function has none: add a parameter of \
                                the group's `args` type first";
+
+/// The message for a `curried` command whose first parameter is an `Option`
+/// (ADR-019 §3).
+const CURRIED_OPTIONAL: &str = "a `curried` command's first parameter is the value its group \
+                                parsed, which is always there: write the group's `args` type, \
+                                not `Option<…>`";
 
 /// The message for `curried` and `default` on one command.
 const CURRIED_DEFAULT: &str = "`curried` and `default` cannot be combined: a group that hands its \
@@ -226,6 +232,9 @@ impl CommandFn {
             None => None,
             Some(key) if params.arg_tys.is_empty() => {
                 return Err(Error::new_spanned(key, CURRIED_NOTHING))
+            }
+            Some(_) if option_inner(&params.arg_tys[0]).is_some() => {
+                return Err(Error::new_spanned(&params.arg_tys[0], CURRIED_OPTIONAL))
             }
             Some(_) => {
                 curried_name = Some(params.names.remove(0));
@@ -455,6 +464,9 @@ impl Params {
                     p.ctx_name = Some(name);
                     p.slots.push(Slot::Ctx);
                 }
+                Type::Path(_) if option_inner(&typed.ty).and_then(option_inner).is_some() => {
+                    return Err(Error::new_spanned(&typed.ty, DOUBLE_OPTION));
+                }
                 Type::Path(path) if path.qself.is_none() => {
                     // Kept as written, span and all: the expansion resolves it
                     // through `Arg`, and a type that is not one has to be
@@ -665,6 +677,28 @@ mod tests {
             "`default` cannot be combined with `hide`: a default command is never listed, so \
              there is nothing to hide"
         );
+        // Optional twice is said once.
+        assert_eq!(
+            rejection_on(
+                "",
+                "/// list\nfn list(l: Option<std::option::Option<Limit>>) {}"
+            ),
+            DOUBLE_OPTION
+        );
+        // A curried value is always there: `Option` of it says nothing.
+        assert_eq!(
+            rejection_on(
+                "curried",
+                "/// sync\nfn sync(s: Option<SourceName>, ctx: &Ctx) {}"
+            ),
+            CURRIED_OPTIONAL
+        );
+        // … but a curried command's *other* parameters may be optional.
+        assert!(command_with(
+            "curried",
+            "/// sync\nfn sync(s: SourceName, n: Option<Limit>, ctx: &Ctx) {}"
+        )
+        .is_ok());
         // `curried` on a function with nothing to curry — the context is
         // not an owned parameter.
         assert_eq!(rejection("curried"), CURRIED_NOTHING);

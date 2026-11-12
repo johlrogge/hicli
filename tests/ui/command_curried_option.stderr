@@ -1,0 +1,5 @@
+error: a `curried` command's first parameter is the value its group parsed, which is always there: write the group's `args` type, not `Option<…>`
+  --> tests/ui/command_curried_option.rs:13:12
+   |
+13 | fn sync(s: Option<SourceName>) {
+   |            ^^^^^^^^^^^^^^^^^^

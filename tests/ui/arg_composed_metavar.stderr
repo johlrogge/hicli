@@ -1,0 +1,5 @@
+error: `metavar` names an option's value: it goes with `long` or `short` (a positional writes `positional = "…"`)
+  --> tests/ui/arg_composed_metavar.rs:11:7
+   |
+11 | #[arg(metavar = "REF")]
+   |       ^^^^^^^

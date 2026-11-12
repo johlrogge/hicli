@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `Tags` succeeds when its argument is absent, so `Option<Tags>` would always be `Some`: use `Tags` as it is, or make `Tags` required and write `Option<Tags>` where it may be left out
+  --> tests/ui/command_option_of_a_vec.rs:13:21
+   |
+13 | fn tag(tags: Option<Tags>) {
+   |                     ^^^^ evaluation of `_` failed here

@@ -13,7 +13,11 @@ use quote::format_ident;
 use quote::ToTokens;
 use syn::ext::IdentExt;
 use syn::parse::ParseStream;
-use syn::{Attribute, Error, Expr, ExprLit, Ident, Lit, LitStr, Meta, Result, Token};
+use syn::spanned::Spanned;
+use syn::{
+    Attribute, Error, Expr, ExprLit, GenericArgument, Ident, Lit, LitStr, Meta, PathArguments,
+    Result, Token, Type,
+};
 
 /// The message for a `#[command]` with no doc comment, or a blank one.
 pub(crate) const COMMAND_NEEDS_DOC: &str =
@@ -546,6 +550,128 @@ pub(crate) fn parse_keys(
     Ok(meta)
 }
 
+/// The last segment of a plain path type (no qualified self), looking through
+/// invisible and parenthesised groups.
+pub(crate) fn last_segment(ty: &Type) -> Option<&syn::PathSegment> {
+    match ty {
+        Type::Path(p) if p.qself.is_none() => p.path.segments.last(),
+        Type::Group(g) => last_segment(&g.elem),
+        Type::Paren(p) => last_segment(&p.elem),
+        _ => None,
+    }
+}
+
+/// `Option<X>` → `X`: recognised syntactically, as `bpaf_derive` does — the
+/// last path segment is `Option` and it has exactly one type argument.
+pub(crate) fn option_inner(ty: &Type) -> Option<&Type> {
+    let seg = last_segment(ty)?;
+    if seg.ident != "Option" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(a) = &seg.arguments else {
+        return None;
+    };
+    match (a.args.len(), a.args.first()) {
+        (1, Some(GenericArgument::Type(inner))) => Some(inner),
+        _ => None,
+    }
+}
+
+/// A type as the author wrote it, for a message: its tokens, without the
+/// spaces `quote` puts around `::`, `<`, `>` and `,`.
+pub(crate) fn type_text(ty: &Type) -> String {
+    ty.to_token_stream()
+        .to_string()
+        .replace(" :: ", "::")
+        .replace(":: ", "::")
+        .replace(" ::", "::")
+        .replace(" < ", "<")
+        .replace("< ", "<")
+        .replace(" <", "<")
+        .replace(" >", ">")
+        .replace(" ,", ",")
+}
+
+/// `<ty as tr>::item`, spanned from `ty`'s first token to its last.
+///
+/// `quote_spanned!(ty.span()=> …)` gives every token `ty.span()`, which on
+/// stable is the first token's only (`path` of `path::NotArg`). Two calls
+/// spanned that way and one spanned over the whole type report the same
+/// unmet bound twice; opening `<` at the first token and closing `>::item`
+/// at the last makes rustc cover the whole type, everywhere it is used.
+pub(crate) fn qualified(
+    ty: &Type,
+    tr: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let tokens = ty.to_token_stream();
+    let first = tokens
+        .clone()
+        .into_iter()
+        .next()
+        .map_or_else(Span::call_site, |t| t.span());
+    let last = tokens.into_iter().last().map_or(first, |t| t.span());
+    let item = respan(item, last);
+    let open = quote::quote_spanned!(first=> <);
+    let close = quote::quote_spanned!(last=> as #tr>::#item);
+    quote::quote!(#open #ty #close)
+}
+
+/// [`qualified`], called: `<ty as tr>::item(args)`, the call's parentheses
+/// spanned at `ty`'s last token too, so no part of the call is the caller's.
+pub(crate) fn qualified_call(
+    ty: &Type,
+    tr: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
+    args: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let last = ty
+        .to_token_stream()
+        .into_iter()
+        .last()
+        .map_or_else(Span::call_site, |t| t.span());
+    let path = qualified(ty, tr, item);
+    let call = quote::quote_spanned!(last=> (#args));
+    quote::quote!(#path #call)
+}
+
+/// `tokens` with every token's span set to `span`, groups included.
+fn respan(tokens: proc_macro2::TokenStream, span: Span) -> proc_macro2::TokenStream {
+    tokens
+        .into_iter()
+        .map(|mut t| {
+            if let proc_macro2::TokenTree::Group(g) = &t {
+                let mut g2 = proc_macro2::Group::new(g.delimiter(), respan(g.stream(), span));
+                g2.set_span(span);
+                t = proc_macro2::TokenTree::Group(g2);
+            } else {
+                t.set_span(span);
+            }
+            t
+        })
+        .collect()
+}
+
+/// `Option<Option<T>>` as a parameter or a field.
+pub(crate) const DOUBLE_OPTION: &str = "`Option<Option<T>>` says optional twice: write `Option<T>`";
+
+/// The item-level assertion beside an `Option<inner>` argument (ADR-019 §3):
+/// `inner` must not already be optional, or the `Option` would always be
+/// `Some`. Spanned at `inner`, so the error points at the type where it is
+/// used. An item, not an inline `const {}`, so `cargo check` evaluates it.
+pub(crate) fn not_already_optional(inner: &Type) -> proc_macro2::TokenStream {
+    let t = type_text(inner);
+    let message = format!(
+        "`{t}` succeeds when its argument is absent, so `Option<{t}>` would always be `Some`: \
+         use `{t}` as it is, or make `{t}` required and write `Option<{t}>` where it may be left \
+         out"
+    );
+    let optional = qualified(inner, quote::quote!(::hicli::Arg), quote::quote!(OPTIONAL));
+    quote::quote_spanned! {inner.span()=>
+        const _: () = ::core::assert!(!#optional, #message);
+    }
+}
+
 /// `EventRef` -> `event_ref`: the name `#[derive(Bpaf)]` gives a type's parser
 /// constructor.
 pub(crate) fn snake_case(ident: &Ident) -> Ident {
@@ -606,6 +732,27 @@ mod tests {
     fn snake_case_handles_digits_and_existing_underscores() {
         assert_eq!(snake("Event2Ref"), "event2_ref");
         assert_eq!(snake("event_ref"), "event_ref");
+    }
+
+    #[test]
+    fn option_inner_reads_the_last_segment_and_one_type_argument() {
+        let inner = |src: &str| {
+            let ty: Type = syn::parse_str(src).expect("a type");
+            option_inner(&ty).map(|t| t.to_token_stream().to_string())
+        };
+        assert_eq!(inner("Option<Limit>").as_deref(), Some("Limit"));
+        assert_eq!(
+            inner("std::option::Option<a::Limit>").as_deref(),
+            Some("a :: Limit")
+        );
+        assert_eq!(
+            inner("Option<Option<Limit>>").as_deref(),
+            Some("Option < Limit >")
+        );
+        assert_eq!(inner("Limit"), None);
+        assert_eq!(inner("Vec<Limit>"), None);
+        assert_eq!(inner("Option"), None);
+        assert_eq!(inner("Option<'a, Limit>"), None);
     }
 
     #[test]

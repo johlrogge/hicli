@@ -3,18 +3,24 @@
 //! A command's parameter is one argument **type**, and this is where that type says
 //! how it parses — and, optionally, what it completes to. [`Arg::parser`] is the
 //! whole trait: one associated constructor, no metavar, no attributes, nothing
-//! about spelling. The spelling is on the type, written one of two ways by
-//! [`#[derive(Arg)]`](derive@crate::Arg) (ADR-016):
+//! about spelling. The spelling is on the type, written one of three ways by
+//! [`#[derive(Arg)]`](derive@crate::Arg) (ADR-016, ADR-019):
 //!
 //! - **spelled** — `#[arg(positional = "KEY")]`, `#[arg(long, short = 's',
 //!   metavar = "FIELD")]`, … on a one-value type. hicli writes the `bpaf` chain,
 //!   the type's doc comment's first paragraph is its help row, and the type
 //!   also implements [`ArgHelp`], so a command's `# Arguments` entry can replace
 //!   that row. No `#[derive(Bpaf)]`, no direct `bpaf` dependency;
-//! - **bpaf mode** — no `positional`, `long` or `short` key. The spelling lives
-//!   in `#[derive(Bpaf)]` on the same type, exactly as it did before spelled
-//!   mode existed, and the derive calls its constructor. This is the form for a
-//!   type with several options or positionals.
+//! - **composed** — no spelling key, on a struct with named fields and no
+//!   `#[bpaf(…)]` attribute anywhere. Each field is an argument type, and the
+//!   derive composes their parsers in declaration order (see
+//!   [Composites](#composites));
+//! - **bpaf mode** — no `positional`, `long` or `short` key, and the type
+//!   carries `#[bpaf(…)]` attributes (or is not a named-field struct). The
+//!   spelling lives in `#[derive(Bpaf)]` on the same type, exactly as it did
+//!   before spelled mode existed, and the derive calls its constructor. This is
+//!   the form for what the other two do not cover: guards, `some`, a fallback
+//!   shown in help.
 //!
 //! **A spelled type parses itself and names itself** (ADR-018). Its word goes
 //! through the type's own `FromStr` when it has one — where a newtype over a
@@ -116,14 +122,48 @@
 //! struct Id(#[bpaf(positional("ID"))] String);
 //! ```
 //!
-//! A `Globals` struct is **not** an `Arg` either, and must not implement it:
-//! globals are composed at the top level by [`App::new`](crate::App::new), never
-//! as a command's parameter, so they never go through [`Arg::parser`].
+//! A spelled or composed `Globals` implements `Arg`; `App::new(globals())`
+//! does not need it to — globals are composed at the top level by
+//! [`App::new`](crate::App::new), from the snake_case constructor the derive
+//! writes, never as a command's parameter.
 //!
 //! # Composites
 //!
-//! A type made of argument types composes their parsers, and each part keeps its
-//! own completion:
+//! A struct of argument types is `#[derive(Arg)]` with no spelling key: each
+//! field's type implements `Arg`, and keeps its own help, completion and
+//! errors. A field's doc comment replaces its type's help row, through
+//! [`ArgHelp`], so one type can read differently in each struct; the struct's
+//! own doc comment is a section heading over its rows.
+//!
+//! ```
+//! use hicli::Arg;
+//! # use hicli::bpaf::Parser;
+//!
+//! /// The event directory
+//! #[derive(Debug, Clone, Arg)]
+//! #[arg(positional = "DIR")]
+//! pub struct Dir(pub String);
+//!
+//! /// The instance
+//! #[derive(Debug, Clone, Arg)]
+//! #[arg(positional = "INSTANCE")]
+//! pub struct Instance(pub String);
+//!
+//! #[derive(Debug, Clone, Arg)]
+//! pub struct EventRef {
+//!     pub dir: Dir,
+//!     /// The instance to open
+//!     pub instance: Instance,
+//! }
+//!
+//! let r = <EventRef as Arg>::parser().to_options().run_inner(&["./ev", "main"][..]).unwrap();
+//! assert_eq!((r.dir.0.as_str(), r.instance.0.as_str()), ("./ev", "main"));
+//! ```
+//!
+//! The derive writes the constructor `event_ref()` (so `app! { globals:
+//! globals() }` and `#[bpaf(external(event_ref))]` find it) and an `Arg` impl,
+//! not `ArgHelp`: a composite has no row of its own. A struct whose parts
+//! need more than that is written by hand — the escape hatch:
 //!
 //! ```
 //! # use hicli::bpaf::{construct, positional, Parser};
@@ -191,8 +231,14 @@
 //!   line is rustdoc only and never printed, so developer prose can live
 //!   there. A missing or blank doc comment is a compile error. A doc comment
 //!   at a *use site* — a field of a `#[derive(Bpaf)]` struct that embeds the
-//!   type through `#[bpaf(external(…))]` — is never rendered; only a command's
-//!   `# Arguments` entry overrides the row.
+//!   type through `#[bpaf(external(…))]` — is never rendered; a command's
+//!   `# Arguments` entry and a composed struct's field doc override the row.
+//! - **composed** — the struct's doc comment's first paragraph is a **group
+//!   heading** over its fields' rows, as in bpaf mode; with none there is no
+//!   heading. A field's doc comment's first paragraph replaces its type's
+//!   help row, which only a type that implements [`ArgHelp`] can honour — on
+//!   any other it is a compile error (E0277), never ignored; write a `//`
+//!   comment there instead.
 //! - **bpaf mode** — `bpaf` renders the `///` doc comment on a
 //!   `#[derive(Bpaf)]` struct as a **group heading** above that struct's
 //!   options in `--help`, so a struct documented `/// Filtering` lists its
@@ -221,8 +267,9 @@ pub type Candidate = (String, Option<String>);
 /// How an argument type parses: one constructor, and nothing else.
 ///
 /// Implement it by hand, or derive it. `#[derive(Arg)]` with
-/// `#[arg(positional|long|short …)]` spells a one-value type itself; without
-/// those keys it goes beside `#[derive(Bpaf)]`, calls the type's snake_case
+/// `#[arg(positional|long|short …)]` spells a one-value type itself; on a
+/// struct with named fields and no `#[bpaf(…)]` it composes the fields'
+/// argument types; otherwise it goes beside `#[derive(Bpaf)]`, calls the type's snake_case
 /// `bpaf` constructor (`Id` → `id()`) and optionally wraps it in one of the
 /// completion helpers. See [`#[derive(Arg)]`](derive@crate::Arg).
 ///
@@ -247,12 +294,40 @@ pub type Candidate = (String, Option<String>);
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a hicli argument type",
-    label = "this parameter's type must implement `Arg`",
+    label = "this argument's type must implement `Arg`",
     note = "an argument is a type: give it a documented newtype — `/// An event id` above `#[derive(Arg)] #[arg(positional = \"ID\")] struct Id(String);`",
-    note = "a choice enum is spelled the same way: `#[derive(Choice, Arg)] #[arg(positional = \"KEY\")]`; a type with several fields is `#[derive(Bpaf, Arg)]`",
-    note = "hicli ships no `Arg` impls for `String`, `u64`, `PathBuf`, … on purpose: the metavar and positional-vs-option are yours to name"
+    note = "a choice enum is spelled the same way: `#[derive(Choice, Arg)] #[arg(positional = \"KEY\")]`; a struct of several argument types is `#[derive(Arg)]`",
+    note = "hicli ships no `Arg` impls for `String`, `u64`, `PathBuf`, … on purpose: the metavar and positional-vs-option are yours to name",
+    note = "an optional argument is `Option<T>` where it is used, with `T` required; a type that is optional at every use holds its `Option` inside: `struct Added(Option<DaysBack>)`"
 )]
 pub trait Arg: Sized + 'static {
+    /// `true` when this type's parser succeeds without its argument (an
+    /// `Option` or `Vec` inside, a switch, a struct whose fields are all
+    /// optional), so
+    /// `Option<Self>` would always be `Some`. `#[derive(Arg)]` sets it; a
+    /// hand-written `Arg` that is optional this way sets it too.
+    ///
+    /// Everything not marked optional is required, and the derive marks it.
+    /// `Option<T>` in a command's parameter or a composed struct's field is a
+    /// compile error when `T::OPTIONAL` is `true` — it would never be `None`.
+    ///
+    /// ```
+    /// use hicli::bpaf::{long, Parser};
+    /// use hicli::Arg;
+    ///
+    /// /// `--port`, which may be left out: `Option<Port>` would always be `Some`.
+    /// pub struct Port(Option<u16>);
+    ///
+    /// impl Arg for Port {
+    ///     const OPTIONAL: bool = true;
+    ///     fn parser() -> impl Parser<Self> {
+    ///         long("port").argument::<u16>("PORT").optional().map(Port)
+    ///     }
+    /// }
+    /// # assert!(<Port as Arg>::OPTIONAL);
+    /// ```
+    const OPTIONAL: bool = false;
+
     /// The `bpaf` parser for this argument type.
     fn parser() -> impl Parser<Self>;
 }
@@ -296,9 +371,9 @@ pub trait Arg: Sized + 'static {
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}`'s help cannot be overridden",
-    label = "named in this command's `# Arguments`",
-    note = "only a type spelled by `#[arg(positional|long|short …)]` builds its own help; one spelled by `#[derive(Bpaf)]` keeps bpaf's",
-    note = "spell the type with `#[arg(…)]`, or remove its entry from `# Arguments`"
+    label = "its help is overridden here",
+    note = "only a type spelled by `#[arg(positional|long|short …)]` builds its own help row: a type spelled by `#[derive(Bpaf)]` keeps bpaf's, and a composed struct's rows are its fields'",
+    note = "spell the type with `#[arg(…)]`, or remove the override: the command's `# Arguments` entry or the field's doc comment (a `//` comment is not rendered)"
 )]
 pub trait ArgHelp: Arg {
     /// This type's parser, with `help` as its row's help.

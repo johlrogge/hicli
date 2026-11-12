@@ -1,0 +1,57 @@
+error[E0428]: the name `upload` is defined multiple times
+  --> tests/ui/arg_constructor_clashes_with_command.rs:15:1
+   |
+ 9 | #[derive(Debug, Clone, Arg)]
+   |                        --- previous definition of the value `upload` here
+...
+15 | fn upload(file: Upload) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^ `upload` redefined here
+   |
+   = note: `upload` must be defined only once in the value namespace of this module
+
+error[E0061]: this function takes 0 arguments but 1 argument was supplied
+  --> tests/ui/arg_constructor_clashes_with_command.rs:15:4
+   |
+14 | #[command]
+   | ---------- unexpected argument of type `Upload`
+15 | fn upload(file: Upload) {
+   |    ^^^^^^
+   |
+note: function defined here
+  --> tests/ui/arg_constructor_clashes_with_command.rs:11:12
+   |
+11 | pub struct Upload(pub String);
+   |            ^^^^^^
+
+error[E0277]: `impl Parser<Upload>` is not a command return type hicli accepts
+  --> tests/ui/arg_constructor_clashes_with_command.rs:14:1
+   |
+14 | #[command]
+   | ^^^^^^^^^^ a `#[command]` must return `()`, `Success`, `Result<(), E>` or `Result<Success, E>`
+   |
+   = help: the trait `IntoOutcome` is not implemented for `impl Parser<Upload>`
+   = note: the four accepted shapes are `()`, `Success`, `Result<(), E>` and `Result<Success, E>`, where `E: Into<Failure>`
+   = note: `E` may be `Failure` (i.e. `hicli::Outcome`), any `std::error::Error + 'static`, `anyhow::Error`, `eyre::Report`, `Box<dyn Error>`, `String` or `&str`
+help: the following other types implement trait `IntoOutcome`
+  --> src/outcome.rs
+   |
+   | impl IntoOutcome for () {
+   | ^^^^^^^^^^^^^^^^^^^^^^^ `()`
+...
+   | impl IntoOutcome for Success {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Success`
+...
+   | impl<E: Into<Failure>> IntoOutcome for Result<(), E> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Result<(), E>`
+...
+   | impl<E: Into<Failure>> IntoOutcome for Result<Success, E> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Result<Success, E>`
+note: required by a bound in `command`
+  --> src/command.rs
+   |
+   | pub fn command<Ctx, A, R>(
+   |        ------- required by a bound in this function
+...
+   |     R: IntoOutcome,
+   |        ^^^^^^^^^^^ required by this bound in `command`
+   = note: this error originates in the attribute macro `command` (in Nightly builds, run with -Z macro-backtrace for more info)

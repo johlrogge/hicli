@@ -1,5 +1,8 @@
 # hicli
 
+> New to hicli, or an agent? Read [QUICKREF.md](QUICKREF.md) first, about 460 lines.
+> It is also on [docs.rs](https://docs.rs/hicli/latest/hicli/quick_reference/index.html).
+
 **Write a subcommand as a documented function. hicli adds the command line.**
 
 hicli is a subcommand framework for Rust, built on [`bpaf`](https://docs.rs/bpaf).
@@ -12,8 +15,8 @@ in-process, without spawning a binary.
 [![crates.io](https://img.shields.io/crates/v/hicli.svg)](https://crates.io/crates/hicli)
 [![docs.rs](https://docs.rs/hicli/badge.svg)](https://docs.rs/hicli)
 
-> 0.6.0, pre-1.0: a minor version may break things. Every break is listed in
-> [`CHANGELOG.md`](CHANGELOG.md), and [Upgrading from 0.5](#upgrading-from-05)
+> 0.7.0, pre-1.0: a minor version may break things. Every break is listed in
+> [`CHANGELOG.md`](CHANGELOG.md), and [Upgrading from 0.6](#upgrading-from-06)
 > covers this release's. MSRV: Rust 1.99.
 
 ## Quick start
@@ -24,8 +27,7 @@ First, three commands and a global option:
 
 ```toml
 [dependencies]
-hicli = "0.6"
-bpaf = "0.9"   # needed for #[derive(Bpaf)], used here on Globals
+hicli = "0.7"
 ```
 
 ```rust
@@ -33,16 +35,12 @@ use std::fmt;
 use std::process::ExitCode;
 use std::str::FromStr;
 
-use bpaf::Bpaf;
 use hicli::{app, command, group, App, Arg};
 
-/// Global options
-#[derive(Debug, Clone, Bpaf)]
-pub struct Globals {
-    /// The node to talk to
-    #[bpaf(long, env("PLAYR_NODE"), argument("HOST"), fallback(Node::localhost()))]
-    pub node: Node,
-}
+/// The node to talk to
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "node", metavar = "HOST", env = "PLAYR_NODE")]
+pub struct Globals(pub Option<Node>);
 
 /// Built once, after parsing, and handed to every command.
 pub struct Ctx {
@@ -92,7 +90,11 @@ fn app() -> App<Globals, Ctx> {
 }
 
 fn main() -> ExitCode {
-    app().run(|g| Ok(Ctx { node: g.node }))
+    app().run(|g| {
+        Ok(Ctx {
+            node: g.0.unwrap_or_else(Node::localhost),
+        })
+    })
 }
 ```
 
@@ -102,11 +104,9 @@ fn main() -> ExitCode {
 $ playr --help
 Usage: playr [--node=HOST] COMMAND ...
 
-Global options
+Available options:
         --node=HOST  The node to talk to
                      [env:PLAYR_NODE: N/A]
-
-Available options:
     -h, --help       Prints help information
 
 Available commands:
@@ -154,12 +154,18 @@ What each piece does:
   needs it. hicli has no `Arg` impls for `String`, `u64` and so on, so you always
   use a newtype ([ADR-006](docs/adr/006-an-argument-is-a-type.md)). Inside it is
   the value's own type, here a `Name`.
-- **Global options are a `Bpaf` struct.** They are accepted before or after the
-  subcommand (`playr playback stop --node pi.local`), except an external subcommand,
-  which needs them before its name (see the rules below). `env(..)` makes an
-  environment variable the fallback, and the doc comment on the struct becomes the
-  `Global options` heading.
-- **Never put a secret in a `Globals` field, not even with `env(..)`.** When the
+- **Global options are an argument type.** One global is a spelled newtype, as
+  here; several are a struct that derives `Arg` over such newtypes, headed by its
+  doc comment (see [A struct of arguments](#a-struct-of-arguments)). They are
+  accepted before or after the subcommand (`playr playback stop --node pi.local`),
+  except an external subcommand, which needs them before its name (see the rules
+  below). `env = "…"` makes an environment variable the fallback; a default is set
+  where the context is built, here `Node::localhost()`. A bad value from the
+  environment names its variable, and neither hicli nor bpaf prints the value:
+  ``couldn't parse: `--node` from `$PLAYR_NODE`: `http` is not a port number``
+  (the last part is `Node`'s own `FromStr` error, which decides for itself what to
+  quote). No `bpaf` dependency is needed.
+- **Never put a secret in a `Globals` field, not even with `env`.** When the
   variable is set, `--help` prints its value: `PLAYR_NODE=x playr --help` shows
   `[env:PLAYR_NODE = "x"]`.
 - **The context `&Ctx`** is built once from the globals, by the closure you pass to
@@ -211,14 +217,13 @@ Error: couldn't parse `HDMI`: `NAME`: a name uses only a-z, 0-9 and -
 $ echo $?
 2
 $ playr --node pi.local:http ping
-Error: couldn't parse `pi.local:http`: `http` is not a port number
+Error: couldn't parse `pi.local:http`: `--node`: `http` is not a port number
 ```
 
-Known gap: an argument spelled by bpaf, such as a `Globals` field like `--node`
-above or a field of a `#[derive(Bpaf)]` struct, is not named, only its value. With
-several such values of the same type, the user has to work out which one failed
-([#26](https://github.com/johlrogge/hicli/issues/26)). Types spelled with `#[arg(…)]`
-are always named.
+Known gap: an argument spelled by bpaf, a field of a `#[derive(Bpaf)]` struct, is
+not named, only its value. With several such values of the same type, the user has
+to work out which one failed ([#26](https://github.com/johlrogge/hicli/issues/26)).
+Types spelled with `#[arg(…)]`, and the structs composed of them, are always named.
 
 A newtype over a type that isn't yours, such as `NonZeroUsize` or `PathBuf`, can
 carry the rule itself, because its own `FromStr` comes first:
@@ -239,6 +244,15 @@ impl FromStr for Limit {
 
 `--limit 0` and `-l 0` both fail with ``couldn't parse `0`: `--limit`: must be at
 least 1``: the name is the argument's spelling, not what was typed.
+
+Where it is optional, write `Option<Limit>`: `fn list(limit: Option<Limit>)`.
+`Limit`'s own rule still applies. A type that is optional wherever it is used, such
+as a filter, holds the `Option` itself: `Added(Option<DaysBack>)`. `Option` of a
+type that succeeds when its argument is absent (an `Option` or `Vec` inside, a
+switch, a struct of arguments whose fields are all optional) is a compile error,
+because it would never be `None`: everything not marked optional is required, and
+the derive marks it (`Arg::OPTIONAL`). A struct of arguments with a required field
+can be `Option`: absent is `None`, and half given is an error.
 
 A value with no rules, like the free-text search query below, can stay a `String`
 inside its newtype. Paths are `PathBuf`, and choices are enums (see
@@ -281,14 +295,15 @@ The keys are:
 | `positional = "QUERY"` | a positional, shown as `QUERY` |
 | `long = "apply"`, `short = 'y'` | an option, `--apply` or `-y`, alone or together |
 | `metavar = "DAYS"` | an option's value, shown as `--added=DAYS`; required unless the value is a `bool` |
+| `env = "PLAYR_NODE"` | an option's environment fallback, shown in help |
 | `complete = f`, `files`, `dirs` | completion (see [Shell completion](#shell-completion)) |
 
 A bare `positional` or `long` is named after the type: `SortBy` becomes `SORT-BY`
 or `--sort-by`. What is inside decides the rest: `Option<T>` is optional, `Vec<T>`
 repeats, a `bool` with a name is a switch, and anything else is one word. The
 first paragraph of the type's doc comment is its help row, so the doc comment is
-required. These five keys are all there is, on purpose. A type that needs more,
-such as a fallback, is spelled with bpaf.
+required. These six keys are all there is, on purpose. A fallback is an `Option`
+defaulted where it is used.
 
 Which `FromStr` parses the word:
 
@@ -337,31 +352,74 @@ Without the `FromStr`, it is a compile error. (Don't name a command after the ty
 in snake_case, here `upload`: the derive writes a function `upload()` beside the
 type, and the two clash.)
 
-Several options that belong together can share one struct, spelled with
-`#[derive(Bpaf)]` as in bpaf. This is also how `Globals` is written. Each field's
-doc comment is its help row. `Bpm` accepts 20 to 300, written like `Name`:
+### A struct of arguments
+
+Several options that belong together share one struct that derives `Arg`. Every
+field is an argument type, or `Option` of one, like a command's parameter. `Bpm`
+accepts 20 to 300, written like `Name`:
 
 ```rust
-#[derive(Debug, Clone, Bpaf, Arg)]
+/// Only tracks by this artist
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "artist", metavar = "NAME")]
+pub struct Artist(pub Option<String>);
+
+/// Only tracks at this tempo
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "bpm", metavar = "BPM")]
+pub struct BpmFilter(pub Option<Bpm>);
+
+/// Only tracks that were never played
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "unplayed")]
+pub struct Unplayed(pub bool);
+
+#[derive(Debug, Clone, Arg)]
 pub struct Filters {
-    /// Only tracks by this artist
-    #[bpaf(long, argument("NAME"))]
-    pub artist: Option<String>,
-    /// Only tracks at this tempo
-    #[bpaf(long, argument("BPM"))]
-    pub bpm: Option<Bpm>,
-    /// Only tracks that were never played
-    #[bpaf(long)]
-    pub unplayed: bool,
+    pub artist: Artist,
+    pub bpm: BpmFilter,
+    pub unplayed: Unplayed,
 }
 ```
 
-Document the fields of a `#[derive(Bpaf)]` struct, not the struct. bpaf turns a
-doc comment on the struct into a section heading. That is how `Global options`
-appears above.
+- Each field's help, completion and errors are its type's.
+- **A field's doc comment replaces its type's help**, so one type can read
+  differently in each struct: `/// Where the export goes` above `output: OutputDir`.
+  It works for types spelled with `#[arg(…)]`; on any other it is a compile error.
+- **The struct's doc comment is a section heading** over its rows. `Filters` has
+  none, so its rows are listed under its command's help.
+- `#[arg(…)]` goes on a type, never on a field. A spelling used once still gets its
+  own small type; used in several places, it is the same type with a field doc where
+  it should read differently.
 
-A command's parameters are parsed in the order they are declared. **Declare the
-types that contain positionals last.** bpaf requires this, and a debug build checks it
+An undocumented field deliberately keeps its type's help, and an undocumented
+struct has no heading. A crate that denies `missing_docs` allows it on those items
+rather than writing a doc comment that would change the help:
+
+```rust
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Arg)]
+pub struct Filters {
+    pub artist: Artist,
+    pub bpm: BpmFilter,
+    pub unplayed: Unplayed,
+}
+```
+
+`#[cfg]` on a field is refused (the composition names every field): put it on the
+whole struct.
+
+The derive also writes the constructor `filters()` (see rule 9 in
+[Rules and papercuts](#rules-and-papercuts) for the name clash it can cause), as
+`#[derive(Bpaf)]` would, so
+a struct like this can be the app's globals (`app! { globals: globals(), … }`) and
+a `#[derive(Bpaf)]` struct can embed it with `#[bpaf(external(filters))]`. A struct
+that needs what only bpaf has, such as a guard or a fallback shown in help, stays
+`#[derive(Bpaf, Arg)]` with its `#[bpaf(…)]` attributes, and needs `bpaf = "0.9"` in
+your own dependencies.
+
+A command's parameters, and a struct's fields, are parsed in the order they are
+declared. **Declare the types that contain positionals last.** bpaf requires this, and a debug build checks it
 the first time it runs. A release build doesn't check it up front: the same mistake
 panics when `--help` is rendered. The rule is only about parameter order: on the
 command line, flags can go anywhere.
@@ -658,7 +716,7 @@ impl Ctx {
 
 fn mk_ctx(g: Globals) -> Result<Ctx, Failure> {
     Ok(Ctx {
-        node: g.node,
+        node: g.0.unwrap_or_else(Node::localhost),
         session: OnceLock::new(),
     })
 }
@@ -853,7 +911,11 @@ Available options:
   section is not printed as part of the details.
 - It works for argument types spelled with `#[arg(…)]`, and for hand-written ones
   that implement `ArgHelp`. An entry for a `#[derive(Bpaf)]` type is a compile
-  error, because bpaf builds that help.
+  error, because bpaf builds that help, and so is one for a struct of arguments,
+  which has no row of its own. A field of such a struct overrides its type's help
+  the same way, with its doc comment (see [A struct of arguments](#a-struct-of-arguments)).
+- An entry for an `Option<T>` parameter replaces `T`'s row, and the parameter stays
+  optional.
 - It is a compile error to name something that is not a parsed parameter of the
   command (the `&Ctx`, a curried value, a misspelling), to name one twice, or to
   write the section on a group or on a `#[command(default)]`.
@@ -868,7 +930,7 @@ bold, metavariables underlined, and `Error: ` in bold red. It needs both stdout 
 stderr to be terminals, so `playr --help | less` and `playr --help 2>/dev/null` print
 plain text. `NO_COLOR=1` turns colour off and `FORCE_COLOR=1` forces it on; there is
 no `--color` flag. To never print colour, depend on
-`hicli = { version = "0.6", default-features = false }`. For bright colours, add
+`hicli = { version = "0.7", default-features = false }`. For bright colours, add
 `bpaf = { version = "0.9", features = ["bright-color"] }`. `App::parse` and the
 snapshot tests built on it always get plain text without the `Error: ` prefix. See
 [ADR-015](docs/adr/015-coloured-output-through-print-message.md).
@@ -1002,11 +1064,14 @@ mod tests {
    declarations, stable since 1.99.
 2. **If you use `#[derive(Bpaf)]`, add `bpaf = "0.9"` to your own dependencies.**
    `#[derive(Bpaf)]` generates `::bpaf::` paths. Cargo still builds a single copy of
-   bpaf. Types spelled with `#[arg(…)]` don't need it; a `Globals` struct written
-   with `#[derive(Bpaf)]` does.
+   bpaf. Types spelled with `#[arg(…)]`, and structs composed of them, globals
+   included, don't need it.
 3. **Declare positional parameters last** (see above).
 4. **There are no `Arg` impls for primitives.** Give each value a newtype, with the
-   value's own type inside.
+   value's own type inside. A hand-written `Arg` whose parser succeeds without its
+   argument (an `Option` inside, a switch) sets `const OPTIONAL: bool = true;`, so
+   that `Option<ThatType>` is refused; everything not marked optional is required,
+   and the derive marks it.
 5. **Completers filter their own candidates.** bpaf passes them to the shell
    unchanged. A completer on a type spelled with `#[arg(…)]` is handed the raw word,
    so it runs on every keystroke. On a `#[derive(Bpaf, Arg)]` type with
@@ -1018,22 +1083,29 @@ mod tests {
    single-field one.** On a multi-field bpaf struct it is a compile error. A struct
    with several fields spelled with `#[arg(…)]` is one word, so it completes like
    any other.
-7. **`Globals` doesn't derive `Arg`.** It is parsed once at the top level.
+7. **`Globals` is parsed once at the top level.** A spelled or composed `Globals`
+   implements `Arg`, but `App::new(globals())` only needs its constructor.
 8. **A `#[group] pub mod x;` that lives in its own file must be declared at the top
    level of a file**, not inside an inline module.
-9. **The attribute keys:**
-   - `#[command(name = "…", alias = "…", hide)]`, plus `default` and `curried` (above).
-   - `#[group(alias = "…", hide)]`, plus `args` and `curried` (above). A group has no
-     `name`: it is the module's.
-   - `#[group(ctx = T)]` names a group's context. Without it, the group takes the
-     first `&T` among its commands, and a command with no `&T` is generic over `Ctx`.
-   - `#[arg(positional = "…", long = "…", short = '…', metavar = "…", complete = …)]`
-     on an argument type, and `#[choice(name = "…")]` on a `Choice` variant.
-   - A doc comment's `# Examples` and `# Arguments` sections.
-10. **A bare name in `commands!` names a handle.** A local `Command` value must be
+9. **`#[derive(Arg)]` writes a snake_case function beside the type** (`Filters` →
+   `filters()`). A command, helper or completer with that name in the same module is
+   E0428 "the name `filters` is defined multiple times", pointing at the function,
+   with `#[derive(Arg)]` as the earlier definition. Rename the type (`FilterArgs`) or
+   the function.
+10. **The attribute keys:**
+    - `#[command(name = "…", alias = "…", hide)]`, plus `default` and `curried` (above).
+    - `#[group(alias = "…", hide)]`, plus `args` and `curried` (above). A group has no
+      `name`: it is the module's.
+    - `#[group(ctx = T)]` names a group's context. Without it, the group takes the
+      first `&T` among its commands, and a command with no `&T` is generic over `Ctx`.
+    - `#[arg(positional = "…", long = "…", short = '…', metavar = "…", env = "…",
+      complete = …)]` on an argument type, never on a field, and
+      `#[choice(name = "…")]` on a `Choice` variant.
+    - A doc comment's `# Examples` and `# Arguments` sections.
+11. **A bare name in `commands!` names a handle.** A local `Command` value must be
     parenthesised, `commands![(c)]`. A macro of your own that forwards a list to
     `app!` or `commands!` should match it as `$($c:tt)*`, not `$c:expr`.
-11. **External subcommands** (`hicli::external(ExternalCommand::new(…))`):
+12. **External subcommands** (`hicli::external(ExternalCommand::new(…))`):
     - Inside a group, write the group's handle by hand,
       `#[doc(hidden)] pub fn __hicli_<name>() -> Command<Ctx>`, returning
       `hicli::group(…)`. Discovery finds items, not values, so an external can't be a
@@ -1043,6 +1115,37 @@ mod tests {
     - A `--` right after the external's name is eaten by bpaf; the binary only sees
       the words after it.
     - See `ExternalCommand` on [docs.rs](https://docs.rs/hicli) for the rest.
+
+## Upgrading from 0.6
+
+Most code builds unchanged. Check these:
+
+- **A `#[derive(Bpaf, Arg)]` struct with named fields and no `#[bpaf(…)]`
+  attribute** is now composed by `#[derive(Arg)]`, and fails with E0428 (the
+  constructor is written twice). Remove `#[derive(Bpaf)]` and compose it, or add a
+  `#[bpaf(…)]` attribute to keep bpaf mode.
+- **A `#[derive(Arg)]` struct with named fields and a hand-written snake_case
+  constructor** is now composed: delete the constructor, or write `impl Arg` by hand.
+- **`#[arg(…)]` on a field is a compile error.** It used to be ignored.
+- **`#[arg(complete = …)]` on such a struct** reports that a composed struct has no
+  one value to complete.
+- **Re-bless your trybuild snapshots:** `Arg`'s and `ArgHelp`'s diagnostics are
+  reworded to cover fields and `Option<T>`.
+
+To drop `#[derive(Bpaf)]` from a struct, globals included:
+
+- replace each `#[bpaf(external(T::parser))] t: T` with a bare `t: T` field, and
+  `#[bpaf(external(T::parser), optional)] t: Option<T>` with `t: Option<T>`;
+- give each field bpaf spelled (`#[bpaf(long, argument("X"))]`) a spelled newtype,
+  `#[arg(long = "…", metavar = "X")]`, with the field's doc comment on the type;
+- move `fallback(…)` to an `Option` and a default where the value is used, and
+  `env("VAR")` to `env = "VAR"`;
+- remove the `bpaf` dependency once nothing derives `Bpaf`.
+
+A single global is a spelled newtype, which has no heading: `playr --help` lists
+`--node` under `Available options:` instead of under `Global options`.
+
+The full list is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Upgrading from 0.5
 
@@ -1165,9 +1268,10 @@ Usage lines and parsing stay the same, and so does the help row of a one-paragra
 doc comment (only the first paragraph is printed now). The derive still writes the
 snake_case constructor (`source_name()`), so a `#[bpaf(external(source_name))]`
 that embeds the type elsewhere keeps working. Keep `#[derive(Bpaf)]` for a type
-with several options or positionals, and for one that needs another bpaf attribute, such as
-`fallback`, `env` or a guard. Your crate needs the direct `bpaf` dependency only
-while something still uses `#[derive(Bpaf)]`.
+that needs another bpaf attribute, such as a guard or a fallback shown in help; a
+type with several options becomes [a struct of arguments](#a-struct-of-arguments).
+Your crate needs the direct `bpaf` dependency only while something still uses
+`#[derive(Bpaf)]`.
 
 ## Upgrading from 0.1
 
@@ -1198,7 +1302,8 @@ The full list is in [`CHANGELOG.md`](CHANGELOG.md#breaking--upgrading-from-01).
   macros generate, you can also write yourself.
 - **Coming from clap:** the help layout is bpaf's, not clap's. Globals are parsed once
   and can't be overridden per subcommand. A one-word argument is spelled with
-  `#[arg(…)]` on its type, and anything bigger with bpaf's own attributes.
+  `#[arg(…)]` on its type, several make a struct that derives `Arg`, and anything
+  bigger uses bpaf's own attributes.
   `--help` exits 0 and usage errors exit 2.
 - **Why it is designed this way:** [`docs/adr/`](docs/adr/). The main ones are
   [005](docs/adr/005-verbs-are-the-function.md) (a command is its function),
@@ -1207,6 +1312,8 @@ The full list is in [`CHANGELOG.md`](CHANGELOG.md#breaking--upgrading-from-01).
   `Choice` and the help rule),
   [018](docs/adr/018-a-spelled-type-parses-itself-and-names-itself.md) (which
   `FromStr` parses a word, and errors that name the argument),
+  [019](docs/adr/019-a-struct-of-arguments-is-composed.md) (structs of arguments,
+  `env` and `Option<T>`),
   [014](docs/adr/014-a-lazy-context-needs-no-api.md) (a context that connects on
   first use),
   [011](docs/adr/011-curried-commands-and-default-commands.md) (curried groups and

@@ -1,6 +1,9 @@
 //! `hicli` — CLI-enable your code. A modular, publishable subcommand framework
 //! built on [`bpaf`].
 //!
+//! **New to hicli, or an agent? Start with the [quick reference](quick_reference):**
+//! one page, one pattern per section, every snippet compiled.
+//!
 //! One subcommand = one documented **function**, and one group of subcommands =
 //! one documented **module**. [`#[command]`](macro@command) emits the annotated
 //! function exactly as written — same name, same signature, same visibility —
@@ -351,6 +354,7 @@ pub use bpaf;
 /// | `#[command(curried)]` | the **first owned parameter** is handed over by the enclosing `#[group(args = T)]` instead of parsed; see [Curried commands](crate#curried-commands-and-a-groups-default-command) |
 /// | `#[command(default)]` | [`Node::by_default`] — runs when no sibling is named, answers to no word; positionals last |
 /// | each **owned** parameter `p: T` | one argument type; its parser is `<T as Arg>::parser()`, composed in declaration order |
+/// | an owned parameter `p: Option<T>` | "`T`, if given": `T`'s parser made optional, `T` keeping its own `FromStr`, help and completion. `T` must be required — everything not marked optional ([`Arg::OPTIONAL`]) is, and the derive marks it — or a compile error says `Option<T>` would always be `Some` |
 /// | the single `&T` parameter | the context; `T` is the command's `Ctx`. Conventionally last, but first works too |
 /// | the return type | anything implementing [`IntoOutcome`]: `()`, [`Success`], or `Result<(), E>` / `Result<Success, E>` with `E: Into<Failure>` — [`Outcome`], `io::Result<()>`, `anyhow::Result<()>`, `color_eyre::Result<()>`, … (ADR-012) |
 ///
@@ -465,15 +469,12 @@ pub use bpaf;
 /// #[arg(positional = "TITLE")]
 /// pub struct Title(pub String);
 ///
-/// // or, for a type with several fields, bpaf mode:
-/// #[derive(Debug, Clone, Bpaf, Arg)]
+/// // or, for several arguments together, a struct of argument types:
+/// #[derive(Debug, Clone, Arg)]
 /// pub struct Filters {
-///     /// Only tracks by this artist
-///     #[bpaf(long, argument("NAME"))]
-///     pub artist: Option<String>,
-///     /// Only tracks that were never played
-///     #[bpaf(long)]
-///     pub unplayed: bool,
+///     pub artist: Artist,
+///     /// Only tracks nobody has played yet
+///     pub unplayed: Unplayed,
 /// }
 /// ```
 ///
@@ -557,7 +558,7 @@ pub use bpaf;
 ///
 /// What still shares the value namespace is the snake_case constructor of an
 /// argument type — written by `#[derive(Bpaf)]`, or by
-/// [`#[derive(Arg)]`](derive@Arg) in spelled mode: a struct `Create` gets
+/// [`#[derive(Arg)]`](derive@Arg) in spelled or composed mode: a struct `Create` gets
 /// `fn create()`, which collides with `#[command] fn create` with an ordinary
 /// *"name defined multiple times"* error. `#[command]` no longer names that
 /// constructor — [`#[derive(Arg)]`](derive@Arg) does — but the clash is between
@@ -588,6 +589,12 @@ pub use bpaf;
 /// - **an owned parameter whose type is not an [`Arg`](trait@Arg)** — a
 ///   primitive such as `String`, reported by the trait itself with the newtype
 ///   to write;
+/// - **`Option<T>` of a type that succeeds when its argument is absent** — an
+///   `Option` or `Vec` inside, a switch, a struct whose fields are all
+///   optional — evaluated at compile time (E0080, `` `T` succeeds when its
+///   argument is absent, so `Option<T>` would always be `Some` … ``), pointing
+///   at `T`; `Option<Option<T>>`; and `Option<…>` as a `curried` command's
+///   first parameter, which its group always hands over;
 /// - **a pattern parameter** (`Words(w): Words`) — the handle's closure calls
 ///   the function by naming its arguments; take `w: Words` and use `w.0`;
 /// - **an examples heading with nothing under it**;
@@ -1025,12 +1032,18 @@ pub mod arg;
 pub mod outcome;
 pub mod testing;
 
+/// A one-page quick reference: every pattern, with a snippet that compiles.
+///
+/// This is `QUICKREF.md` from the repository.
+#[doc = include_str!("../QUICKREF.md")]
+pub mod quick_reference {}
+
 #[doc(hidden)]
 pub mod __private {
     //! Named by `#[derive(Arg)]`'s spelled expansion only; not API.
     pub use crate::private::{
-        choice, named, no_candidates, FieldFromOs, FieldFromStr, FromStrOf, IsChoice, NotChoice,
-        OsWordError, Probe, SelfFromOs, SelfFromStr,
+        choice, choice_env, from_env, named, named_env, no_candidates, FieldFromOs, FieldFromStr,
+        FromStrOf, IsChoice, NotChoice, OsWordError, Probe, SelfFromOs, SelfFromStr,
     };
 }
 mod private;
@@ -1058,10 +1071,20 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// Implement [`Arg`](trait@Arg) for an argument type — and leave the type
 /// exactly as it is.
 ///
-/// It has two modes, chosen by the keys of `#[arg(…)]` (ADR-016, ADR-018):
-/// **spelled mode**, where hicli spells a one-word type from `positional`,
-/// `long`, `short` and its doc comment, and **bpaf mode**, where `#[derive(Bpaf)]` on
-/// the same type spells it and this derive calls the constructor that wrote.
+/// It has three modes, chosen by the keys of `#[arg(…)]` and the type's shape
+/// (ADR-016, ADR-018, ADR-019):
+///
+/// | on the type | mode |
+/// |---|---|
+/// | `positional`, `long` or `short` | **spelled**: one argument, one word |
+/// | none; named fields; no `#[bpaf(…)]` anywhere | **composed**: a struct of argument types |
+/// | otherwise | **bpaf mode**: `#[derive(Bpaf)]` spells it |
+///
+/// In **spelled mode** hicli spells a one-word type from `positional`,
+/// `long`, `short` and its doc comment; in **composed mode** it composes the
+/// fields' argument types; in **bpaf mode** `#[derive(Bpaf)]` on the same type
+/// spells it and this derive calls the constructor that wrote. `#[arg(…)]`
+/// goes on a type, never on a field, in every mode.
 ///
 /// # Spelled mode
 ///
@@ -1121,11 +1144,13 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// | `long` / `long = "name"` | an option; a bare `long` is the ident in kebab-case (`SortBy` → `--sort-by`) |
 /// | `short = 'c'` | an option's short name, alone or with `long` |
 /// | `metavar = "M"` | an option's value name — required unless the value is a `bool`, which is a switch |
+/// | `env = "VAR"` | an option's environment fallback, shown in help as `[env:VAR: N/A]`; parsed and named like the option |
 /// | `complete = f` / `files` / `dirs` | `f` is `fn(&str) -> Vec<Candidate>`, handed the raw word; `files`/`dirs` are the shell's own completion |
 ///
-/// These keys are all there is: a key is added when a consumer's real CLI
-/// needs it, not before. A type that needs more — a fallback, an `env`, a
-/// guard — is spelled in bpaf mode, or by hand.
+/// These six keys are all there is: a key is added when our analysis of
+/// consumer code shows it is needed, not before. A fallback is an `Option`
+/// defaulted where the value is used; a type that needs more — a fallback
+/// shown in help, a guard — is spelled in bpaf mode, or by hand.
 ///
 /// The type is a newtype, a struct with one named field, a struct with several
 /// fields that implements `FromStr`, or a fieldless enum that derives
@@ -1152,9 +1177,10 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// **The help row is the type's doc comment's first paragraph**, its lines
 /// joined by a space. Everything after the first blank line is rustdoc only and
 /// never printed. A doc comment where the type is *used* — on a field that
-/// embeds it through `#[bpaf(external(…))]` — is never rendered either: a
-/// command changes the row only through its `# Arguments` section (see
-/// [`#[command]`](macro@command#overriding-an-arguments-help)).
+/// embeds it through `#[bpaf(external(…))]` — is never rendered either: the
+/// row changes only through a command's `# Arguments` section (see
+/// [`#[command]`](macro@command#overriding-an-arguments-help)) or a composed
+/// struct's field doc comment (see [Composed mode](#composed-mode)).
 ///
 /// **A [`Choice`](trait@Choice) completes and lists itself.** A choice inside
 /// the type — or the enum itself, `#[derive(Choice, Arg)]` — offers its names,
@@ -1190,13 +1216,87 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 /// A spelled type that also derives `Bpaf` defines that constructor twice
 /// (E0428); remove `#[derive(Bpaf)]`.
 ///
+/// `#[derive(Arg)]` writes a snake_case function beside the type (`SortOpt` →
+/// `sort_opt()`). A command, helper or completer with that name in the same
+/// module is E0428 *"the name `sort_opt` is defined multiple times"*, pointing
+/// at the function with `#[derive(Arg)]` as the earlier definition. Rename the
+/// type (`SortArgs`) or the function.
+///
+/// # Composed mode
+///
+/// A struct with named fields, no spelling key and no `#[bpaf(…)]` attribute
+/// is a struct of argument types: every field's type implements
+/// [`Arg`](trait@Arg), exactly as a command's parameter does, and the derive
+/// composes their parsers with `construct!` in declaration order. A field's
+/// help, completion and errors are its type's:
+///
+/// ```
+/// use hicli::Arg;
+/// # use hicli::bpaf::Parser;
+///
+/// /// Only tracks by this artist
+/// #[derive(Debug, Clone, Arg)]
+/// #[arg(long = "artist", metavar = "NAME")]
+/// pub struct Artist(pub Option<String>);
+///
+/// /// Only tracks that were never played
+/// #[derive(Debug, Clone, Arg)]
+/// #[arg(long = "unplayed")]
+/// pub struct Unplayed(pub bool);
+///
+/// /// Filters
+/// #[derive(Debug, Clone, Arg)]
+/// pub struct Filters {
+///     pub artist: Artist,
+///     /// Only tracks nobody has played yet
+///     pub unplayed: Unplayed,
+/// }
+///
+/// let f = <Filters as Arg>::parser().to_options().run_inner(&["--unplayed"][..]).unwrap();
+/// assert!(f.unplayed.0 && f.artist.0.is_none());
+/// ```
+///
+/// - **A field's doc comment overrides its type's help row**: its first
+///   paragraph goes through [`ArgHelp::parser_with_help`], the struct-level
+///   counterpart of a command's `# Arguments`, so one type can read
+///   differently in each struct. A type that is not [`ArgHelp`] — one spelled
+///   by `#[derive(Bpaf)]`, a composed one, a hand-written one — is E0277,
+///   never silently ignored; a `//` comment says nothing.
+/// - **The struct's doc comment is a section heading** over its rows (its
+///   first paragraph, as `bpaf`'s derive renders a struct's doc). No doc
+///   comment, no heading.
+/// - **`Option<T>`** is a field as it is a parameter: `T`'s parser made
+///   optional, for a `T` that is required.
+/// - **Declare positionals last**, as for a command's parameters.
+///
+/// The derive sets [`Arg::OPTIONAL`] to the AND of the fields' (an
+/// `Option<T>` field counts as optional): `Filters` above succeeds with none of
+/// its options given, so `Option<Filters>` is a compile error, while
+/// `Option<EventRef>` over two required positionals is `None` when both are
+/// absent, `Some` when both are given, and an error when only one is.
+///
+/// It writes the snake_case constructor (`Filters` → `filters()`, so
+/// `app! { globals: globals(), … }` and `#[bpaf(external(filters))]` find it)
+/// and the [`Arg`](trait@Arg) impl calling it — not [`ArgHelp`]: a composite
+/// has no row of its own. A struct that also derives `Bpaf` but carries no
+/// `#[bpaf(…)]` attribute is composed too, and defines the constructor twice
+/// (E0428): add a `#[bpaf(…)]` to keep bpaf mode, or drop `#[derive(Bpaf)]`.
+///
+/// `#[derive(Arg)]` writes a snake_case function beside the type (`Filters` →
+/// `filters()`). A command, helper or completer with that name in the same
+/// module is E0428 *"the name `filters` is defined multiple times"*, pointing
+/// at the function with `#[derive(Arg)]` as the earlier definition. Rename the
+/// type (`FilterArgs`) or the function.
+///
 /// # bpaf mode
 ///
-/// Without `positional`, `long` or `short`, the derive says nothing about
-/// spelling — the metavar, positional-vs-option, guards and fallbacks all stay
-/// in `#[derive(Bpaf)]`, which needs a direct `bpaf = "0.9"` dependency because
-/// its expansion names `::bpaf::…` paths. This is the form for a type with
-/// several options or positionals:
+/// Without `positional`, `long` or `short`, on a type with `#[bpaf(…)]`
+/// attributes (or one that is not a named-field struct), the derive says
+/// nothing about spelling — the metavar, positional-vs-option, guards and
+/// fallbacks all stay in `#[derive(Bpaf)]`, which needs a direct
+/// `bpaf = "0.9"` dependency because its expansion names `::bpaf::…` paths.
+/// This is the form for what spelled and composed types do not cover — guards,
+/// `some`, a fallback shown in help:
 ///
 /// ```
 /// use hicli::bpaf::{Bpaf, Parser};
@@ -1280,8 +1380,11 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 ///
 /// Each of these is a compile error pointing at the token to change:
 ///
-/// - **any `#[arg(…)]` key but `positional`, `long`, `short`, `metavar` and
-///   `complete`**, or one of them twice;
+/// - **any `#[arg(…)]` key but `positional`, `long`, `short`, `metavar`,
+///   `env` and `complete`**, or one of them twice;
+/// - **`env`** on a positional, on a switch, without `long`/`short` (in bpaf
+///   and composed mode too), or naming no variable (empty, with whitespace or
+///   an `=`);
 /// - in spelled mode: **no doc comment, or a blank one**; `positional` with
 ///   `long`/`short`; a positional `bool`; `metavar` on a `bool` or with
 ///   `positional`; an option with a value but no `metavar`; `Option<bool>` /
@@ -1296,8 +1399,16 @@ pub use arg::{complete_dirs, complete_files, complete_with, Arg, ArgHelp, Candid
 ///   not satisfied``); a `FromStr` whose error is not
 ///   `Display` (E0277); a completer that is not `fn(&str) -> Vec<Candidate>`
 ///   (a type error);
-/// - in bpaf mode: **`metavar` alone** — it names an option's value, so it
-///   goes with `long` or `short`;
+/// - **`#[arg(…)]` on a field**, in any mode — spell the value on a newtype
+///   and make that the field's type;
+/// - in composed mode: **`#[cfg]` or `#[cfg_attr]` on a field** (the
+///   composition names every field); **`Option<Option<T>>`**;
+/// - in composed mode: **no fields**; `complete` (each field completes
+///   through its own type); `metavar`; a field whose type is not an
+///   [`Arg`](trait@Arg) (E0277, on the field's type); a field doc comment on a
+///   type that is not [`ArgHelp`] (E0277);
+/// - in bpaf and composed mode: **`metavar` alone** — it names an option's
+///   value, so it goes with `long` or `short`;
 /// - **a second `#[arg(…)]` attribute** — one attribute, one answer; two would
 ///   leave *which completer is this?* unanswerable from the source;
 /// - in bpaf mode, **`complete` on a struct with more than one field, or on an

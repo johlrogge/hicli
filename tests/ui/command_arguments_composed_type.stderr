@@ -1,0 +1,19 @@
+error[E0277]: `EventRef`'s help cannot be overridden
+  --> tests/ui/command_arguments_composed_type.rs:22:12
+   |
+22 | fn open(r: EventRef) {
+   |            ^^^^^^^^ its help is overridden here
+   |
+help: the trait `ArgHelp` is not implemented for `EventRef`
+  --> tests/ui/command_arguments_composed_type.rs:12:1
+   |
+12 | pub struct EventRef {
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: only a type spelled by `#[arg(positional|long|short …)]` builds its own help row: a type spelled by `#[derive(Bpaf)]` keeps bpaf's, and a composed struct's rows are its fields'
+   = note: spell the type with `#[arg(…)]`, or remove the override: the command's `# Arguments` entry or the field's doc comment (a `//` comment is not rendered)
+help: the trait `ArgHelp` is implemented for `Dir`
+  --> tests/ui/command_arguments_composed_type.rs:7:24
+   |
+ 7 | #[derive(Debug, Clone, Arg)]
+   |                        ^^^
+   = note: this error originates in the derive macro `Arg` (in Nightly builds, run with -Z macro-backtrace for more info)

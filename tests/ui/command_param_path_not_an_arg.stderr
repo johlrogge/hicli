@@ -1,0 +1,15 @@
+error[E0277]: `NotArg` is not a hicli argument type
+  --> tests/ui/command_param_path_not_an_arg.rs:11:16
+   |
+11 | fn greet(name: path::NotArg) {
+   |                ^^^^^^^^^^^^ this argument's type must implement `Arg`
+   |
+help: the trait `Arg` is not implemented for `NotArg`
+  --> tests/ui/command_param_path_not_an_arg.rs:6:5
+   |
+ 6 |     pub struct NotArg;
+   |     ^^^^^^^^^^^^^^^^^
+   = note: an argument is a type: give it a documented newtype — `/// An event id` above `#[derive(Arg)] #[arg(positional = "ID")] struct Id(String);`
+   = note: a choice enum is spelled the same way: `#[derive(Choice, Arg)] #[arg(positional = "KEY")]`; a struct of several argument types is `#[derive(Arg)]`
+   = note: hicli ships no `Arg` impls for `String`, `u64`, `PathBuf`, … on purpose: the metavar and positional-vs-option are yours to name
+   = note: an optional argument is `Option<T>` where it is used, with `T` required; a type that is optional at every use holds its `Option` inside: `struct Added(Option<DaysBack>)`
