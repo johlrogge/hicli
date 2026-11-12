@@ -337,8 +337,8 @@ limits (bpaf 0.9.27) are in ADR-011.
 and the ADR-005 spike (2026-09-17, see each ADR's "Consequences"):**
 
 - **A consumer that uses `#[derive(Bpaf)]` adds `bpaf = "0.9"` directly** (since
-  ADR-016, a crate whose argument types are all spelled by `#[arg(…)]` and whose
-  globals are not derived needs no `bpaf` line), no features (feature unification
+  ADR-016/ADR-019, a crate whose argument types are spelled or composed, globals
+  included, needs no `bpaf` line), no features (feature unification
   supplies `derive` from hicli's own dependency). `#[derive(Bpaf)]` expands to
   `::bpaf::…` absolute paths, which resolve only against a crate's own extern
   prelude — `use hicli::bpaf;` does not help. This weakens the "consumers pin
@@ -539,17 +539,26 @@ names. Types bpaf spells and hand-written `Arg` impls are not named — that par
 bpaf. **A lazy context needs no API (ADR-014)** — #7 is answered by a documented `OnceLock`
 recipe (README, `examples/playr.rs`), not by handing `mk_ctx` the selected command.
 
+**Also in: composed argument structs (ADR-019)**, earned by globals (the last
+`#[derive(Bpaf)]` a user needed) and mdma-cli's composites: `#[derive(Arg)]` on a named-field
+struct with no spelling keys and no `#[bpaf(…)]` composes its fields with `construct!`. Every
+field is an `Arg` type, and its doc comment is an `ArgHelp` override. The struct's doc is its
+`group_help`, and spelled options take `env = "VAR"`. `#[arg]` on a field is rejected in every
+mode. `Option<T>` in a parameter or a field means "T, if given" (`.optional()`): everything not
+marked optional is required, and the derive marks it (`Arg::OPTIONAL`, a defaulted `false`
+const), so an already-optional `T` is a compile error — an item-level const assertion beside
+each use. A validated newtype becomes optional at its use and keeps its own `FromStr`.
+
 **Deferred:** nested `args` groups (they parse at runtime but have no constructor or macro form);
 a default in a curried group; a top-level default; a default that also answers to its own name
 (recipe: a second `#[command]` calling the same function); a dedicated `source NAME --help` page;
 typo suggestions inside curried groups (ADR-002's scope stands) (all ADR-011);
 `inventory`/`linkme` auto-registration (still rejected outright — discovery here is lexical and
 local, reading one module body or one file, not link-time collection); spelling keys beyond
-ADR-016's five (`fallback`, `env`, `hide`, guards, … — such a type stays in bpaf mode); a
-field-composing `#[derive(Arg)]` for composite types (ADR-006, ADR-016 — a composite hand-writes
-`Arg::parser()`, six lines, composing its parts' own `Arg::parser()`s; when it comes, a field's
-doc comment is that field's help override, the struct-level counterpart of `# Arguments`); an
-`# Arguments` override on a `#[command(default)]`; `#[arg(parser = …)]` for a
+ADR-016's five and ADR-019's `env` (`fallback`/`default`, `some`, `hide`, guards, … — such a
+type stays in bpaf mode); tuple-struct composition, `Vec<T>` of an argument type, and an
+override for a composite's heading (ADR-019); `Option` for a curried parameter or a group's
+`args` (ADR-019); an `# Arguments` override on a `#[command(default)]`; `#[arg(parser = …)]` for a
 type whose `bpaf` constructor was renamed (a three-line hand-written impl covers it); completion
 masks on the shell shorthands (`complete = files("*.toml")`); globals-aware completion (a
 completer sees only its own word or parsed value, never `--home` — pre-parsing the globals leniently in
@@ -734,6 +743,5 @@ glued form. This keeps the standard rule that a word starting with `-` is an opt
   (`fn create(name: String, ctx: &Ctx)`) is a compile error carrying
   `#[diagnostic::on_unimplemented]` notes that teach the newtype pattern at the moment it is
   broken, rather than an impl that would have made the primitive-obsessed signature compile.
-- **`Globals` is not an `Arg`, and must not become one.** Globals are composed at the top level by
-  `App::new`, never as a command's parameter, so they never go through `Arg::parser` — a
-  `#[derive(Arg)]` on a `Globals` struct would compile and never be called from anywhere real.
+- **A spelled or composed `Globals` implements `Arg`; `App::new` takes its constructor, so it is
+  never parsed as a command's parameter** (ADR-019, amending ADR-006).

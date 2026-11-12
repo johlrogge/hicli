@@ -1,0 +1,5 @@
+error: `env` is the variable's name: one non-empty word with no `=`
+ --> tests/ui/arg_env_bad.rs:7:46
+  |
+7 | #[arg(long = "node", metavar = "HOST", env = "")]
+  |                                              ^^

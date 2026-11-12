@@ -1,0 +1,5 @@
+error: a switch takes no value, so it has no environment fallback: remove `env` from this `bool`
+ --> tests/ui/arg_env_on_switch.rs:7:25
+  |
+7 | #[arg(long = "verbose", env = "VERBOSE")]
+  |                         ^^^

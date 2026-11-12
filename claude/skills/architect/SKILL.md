@@ -26,15 +26,22 @@ shape), or makes adding a command heavier than "a new `#[command]` function in t
 that is a design regression worth calling out.
 
 **An argument is a type** (ADR-006: `docs/adr/006-an-argument-is-a-type.md`). Each owned
-parameter is a consumer-written type implementing `hicli::Arg`, derived in one of two modes
-(ADR-016): **spelled** — `#[derive(Arg)] #[arg(positional | long | short, metavar, complete)]` on
+parameter is a consumer-written type implementing `hicli::Arg` (or `Option` of one: `T`'s parser
+made optional, compiling only when `T` is required — `Arg::OPTIONAL` defaults to `false`, the
+derive sets it for optional shapes, and an item-level `const _: () = assert!(…)` at each use
+checks it; ADR-019), derived in one of three modes
+(ADR-016, ADR-019): **spelled** — `#[derive(Arg)] #[arg(positional | long | short, metavar, complete, env)]` on
 a newtype, a one-named-field struct, a struct with several fields that implements `FromStr` (one
 word, parsed whole — ADR-018) or a `#[derive(Choice)]` enum, where hicli writes the bpaf chain,
 the type's doc comment's first paragraph is its help row (a `Choice`'s names appended), a word
 parses through the type's own `FromStr` first and its field's otherwise, a parse error names the
-argument (ADR-018), and the type also implements `ArgHelp` — or **bpaf mode** —
+argument (ADR-018), and the type also implements `ArgHelp` — **composed** (ADR-019) — a
+struct with named fields, no spelling keys and no `#[bpaf(…)]`, every field an argument type or
+`Option` of one (`#[arg]` on a field is refused in every mode), a field's doc comment its
+`ArgHelp` override, the struct's doc its `group_help` heading — or **bpaf mode** —
 `#[derive(Bpaf, Arg)]`, `Arg` writing one impl that calls the constructor `#[derive(Bpaf)]`
-already generated (the form for a struct of several options). `#[command]`
+already generated (for what spelled and composed types do not cover: guards, `some`, a
+fallback shown in help). `#[command]`
 emits `<T as Arg>::parser()` for each owned parameter, never a name it synthesises. Completion is
 not a second concept: `#[arg(complete = f | files | dirs)]` on the type attaches a completer to
 the parser the type already returns (spelled: `f(&str)`, the raw word; a `Choice` inside completes
@@ -182,8 +189,8 @@ module is `/// events and instances` + `#[group] pub mod event;` (keys `ctx`/`al
 attribute); `#[group]` reads and parses `event.rs` (resolved by the Reference's mod-rs/non-mod-rs
 rules) and emits the declaration plus the same shape of handle. `commands!`/`app!` assemble the tree —
 a bare path is always a handle (`create` → `__hicli_create()`); consumers that use
-`#[derive(Bpaf)]` (globals, structs of several options) add a direct `bpaf = "0.9"` dependency
-— a spelled type needs none (ADR-016) — (`#[derive(Bpaf)]` expands to `::bpaf::…` paths that only resolve against
+`#[derive(Bpaf)]` (guards, `some`, a fallback shown in help) add a direct `bpaf = "0.9"` dependency
+— a spelled or composed type, globals included, needs none (ADR-016, ADR-019) — (`#[derive(Bpaf)]` expands to `::bpaf::…` paths that only resolve against
 a crate's own extern prelude — `use hicli::bpaf` does not help), so "consumers pin one `bpaf`
 version through hicli" is now "hicli states the version, cargo unifies it." See
 `docs/sketches/moniker.rs` for a full consumer tree in this shape.
@@ -304,7 +311,9 @@ parsers were synthesised inside `#[command]`'s own expansion. Group-level curryi
 `#[derive(Arg)]` and `# Arguments` overrides (ADR-016, whose five spelling keys grow when consumer code shows the next one would
 improve it), and a spelled type's own `FromStr`, multi-field one-word structs, named parse errors
 and a `Choice`'s names in its help row (ADR-018, from mdma-cli's validated newtypes); #7's lazy
-context needed no API (ADR-014). **The bar for adding more is our own analysis of real consumer code**: study how
+context needed no API (ADR-014); composed structs, `Option<T>` guarded by `Arg::OPTIONAL`, and
+`env` (ADR-019, from globals — the last `#[derive(Bpaf)]` a user needed — and mdma-cli's
+composites). **The bar for adding more is our own analysis of real consumer code**: study how
 mdma-cli, moniker and ctx use hicli and look for redundancy, weak expressiveness and
 inconsistency. Don't wait for a consumer to ask ("a faster horse"); a clean migration is not
 evidence there is nothing to improve. Every proposal points at concrete consumer code it makes
@@ -313,9 +322,10 @@ Currently deferred: an inner `#![group]` (still E0658, rust-lang/rust#54726); ne
 groups, a default command in a curried group or at the top level, and a dedicated
 `source NAME --help` page (ADR-011); `inventory`/`linkme` auto-registration (rejected outright, not just deferred: link-time magic with
 no explicit tree to read — discovery here is lexical and local, one module body or one file,
-readable by eye); and, per ADR-006/ADR-016, a field-composing `#[derive(Arg)]` for composite types (a
-composite hand-writes `Arg::parser()` instead — six lines; when earned, a field's doc comment is
-its help override), spelling keys beyond the five, `#[arg(parser = …)]` for a renamed
+readable by eye; likewise `#[arg]` on a field, ADR-019); spelling keys beyond the six
+(`fallback`/`default`, `some`, …), tuple-struct composition, `Vec<T>` of an argument type, an
+override for a composite's heading, `Option` for a curried parameter or a group's `args`
+(ADR-019), `#[arg(parser = …)]` for a renamed
 `bpaf` constructor (a three-line hand-written impl covers it), completion masks on the shell
 shorthands (`complete = files("*.toml")`), and globals-aware completion (needs a type-erased
 process-global stash with a runtime-fallible downcast hicli cannot synthesise). Don't

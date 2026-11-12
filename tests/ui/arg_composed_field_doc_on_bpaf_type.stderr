@@ -1,0 +1,13 @@
+error[E0277]: `Title`'s help cannot be overridden
+  --> tests/ui/arg_composed_field_doc_on_bpaf_type.rs:14:12
+   |
+14 |     title: Title,
+   |            ^^^^^ its help is overridden here
+   |
+help: the trait `ArgHelp` is not implemented for `Title`
+  --> tests/ui/arg_composed_field_doc_on_bpaf_type.rs:9:1
+   |
+ 9 | pub struct Title(#[bpaf(positional("TITLE"))] pub String);
+   | ^^^^^^^^^^^^^^^^
+   = note: only a type spelled by `#[arg(positional|long|short …)]` builds its own help row: a type spelled by `#[derive(Bpaf)]` keeps bpaf's, and a composed struct's rows are its fields'
+   = note: spell the type with `#[arg(…)]`, or remove the override: the command's `# Arguments` entry or the field's doc comment (a `//` comment is not rendered)

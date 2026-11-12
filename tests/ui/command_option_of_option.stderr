@@ -1,0 +1,5 @@
+error: `Option<Option<T>>` says optional twice: write `Option<T>`
+  --> tests/ui/command_option_of_option.rs:13:16
+   |
+13 | fn list(limit: Option<Option<Limit>>) {
+   |                ^^^^^^^^^^^^^^^^^^^^^

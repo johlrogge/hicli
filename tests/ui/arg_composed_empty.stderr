@@ -1,0 +1,5 @@
+error: #[derive(Arg)] composes a struct's fields, and this one has none: an argument type with no value has nothing to parse
+ --> tests/ui/arg_composed_empty.rs:6:12
+  |
+6 | pub struct Nothing {}
+  |            ^^^^^^^

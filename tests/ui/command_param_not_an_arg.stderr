@@ -2,9 +2,10 @@ error[E0277]: `String` is not a hicli argument type
   --> tests/ui/command_param_not_an_arg.rs:11:18
    |
 11 | fn create(_name: String, _ctx: &Ctx) {}
-   |                  ^^^^^^ this parameter's type must implement `Arg`
+   |                  ^^^^^^ this argument's type must implement `Arg`
    |
    = help: the trait `Arg` is not implemented for `String`
    = note: an argument is a type: give it a documented newtype — `/// An event id` above `#[derive(Arg)] #[arg(positional = "ID")] struct Id(String);`
-   = note: a choice enum is spelled the same way: `#[derive(Choice, Arg)] #[arg(positional = "KEY")]`; a type with several fields is `#[derive(Bpaf, Arg)]`
+   = note: a choice enum is spelled the same way: `#[derive(Choice, Arg)] #[arg(positional = "KEY")]`; a struct of several argument types is `#[derive(Arg)]`
    = note: hicli ships no `Arg` impls for `String`, `u64`, `PathBuf`, … on purpose: the metavar and positional-vs-option are yours to name
+   = note: an optional argument is `Option<T>` where it is used, with `T` required; a type that is optional at every use holds its `Option` inside: `struct Added(Option<DaysBack>)`

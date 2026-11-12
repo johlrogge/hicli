@@ -1,0 +1,5 @@
+error: #[arg(complete = …)] on a composed struct has no one value to complete: each field completes through its own type
+  --> tests/ui/arg_composed_complete_on_struct.rs:12:1
+   |
+12 | #[arg(complete = complete_refs)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

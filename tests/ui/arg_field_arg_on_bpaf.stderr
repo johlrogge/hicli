@@ -1,0 +1,5 @@
+error: #[arg(...)] goes on a type, never on a field: a field is an argument type. Spell the value on a newtype (`/// help` above `#[derive(Arg)] #[arg(long = "name", metavar = "M")] struct Name(Value);`), make that newtype the field's type, and write `Option<Name>` where it may be left out
+  --> tests/ui/arg_field_arg_on_bpaf.rs:11:5
+   |
+11 |     #[arg(long, metavar = "NAME")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -138,10 +138,11 @@ pub fn command(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Implement `hicli::Arg` for an argument type, in one of two modes.
+/// Implement `hicli::Arg` for an argument type, in one of three modes.
 ///
 /// **Spelled mode** — `positional`, `long` or `short` in `#[arg(…)]`: hicli
-/// spells a one-value type itself. Its doc comment's first paragraph is the
+/// spells a one-value type itself, with `metavar`, `env` and `complete`
+/// beside those keys. Its doc comment's first paragraph is the
 /// help row, a `Choice` inside completes on its own, and the derive also
 /// writes the snake_case constructor and a `hicli::ArgHelp` impl, so a
 /// command's `# Arguments` entry can replace the row:
@@ -153,8 +154,32 @@ pub fn command(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// struct SortOpt(Option<SortField>);
 /// ```
 ///
-/// **bpaf mode** — none of those keys: the parser is the constructor
-/// `#[derive(Bpaf)]` wrote, optionally wrapped in a completer.
+/// **Composed mode** — none of those keys, on a struct with named fields and
+/// no `#[bpaf(…)]` attribute anywhere (ADR-019): each field is an argument
+/// type, composed in declaration order; a field may be `Option<T>` of a
+/// required `T`. A field's doc comment overrides its
+/// type's help row through `hicli::ArgHelp`; the struct's doc comment is a
+/// section heading. It writes the snake_case constructor and `hicli::Arg`:
+///
+/// ```ignore
+/// /// Filters
+/// #[derive(Arg)]
+/// struct Filters {
+///     artist: Artist,
+///     /// Only tracks at this tempo
+///     bpm: BpmFilter,
+/// }
+/// ```
+///
+/// `#[arg(…)]` goes on a type, never on a field, in every mode.
+///
+/// Every mode also says whether the type is optional — whether its parser
+/// succeeds without its argument — through `hicli::Arg::OPTIONAL`: `true` for a
+/// spelled `Option`, `Vec` or switch, the AND of the fields' for a composed
+/// struct, `false` otherwise. `Option<T>` of an optional `T` is a compile error.
+///
+/// **bpaf mode** — none of those keys, otherwise: the parser is the
+/// constructor `#[derive(Bpaf)]` wrote, optionally wrapped in a completer.
 ///
 /// ```ignore
 /// #[derive(Bpaf, Arg)]

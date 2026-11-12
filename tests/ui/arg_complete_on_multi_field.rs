@@ -1,7 +1,6 @@
-//! A completer on the whole value is handed the value that already parsed, so
-//! on a two-field struct it cannot tell which field is being completed — and it
-//! never fires while the other one is mid-word. The rejection names both right
-//! answers rather than letting that compile and do nothing.
+//! A struct with named fields and no `#[bpaf(…)]` is composed (ADR-019), and a
+//! composed struct has no one value to complete: each field completes through
+//! its own type. (The bpaf-mode rejection is `arg_complete_on_bpaf_multi_field`.)
 
 use hicli::Arg;
 

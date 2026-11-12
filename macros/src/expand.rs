@@ -12,12 +12,11 @@
 //! is no hidden runtime behind `#[command]`.
 
 use proc_macro2::TokenStream;
-use quote::{quote, quote_spanned};
-use syn::spanned::Spanned;
+use quote::quote;
 use syn::{Ident, LitStr, Type};
 
 use crate::parse::{CommandFn, CurriedParam, Slot};
-use crate::shared::handle_doc;
+use crate::shared::{handle_doc, not_already_optional, option_inner, qualified_call};
 
 /// Expand a validated [`CommandFn`] into the function and its handle.
 pub(crate) fn expand(c: CommandFn) -> TokenStream {
@@ -49,6 +48,20 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
     };
 
     let (parser, args_pat) = parser_for(&arg_tys, &helps, &bindings);
+    // One item-level assertion per `Option<T>` parameter: `T` is required.
+    // It inherits the function's `#[cfg]`, as the handle does — but not its
+    // `#[cfg_attr]`, whose attribute (`inline`, …) may not apply to a const.
+    let cfgs: Vec<_> = cfg_attrs
+        .iter()
+        .filter(|a| a.path().is_ident("cfg"))
+        .collect();
+    let checks = arg_tys.iter().filter_map(option_inner).map(|inner| {
+        let check = not_already_optional(inner);
+        quote! {
+            #(#cfgs)*
+            #check
+        }
+    });
 
     // The function is called with its arguments in the order it declared them,
     // and the context wherever it put it — a curried parameter included, which
@@ -105,6 +118,7 @@ pub(crate) fn expand(c: CommandFn) -> TokenStream {
             #call
             #metadata
         }
+        #(#checks)*
     }
 }
 
@@ -170,16 +184,40 @@ fn parser_block(arg_tys: &[Type], helps: &[Option<String>], bindings: &[Ident]) 
         .zip(arg_tys)
         .zip(helps)
         .map(|((binding, ty), help)| {
+            // `Option<T>` is `T`'s parser made optional (ADR-019 §3).
+            let (target, optional) = match option_inner(ty) {
+                Some(inner) => (inner, true),
+                None => (ty, false),
+            };
+            // Spanned over the whole type (see `qualified`), so a type that is
+            // not an argument type is reported once, on all of it.
             let parser = match help {
-                None => quote_spanned!(ty.span()=> <#ty as ::hicli::Arg>::parser()),
-                Some(h) => quote_spanned!(ty.span()=>
-                    <#ty as ::hicli::ArgHelp>::parser_with_help(#h)
+                None => qualified_call(target, quote!(::hicli::Arg), quote!(parser), quote!()),
+                Some(h) => qualified_call(
+                    target,
+                    quote!(::hicli::ArgHelp),
+                    quote!(parser_with_help),
+                    quote!(#h),
                 ),
+            };
+            let parser = if optional {
+                quote!(#parser.optional())
+            } else {
+                parser
             };
             quote!(let #binding = #parser;)
         });
+    // `.optional()` needs the trait; written only where it is used, so a
+    // command with no `Option` parameter expands exactly as before.
+    let import = arg_tys.iter().any(|t| option_inner(t).is_some()).then(|| {
+        quote! {
+            #[allow(unused_imports)]
+            use ::hicli::bpaf::Parser as _;
+        }
+    });
     quote! {
         {
+            #import
             #(#lets)*
             ::hicli::bpaf::construct!(#(#bindings),* ,)
         }
@@ -301,6 +339,119 @@ mod tests {
         }
         .to_string();
         assert_eq!(got, want);
+    }
+
+    /// The assertion beside an `Option<#t>` parameter.
+    fn check(t: TokenStream, text: &str) -> TokenStream {
+        let message = format!(
+            "`{text}` succeeds when its argument is absent, so `Option<{text}>` would always be \
+             `Some`: use `{text}` as it is, or make `{text}` required and write `Option<{text}>` \
+             where it may be left out"
+        );
+        quote!(
+            const _: () = ::core::assert!(!<#t as ::hicli::Arg>::OPTIONAL, #message);
+        )
+    }
+
+    #[test]
+    fn an_optional_parameter_is_its_types_parser_made_optional() {
+        let got = expansion(
+            "",
+            "/// list tracks\npub fn list(d: Descending, limit: Option<Limit>, ctx: &Ctx) {}",
+        );
+        let c = check(quote!(Limit), "Limit");
+        let want = quote! {
+            #[doc = " list tracks"]
+            pub fn list(d: Descending, limit: Option<Limit>, ctx: &Ctx) {}
+
+            #[doc = "`hicli` registration handle for [`list`]."]
+            #[doc(hidden)]
+            #[allow(unreachable_pub)]
+            pub fn __hicli_list() -> ::hicli::Command<Ctx> {
+                ::hicli::command(
+                    "list",
+                    "list tracks",
+                    {
+                        #[allow(unused_imports)]
+                        use ::hicli::bpaf::Parser as _;
+                        let a0 = <Descending as ::hicli::Arg>::parser();
+                        let a1 = <Limit as ::hicli::Arg>::parser().optional();
+                        ::hicli::bpaf::construct!(a0, a1,)
+                    },
+                    |(a0, a1), ctx: &Ctx| list(a0, a1, ctx),
+                )
+            }
+            #c
+        }
+        .to_string();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn an_optional_parameter_with_an_arguments_entry() {
+        let got = expansion(
+            "",
+            "/// list tracks\n///\n/// # Arguments\n///\n/// * `limit` - At most this many\n\
+             #[cfg(unix)]\n\
+             pub fn list(limit: std::option::Option<crate::Limit>) {}",
+        );
+        let c = check(quote!(crate::Limit), "crate::Limit");
+        assert!(
+            got.contains(
+                &quote!(let a0 = <crate::Limit as ::hicli::ArgHelp>::parser_with_help("At most this many").optional();)
+                    .to_string()
+            ),
+            "{got}"
+        );
+        // The assertion goes with the function's `#[cfg]`.
+        assert!(got.ends_with(&quote!(#[cfg(unix)] #c).to_string()), "{got}");
+    }
+
+    #[test]
+    fn the_assertion_takes_the_cfg_but_not_the_cfg_attr() {
+        // `#[cfg_attr(x, inline)]` rides on the handle, a fn; on a const it
+        // would be an error, so the assertion takes only the `#[cfg]`.
+        let got = expansion(
+            "",
+            "/// list tracks\n#[cfg(unix)]\n#[cfg_attr(test, inline)]\nfn list(l: Option<Limit>) {}",
+        );
+        let c = check(quote!(Limit), "Limit");
+        assert!(
+            got.contains(
+                &quote!(#[cfg(unix)] #[cfg_attr(test, inline)] pub fn __hicli_list).to_string()
+            ),
+            "{got}"
+        );
+        // The handle's body closes, then the assertion follows with `#[cfg]` only.
+        let tail = format!("}} {}", quote!(#[cfg(unix)] #c));
+        assert!(got.ends_with(&tail), "{got}");
+    }
+
+    #[test]
+    fn a_curried_command_with_an_optional_second_parameter() {
+        let got = expansion(
+            "curried",
+            "/// cancel a download\nfn cancel(s: SourceName, d: Option<DownloadId>, ctx: &Ctx) {}",
+        );
+        let c = check(quote!(DownloadId), "DownloadId");
+        assert!(
+            got.contains(
+                &quote! {
+                    {
+                        #[allow(unused_imports)]
+                        use ::hicli::bpaf::Parser as _;
+                        let a1 = <DownloadId as ::hicli::Arg>::parser().optional();
+                        ::hicli::bpaf::construct!(a1,)
+                    },
+                    |a1, a0: SourceName, ctx: &Ctx| cancel(a0, a1, ctx),
+                }
+                .to_string()
+            ),
+            "{got}"
+        );
+        assert!(got.ends_with(&c.to_string()), "{got}");
+        // The curried value is never checked: it is not an `Option`.
+        assert_eq!(got.matches("OPTIONAL").count(), 1, "{got}");
     }
 
     #[test]

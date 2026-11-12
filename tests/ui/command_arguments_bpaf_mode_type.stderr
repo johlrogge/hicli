@@ -2,12 +2,12 @@ error[E0277]: `Title`'s help cannot be overridden
   --> tests/ui/command_arguments_bpaf_mode_type.rs:17:14
    |
 17 | fn create(t: Title) {
-   |              ^^^^^ named in this command's `# Arguments`
+   |              ^^^^^ its help is overridden here
    |
 help: the trait `ArgHelp` is not implemented for `Title`
   --> tests/ui/command_arguments_bpaf_mode_type.rs:9:1
    |
  9 | pub struct Title(#[bpaf(positional("TITLE"))] pub String);
    | ^^^^^^^^^^^^^^^^
-   = note: only a type spelled by `#[arg(positional|long|short …)]` builds its own help; one spelled by `#[derive(Bpaf)]` keeps bpaf's
-   = note: spell the type with `#[arg(…)]`, or remove its entry from `# Arguments`
+   = note: only a type spelled by `#[arg(positional|long|short …)]` builds its own help row: a type spelled by `#[derive(Bpaf)]` keeps bpaf's, and a composed struct's rows are its fields'
+   = note: spell the type with `#[arg(…)]`, or remove the override: the command's `# Arguments` entry or the field's doc comment (a `//` comment is not rendered)

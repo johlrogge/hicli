@@ -1,9 +1,6 @@
 error[E0277]: `NotDisplay` doesn't implement `std::fmt::Display`
   --> tests/ui/arg_spelled_err_not_display.rs:13:21
    |
-11 | #[derive(Arg)]
-   |          --- required by a bound introduced by this call
-12 | #[arg(positional = "NAME")]
 13 | pub struct Name(pub String);
    |                     ^^^^^^ unsatisfied trait bound
    |

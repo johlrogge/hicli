@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `Added` succeeds when its argument is absent, so `Option<Added>` would always be `Some`: use `Added` as it is, or make `Added` required and write `Option<Added>` where it may be left out
+  --> tests/ui/command_option_already_optional.rs:15:21
+   |
+15 | fn search(a: Option<Added>) {
+   |                     ^^^^^ evaluation of `_` failed here

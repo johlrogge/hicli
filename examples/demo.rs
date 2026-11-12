@@ -54,11 +54,12 @@ use hicli::{app, command, group, App, Arg, Candidate, ExternalCommand, Failure, 
 // Globals and context
 // ---------------------------------------------------------------------------
 
-// Globals are not a command's parameter, so they stay a plain `#[derive(Bpaf)]`
-// struct and deliberately do **not** derive `Arg`: `App::new(globals())` takes
-// the parser directly, and nothing ever asks this type how it parses itself.
-// The struct's doc comment becomes a header in `--help`, so keep it to one line
-// of prose a user would want to read.
+// This file is the living example of bpaf mode, so `Globals` stays a plain
+// `#[derive(Bpaf)]` struct with a `fallback`: `App::new(globals())` takes the
+// parser directly. (Its fallback is not shown in help; with spelled types it
+// would be an `Option` defaulted in `mk_ctx`, as `examples/playr.rs` does.) The
+// struct's doc comment becomes a header in `--help`, so keep it to one line of
+// prose a user would want to read.
 /// Global options, accepted before or after the subcommand.
 #[derive(Debug, Clone, Bpaf)]
 struct Globals {

@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `Filters` succeeds when its argument is absent, so `Option<Filters>` would always be `Some`: use `Filters` as it is, or make `Filters` required and write `Option<Filters>` where it may be left out
+  --> tests/ui/command_option_of_a_composite.rs:20:21
+   |
+20 | fn search(f: Option<Filters>) {
+   |                     ^^^^^^^ evaluation of `_` failed here

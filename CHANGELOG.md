@@ -7,6 +7,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Before 1.0, a minor version may carry breaking changes; they are listed under
 "Breaking" with what to change.
 
+## [Unreleased]
+
+### Added
+
+- `#[derive(Arg)]` composes a struct with named fields, each an argument type. A
+  field's doc comment overrides its type's help, so one type can read differently in
+  each struct. The struct's doc comment is a section heading. Globals written as a
+  spelled newtype or a composed struct need no `#[derive(Bpaf)]` and no direct
+  `bpaf` dependency (ADR-019).
+- `env = "VAR"` on a spelled option: an environment variable it falls back to, shown
+  in help as `[env:VAR: N/A]`. A bad value from the environment is named with its
+  variable and never echoed: ``couldn't parse: `--node` from `$PLAYR_NODE`: …``
+  (ADR-019).
+- `Option<T>` of an argument type, as a command's parameter or a composed struct's
+  field, means "T, if given": `fn list(limit: Option<Limit>)`. `Limit` keeps its own
+  `FromStr`. Everything not marked optional is required, and the derive marks it:
+  `Arg::OPTIONAL`, a defaulted `false` const that `#[derive(Arg)]` sets for an
+  `Option` or `Vec` inside and a switch; a composed struct's is the AND of its
+  fields'. `Option` of a type that succeeds when its argument is absent is a
+  compile error (E0080, `` `Added` succeeds when its argument is absent, so
+  `Option<Added>` would always be `Some` … ``), checked at each use, under
+  `cargo check` too, and `Option<Option<T>>` is refused. A hand-written `Arg` that
+  is optional this way writes `const OPTIONAL: bool = true;` (ADR-019).
+
+### Breaking
+
+- A `#[derive(Bpaf, Arg)]` struct with named fields and no `#[bpaf(…)]` attribute is
+  now composed and fails with E0428: compose it, or add a `#[bpaf(…)]` attribute.
+- A `#[derive(Arg)]` struct with named fields and a hand-written snake_case
+  constructor is now composed: delete the constructor, or write `impl Arg` by hand.
+- `#[arg(…)]` on a field is a compile error. It was ignored before.
+- `#[arg(complete = …)]` on such a struct reports the composed-struct message.
+- `Arg`'s and `ArgHelp`'s diagnostics are reworded to cover fields and `Option<T>`:
+  re-bless trybuild snapshots. Golden expansions of spelled `Option`, `Vec` and switch
+  types gain `const OPTIONAL: bool = true;`.
+- `playr`'s `--help` (the README's example) lists its one global under
+  `Available options:`: a single global is a spelled newtype, which has no heading.
+
 ## [0.6.0] — 2026-11-09
 
 ### Added
