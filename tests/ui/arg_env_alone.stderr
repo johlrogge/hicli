@@ -1,0 +1,5 @@
+error: `env` names the environment variable an option falls back to: it goes with `long` or `short`
+  --> tests/ui/arg_env_alone.rs:12:7
+   |
+12 | #[arg(env = "PLAYR_NODE")]
+   |       ^^^

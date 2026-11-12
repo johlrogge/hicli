@@ -32,13 +32,32 @@ use syn::{
     Path, PathArguments, Result, Token, Type,
 };
 
-use crate::shared::{doc_lines, first_paragraph, snake_case};
+use crate::shared::{
+    doc_lines, first_paragraph, is_cfg, last_segment, not_already_optional, option_inner,
+    qualified, qualified_call, snake_case, DOUBLE_OPTION,
+};
 
 /// The message for an `#[arg(…)]` key it does not know (A1), listing every key.
-const UNKNOWN_ARG: &str = "#[arg(...)] takes `positional`, `long`, `short`, `metavar` and \
-                           `complete`: `positional` or `positional = \"KEY\"`, `long` or \
-                           `long = \"name\"`, `short = 'c'`, `metavar = \"M\"`, and \
-                           `complete = <fn>`, `complete = files` or `complete = dirs`";
+const UNKNOWN_ARG: &str = "#[arg(...)] takes `positional`, `long`, `short`, `metavar`, `env` \
+                           and `complete`: `positional` or `positional = \"KEY\"`, `long` or \
+                           `long = \"name\"`, `short = 'c'`, `metavar = \"M\"`, \
+                           `env = \"VAR\"`, and `complete = <fn>`, `complete = files` or \
+                           `complete = dirs`";
+
+/// `env` with `positional` (ADR-019 §5).
+const ENV_ON_POSITIONAL: &str =
+    "a positional cannot fall back to an environment variable: `env` goes with `long` or `short`";
+
+/// `env` on a switch (ADR-019 §5).
+const ENV_ON_SWITCH: &str =
+    "a switch takes no value, so it has no environment fallback: remove `env` from this `bool`";
+
+/// `env` without `long`/`short`, in bpaf or composed mode (ADR-019 §5).
+const ENV_ALONE: &str = "`env` names the environment variable an option falls back to: it goes \
+                         with `long` or `short`";
+
+/// An `env` that cannot name a variable (ADR-019 §5).
+const BAD_ENV: &str = "`env` is the variable's name: one non-empty word with no `=`";
 
 /// The message for a completer on something that is not a single value (A2).
 ///
@@ -121,6 +140,26 @@ const BAD_LONG: &str = "`long` is the option's name without its dashes: one non-
 const COMPLETE_ON_BOOL: &str = "a switch takes no value, so there is nothing to complete: remove \
                                 `complete` from this `bool`";
 
+/// `#[arg(…)]` on a field, in any mode (ADR-019 §2).
+const FIELD_ARG: &str = "#[arg(...)] goes on a type, never on a field: a field is an argument \
+                         type. Spell the value on a newtype (`/// help` above `#[derive(Arg)] \
+                         #[arg(long = \"name\", metavar = \"M\")] struct Name(Value);`), make \
+                         that newtype the field's type, and write `Option<Name>` where it may \
+                         be left out";
+
+/// `#[cfg]` / `#[cfg_attr]` on a composed struct's field.
+const COMPOSED_CFG: &str = "#[cfg] and #[cfg_attr] cannot go on a field of a struct \
+                            #[derive(Arg)] composes: the composition names every field. Put the \
+                            #[cfg] on the whole struct, or give each configuration its own struct";
+
+/// A composed struct with no fields (ADR-019 §1).
+const COMPOSED_EMPTY: &str = "#[derive(Arg)] composes a struct's fields, and this one has none: \
+                              an argument type with no value has nothing to parse";
+
+/// `complete` on a composed struct (ADR-019 §1).
+const COMPOSED_COMPLETE: &str = "#[arg(complete = …)] on a composed struct has no one value to \
+                                 complete: each field completes through its own type";
+
 /// S10: a key given twice.
 fn twice(key: &Ident) -> String {
     format!("`{}` is given twice", key.unraw())
@@ -157,6 +196,8 @@ struct ArgArgs {
     short: Option<Key<LitChar>>,
     /// `metavar = "M"`.
     metavar: Option<Key<LitStr>>,
+    /// `env = "VAR"`.
+    env: Option<Key<LitStr>>,
     /// `complete = …`.
     complete: Option<Key<Completion>>,
 }
@@ -233,6 +274,13 @@ impl Parse for ArgArgs {
             } else if key == "metavar" {
                 let m: LitStr = required(input)?;
                 set(&mut args.metavar, key, m)?;
+            } else if key == "env" {
+                let e: LitStr = required(input)?;
+                let s = e.value();
+                if s.is_empty() || s.chars().any(char::is_whitespace) || s.contains('=') {
+                    return Err(Error::new_spanned(&e, BAD_ENV));
+                }
+                set(&mut args.env, key, e)?;
             } else if key == "complete" {
                 let path: Path = required(input)?;
                 set(&mut args.complete, key, shorthand(path))?;
@@ -305,13 +353,27 @@ pub(crate) fn expand(input: DeriveInput) -> Result<TokenStream> {
         return Err(Error::new_spanned(w, GENERIC));
     }
 
+    if let Some(a) = field_arg_attr(&input) {
+        return Err(Error::new_spanned(a, FIELD_ARG));
+    }
+
     let (args, at) = read_attrs(&input.attrs)?;
     if args.spelled() {
         let at = at.expect("spelling keys were given by an attribute");
         return spelled(&input, args, &at);
     }
+    if let Data::Struct(s) = &input.data {
+        if let Fields::Named(fields) = &s.fields {
+            if any_bpaf_attr(&input).is_none() {
+                return composed(&input, fields, &args, at.as_ref());
+            }
+        }
+    }
     if let Some(m) = &args.metavar {
         return Err(Error::new_spanned(&m.at, METAVAR_ALONE));
+    }
+    if let Some(e) = &args.env {
+        return Err(Error::new_spanned(&e.at, ENV_ALONE));
     }
     let completion = args.completion();
     if !matches!(completion, Completion::None) && !is_single_field(&input.data) {
@@ -338,6 +400,137 @@ pub(crate) fn expand(input: DeriveInput) -> Result<TokenStream> {
             }
         }
     })
+}
+
+/// The first `#[arg]` on a field — of the struct, or of any variant — or on a
+/// variant itself.
+fn field_arg_attr(input: &DeriveInput) -> Option<&Attribute> {
+    fn arg(attrs: &[Attribute]) -> Option<&Attribute> {
+        attrs.iter().find(|a| a.path().is_ident("arg"))
+    }
+    fn on(f: &syn::Field) -> Option<&Attribute> {
+        arg(&f.attrs)
+    }
+    match &input.data {
+        Data::Struct(s) => s.fields.iter().find_map(on),
+        Data::Enum(e) => e
+            .variants
+            .iter()
+            .find_map(|v| arg(&v.attrs).or_else(|| v.fields.iter().find_map(on))),
+        Data::Union(u) => u.fields.named.iter().find_map(on),
+    }
+}
+
+// --- composed mode -----------------------------------------------------------
+
+/// Expand a struct of argument types (ADR-019): its snake_case constructor,
+/// composing each field's parser with `construct!` in declaration order, and
+/// the `Arg` impl calling it.
+fn composed(
+    input: &DeriveInput,
+    fields: &syn::FieldsNamed,
+    args: &ArgArgs,
+    at: Option<&Attribute>,
+) -> Result<TokenStream> {
+    if fields.named.is_empty() {
+        return Err(Error::new_spanned(&input.ident, COMPOSED_EMPTY));
+    }
+    if let Some(m) = &args.metavar {
+        return Err(Error::new_spanned(&m.at, METAVAR_ALONE));
+    }
+    if args.complete.is_some() {
+        let at = at.expect("a completion was asked for by an attribute");
+        return Err(Error::new_spanned(at, COMPOSED_COMPLETE));
+    }
+    if let Some(e) = &args.env {
+        return Err(Error::new_spanned(&e.at, ENV_ALONE));
+    }
+    for f in &fields.named {
+        if let Some(c) = f.attrs.iter().find(|a| is_cfg(a)) {
+            return Err(Error::new_spanned(c, COMPOSED_CFG));
+        }
+        if option_inner(&f.ty).and_then(option_inner).is_some() {
+            return Err(Error::new_spanned(&f.ty, DOUBLE_OPTION));
+        }
+    }
+
+    let idents: Vec<&Ident> = fields
+        .named
+        .iter()
+        .map(|f| f.ident.as_ref().expect("a named field has an ident"))
+        .collect();
+    let lets = fields.named.iter().zip(&idents).map(|(f, ident)| {
+        let parser = field_parser(f);
+        quote!(let #ident = #parser;)
+    });
+    // One assertion per `Option<T>` field, beside the constructor. A generic
+    // composite would need a skip here — a const item cannot name the outer
+    // type's parameters — but `#[derive(Arg)]` refuses generics (A4).
+    let checks = fields
+        .named
+        .iter()
+        .filter_map(|f| option_inner(&f.ty))
+        .map(not_already_optional);
+    // A composite succeeds without any argument exactly when every field does:
+    // an `Option<T>` field always does, a plain field when its type does.
+    let optional = fields
+        .named
+        .iter()
+        .filter(|f| option_inner(&f.ty).is_none())
+        .map(|f| qualified(&f.ty, quote!(::hicli::Arg), quote!(OPTIONAL)));
+    let heading = first_paragraph(&doc_lines(&input.attrs)).map(|(h, _)| quote!(.group_help(#h)));
+
+    let ty = &input.ident;
+    let ctor = snake_case(ty);
+    let vis = &input.vis;
+    let ctor_doc = format!("The parser `#[derive(Arg)]` wrote for [`{ty}`].");
+    Ok(quote! {
+        #[doc = #ctor_doc]
+        #[doc(hidden)]
+        #vis fn #ctor() -> impl ::hicli::bpaf::Parser<#ty> {
+            #[allow(unused_imports)]
+            use ::hicli::bpaf::Parser as _;
+            #(#lets)*
+            ::hicli::bpaf::construct!(#ty { #(#idents),* }) #heading
+        }
+        #(#checks)*
+        #[automatically_derived]
+        impl ::hicli::Arg for #ty {
+            const OPTIONAL: bool = true #(&& #optional)*;
+            fn parser() -> impl ::hicli::bpaf::Parser<Self> {
+                #ctor()
+            }
+        }
+    })
+}
+
+/// One field's parser: its type's, or — with a doc comment — its type's
+/// built around the doc's first paragraph, through `ArgHelp`; for an
+/// `Option<T>` field, `T`'s made optional. Spanned at the type, so a type
+/// that is not an argument type is reported on the field.
+fn field_parser(field: &syn::Field) -> TokenStream {
+    let help = first_paragraph(&doc_lines(&field.attrs)).map(|(h, _)| h);
+    match option_inner(&field.ty) {
+        Some(inner) => {
+            let p = type_parser(inner, help.as_deref());
+            quote_spanned!(inner.span()=> #p.optional())
+        }
+        None => type_parser(&field.ty, help.as_deref()),
+    }
+}
+
+/// `<T as Arg>::parser()`, or `<T as ArgHelp>::parser_with_help(help)`,
+/// spanned over the whole of `T` (see `qualified`).
+fn type_parser(ty: &Type, help: Option<&str>) -> TokenStream {
+    match help {
+        None => qualified_call(ty, quote!(::hicli::Arg), quote!(parser), quote!()),
+        Some(h) => qualified_call(
+            ty,
+            quote!(::hicli::ArgHelp),
+            quote!(parser_with_help),
+            quote!(#h),
+        ),
+    }
 }
 
 /// Is this one value with one field — the only shape a whole-value completer
@@ -376,29 +569,19 @@ enum Arity {
     Many,
 }
 
-/// The last segment of a plain path type (no qualified self).
-fn last_segment(ty: &Type) -> Option<&syn::PathSegment> {
-    match ty {
-        Type::Path(p) if p.qself.is_none() => p.path.segments.last(),
-        Type::Group(g) => last_segment(&g.elem),
-        Type::Paren(p) => last_segment(&p.elem),
-        _ => None,
-    }
-}
-
 /// `Option<T>` / `Vec<T>` → the arity and `T`, recognised syntactically as
 /// `bpaf_derive` does; anything else is one value of itself.
 fn arity(ty: &Type) -> (Arity, &Type) {
+    if let Some(inner) = option_inner(ty) {
+        return (Arity::Optional, inner);
+    }
     let Some(seg) = last_segment(ty) else {
         return (Arity::One, ty);
     };
-    let kind = if seg.ident == "Option" {
-        Arity::Optional
-    } else if seg.ident == "Vec" {
-        Arity::Many
-    } else {
+    if seg.ident != "Vec" {
         return (Arity::One, ty);
-    };
+    }
+    let kind = Arity::Many;
     let PathArguments::AngleBracketed(a) = &seg.arguments else {
         return (Arity::One, ty);
     };
@@ -487,6 +670,9 @@ fn spelled(input: &DeriveInput, args: ArgArgs, at: &Attribute) -> Result<TokenSt
         if let Some(m) = &args.metavar {
             return Err(Error::new_spanned(&m.at, METAVAR_ON_POSITIONAL));
         }
+        if let Some(e) = &args.env {
+            return Err(Error::new_spanned(&e.at, ENV_ON_POSITIONAL));
+        }
     }
 
     let ty = &input.ident;
@@ -515,6 +701,9 @@ fn spelled(input: &DeriveInput, args: ArgArgs, at: &Attribute) -> Result<TokenSt
         if let Some(c) = &args.complete {
             return Err(Error::new_spanned(&c.at, COMPLETE_ON_BOOL));
         }
+        if let Some(e) = &args.env {
+            return Err(Error::new_spanned(&e.at, ENV_ON_SWITCH));
+        }
     } else if args.positional.is_none() && args.metavar.is_none() {
         let k = args.long.as_ref().map_or_else(
             || &args.short.as_ref().expect("long or short").at,
@@ -528,6 +717,12 @@ fn spelled(input: &DeriveInput, args: ArgArgs, at: &Attribute) -> Result<TokenSt
     let vis = &input.vis;
     let ctor_doc = format!("The parser `#[derive(Arg)]` wrote for [`{ty}`].");
     let help = LitStr::new(&help, Span::call_site());
+    // A switch, an `Option` or a `Vec` succeeds without its argument.
+    let optional = (switch || arity != Arity::One).then(|| {
+        quote!(
+            const OPTIONAL: bool = true;
+        )
+    });
 
     Ok(quote! {
         #[doc = #ctor_doc]
@@ -537,6 +732,7 @@ fn spelled(input: &DeriveInput, args: ArgArgs, at: &Attribute) -> Result<TokenSt
         }
         #[automatically_derived]
         impl ::hicli::Arg for #ty {
+            #optional
             fn parser() -> impl ::hicli::bpaf::Parser<Self> {
                 #ctor()
             }
@@ -564,6 +760,8 @@ fn chain(
     let completion = args.completion();
     // The name a parse error is prefixed with (ADR-018).
     let name = LitStr::new(&spelling(args, ty), Span::call_site());
+    // The variable an error from the environment names (ADR-019 §5).
+    let env = args.env.as_ref().map(|e| &e.value);
 
     let named = || {
         let long = args.long.as_ref().map(|l| match &l.value {
@@ -574,11 +772,19 @@ fn chain(
             }
         });
         let short = args.short.as_ref().map(|s| &s.value);
-        match (long, short) {
+        let head = match (long, short) {
             (Some(l), Some(s)) => quote!(::hicli::bpaf::long(#l).short(#s)),
             (Some(l), None) => quote!(::hicli::bpaf::long(#l)),
             (None, Some(s)) => quote!(::hicli::bpaf::short(#s)),
             (None, None) => unreachable!("a named argument has a long or a short"),
+        };
+        // Straight after the name, before `.help`, as bpaf's derive writes it.
+        match &args.env {
+            Some(e) => {
+                let e = &e.value;
+                quote!(#head.env(#e))
+            }
+            None => head,
         }
     };
 
@@ -612,7 +818,12 @@ fn chain(
         // choice is one E0277, not that and a `FromStr` one.
         Shape::Choice => {
             let h = head(&string, quote!(help));
-            quote!(::hicli::__private::choice::<Self, _>(#name, help, |help| #h))
+            match env {
+                None => quote!(::hicli::__private::choice::<Self, _>(#name, help, |help| #h)),
+                Some(var) => quote!(
+                    ::hicli::__private::choice_env::<Self, _>(#name, #var, help, |help| #h)
+                ),
+            }
         }
         Shape::Whole => {
             let h = head(&string, quote!(help));
@@ -623,20 +834,54 @@ fn chain(
                 Completion::With(f) => quote!(#h.complete(|w: &#string| #f(w.as_str()))),
             };
             // Spanned at the type: a missing `FromStr` is reported on it.
-            let parse = quote_spanned! {ty.span()=>
-                .parse(|w: #string| w.parse::<Self>().map_err(|e| ::hicli::__private::named(#name, e)))
-            };
+            let closure = parse_closure(
+                ty.span(),
+                &string,
+                quote_spanned!(ty.span()=> w.parse::<Self>()),
+                &name,
+                env,
+            );
+            let parse = quote_spanned! {ty.span()=> .parse(#closure) };
             quote!(#h #parse)
         }
         Shape::Tuple(field) | Shape::Named(_, field) => {
             let value = inner.expect("a field has a value type");
-            return field_chain(ty, shape, field, value, arity, completion, &name, head);
+            return field_chain(ty, shape, field, value, arity, completion, &name, env, head);
         }
     };
     quote! {
         #[allow(unused_imports)]
         use ::hicli::bpaf::Parser as _;
         #body
+    }
+}
+
+/// The parse closure `|w: P| <parse>.map_err(…)`, its error named by `name`.
+///
+/// With an `env` the closure first asks whether `w` came from the
+/// environment, before `parse` may move it, and names the error
+/// `` `--addr` from `$VAR`: … `` then — never echoing the value. Without one
+/// it is exactly the 0.6 closure. Spanned at `span`, as the caller's was.
+fn parse_closure(
+    span: Span,
+    param: &TokenStream,
+    parse: TokenStream,
+    name: &LitStr,
+    env: Option<&LitStr>,
+) -> TokenStream {
+    match env {
+        None => quote_spanned! {span=>
+            |w: #param| #parse.map_err(|e| ::hicli::__private::named(#name, e))
+        },
+        Some(var) => quote_spanned! {span=>
+            |w: #param| {
+                let __env = ::hicli::__private::from_env(
+                    #var,
+                    ::core::convert::AsRef::<::std::ffi::OsStr>::as_ref(&w),
+                );
+                #parse.map_err(|e| ::hicli::__private::named_env(#name, #var, __env, e))
+            }
+        },
     }
 }
 
@@ -660,6 +905,7 @@ fn field_chain(
     arity: Arity,
     completion: &Completion,
     name: &LitStr,
+    env: Option<&LitStr>,
     head: impl Fn(&TokenStream, TokenStream) -> TokenStream,
 ) -> TokenStream {
     let string = quote!(::std::string::String);
@@ -686,27 +932,32 @@ fn field_chain(
         Completion::With(f) => quote!(#h.complete(|w: &#string| #f(w.as_str()))),
     };
     let map = wrap(ty, shape);
-    let named = quote!(::hicli::__private::named);
     let body = match arity {
         Arity::One => {
             let of = quote!((&::hicli::__private::FromStrOf::<#ty, #field>(#map)));
-            if os_head {
-                quote_spanned! {field.span()=>
-                    #h.parse(|w: #field| #of.parse_os(w).map_err(|e| #named(#name, e)))
-                }
+            let s = field.span();
+            let closure = if os_head {
+                let p = quote!(#field);
+                parse_closure(s, &p, quote_spanned!(s=> #of.parse_os(w)), name, env)
             } else {
-                quote_spanned! {field.span()=>
-                    #h.parse(|w: #string| #of.parse_word(w.as_str()).map_err(|e| #named(#name, e)))
-                }
-            }
+                let parse = quote_spanned!(s=> #of.parse_word(w.as_str()));
+                parse_closure(s, &string, parse, name, env)
+            };
+            quote_spanned! {s=> #h.parse(#closure) }
         }
         Arity::Optional | Arity::Many => {
             let parsed = if os_head {
                 h
             } else {
-                let parse = quote_spanned! {value.span()=>
-                    .parse(|w: #string| w.parse::<#value>().map_err(|e| #named(#name, e)))
-                };
+                let s = value.span();
+                let closure = parse_closure(
+                    s,
+                    &string,
+                    quote_spanned!(s=> w.parse::<#value>()),
+                    name,
+                    env,
+                );
+                let parse = quote_spanned! {s=> .parse(#closure) };
                 quote!(#h #parse)
             };
             if arity == Arity::Optional {
@@ -839,7 +1090,7 @@ mod tests {
 
     #[test]
     fn a_multi_field_struct_without_completion_is_the_same_shape() {
-        let got = expansion("pub struct ShareOpts { a: bool, b: bool }");
+        let got = expansion("pub struct ShareOpts { #[bpaf(long)] a: bool, b: bool }");
         let want = quote! {
             #[automatically_derived]
             impl ::hicli::Arg for ShareOpts {
@@ -934,9 +1185,271 @@ mod tests {
     #[test]
     fn a_completer_on_a_multi_field_struct_names_both_right_answers() {
         assert_eq!(
-            rejection("#[arg(complete = f)]\npub struct Ref { dir: String, name: String }"),
+            rejection(
+                "#[arg(complete = f)]\npub struct Ref { #[bpaf(positional(\"DIR\"))] dir: String, name: String }"
+            ),
             COMPLETE_NEEDS_ONE_FIELD
         );
+        assert_eq!(
+            rejection("#[arg(complete = f)]\npub struct Ref(String, String);"),
+            COMPLETE_NEEDS_ONE_FIELD
+        );
+    }
+
+    // --- composed mode -----------------------------------------------------------
+
+    /// The two items a composed struct expands into, with `body` as the
+    /// constructor's composition.
+    /// `plain` are the types of the fields that are not `Option`: the
+    /// composite's `OPTIONAL` is the AND of theirs.
+    fn composed_items(
+        vis: TokenStream,
+        ty: &str,
+        ctor: &str,
+        plain: &[TokenStream],
+        body: TokenStream,
+    ) -> String {
+        composed_with_checks(vis, ty, ctor, plain, body, TokenStream::new())
+    }
+
+    /// The same, with `checks` — the `Option` fields' assertions — between
+    /// the constructor and the impl.
+    fn composed_with_checks(
+        vis: TokenStream,
+        ty: &str,
+        ctor: &str,
+        plain: &[TokenStream],
+        body: TokenStream,
+        checks: TokenStream,
+    ) -> String {
+        let plain = plain.iter().map(|t| quote!(<#t as ::hicli::Arg>::OPTIONAL));
+        let ty: Ident = syn::parse_str(ty).expect("an ident");
+        let ctor: Ident = syn::parse_str(ctor).expect("an ident");
+        let doc = format!("The parser `#[derive(Arg)]` wrote for [`{ty}`].");
+        quote! {
+            #[doc = #doc]
+            #[doc(hidden)]
+            #vis fn #ctor() -> impl ::hicli::bpaf::Parser<#ty> {
+                #[allow(unused_imports)]
+                use ::hicli::bpaf::Parser as _;
+                #body
+            }
+            #checks
+            #[automatically_derived]
+            impl ::hicli::Arg for #ty {
+                const OPTIONAL: bool = true #(&& #plain)*;
+                fn parser() -> impl ::hicli::bpaf::Parser<Self> {
+                    #ctor()
+                }
+            }
+        }
+        .to_string()
+    }
+
+    /// The assertion beside an `Option<#t>`, with the message for `text`.
+    fn check(t: TokenStream, text: &str) -> TokenStream {
+        let message = format!(
+            "`{text}` succeeds when its argument is absent, so `Option<{text}>` would always be \
+             `Some`: use `{text}` as it is, or make `{text}` required and write `Option<{text}>` \
+             where it may be left out"
+        );
+        quote!(
+            const _: () = ::core::assert!(!<#t as ::hicli::Arg>::OPTIONAL, #message);
+        )
+    }
+
+    #[test]
+    fn composed_option_field() {
+        let got = expansion(
+            "pub struct Search { limit: Option<Limit>, key: std::option::Option<a::Key> }",
+        );
+        let c1 = check(quote!(Limit), "Limit");
+        let c2 = check(quote!(a::Key), "a::Key");
+        let want = composed_with_checks(
+            quote!(pub),
+            "Search",
+            "search",
+            &[],
+            quote! {
+                let limit = <Limit as ::hicli::Arg>::parser().optional();
+                let key = <a::Key as ::hicli::Arg>::parser().optional();
+                ::hicli::bpaf::construct!(Search { limit, key })
+            },
+            quote!(#c1 #c2),
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn composed_option_field_with_doc_override() {
+        let got = expansion("pub struct Search {\n/// At most this many\nlimit: Option<Limit> }");
+        let c = check(quote!(Limit), "Limit");
+        let want = composed_with_checks(
+            quote!(pub),
+            "Search",
+            "search",
+            &[],
+            quote! {
+                let limit = <Limit as ::hicli::ArgHelp>::parser_with_help("At most this many").optional();
+                ::hicli::bpaf::construct!(Search { limit })
+            },
+            c,
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn a_composite_is_optional_when_every_field_is() {
+        // An `Option` field always succeeds, so only the plain fields count.
+        let got = expansion("pub struct S { a: Option<Limit>, b: Query }");
+        let c = check(quote!(Limit), "Limit");
+        let want = composed_with_checks(
+            quote!(pub),
+            "S",
+            "s",
+            &[quote!(Query)],
+            quote! {
+                let a = <Limit as ::hicli::Arg>::parser().optional();
+                let b = <Query as ::hicli::Arg>::parser();
+                ::hicli::bpaf::construct!(S { a, b })
+            },
+            c,
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn optional_twice_and_a_cfg_on_a_field_are_refused() {
+        assert_eq!(
+            rejection("pub struct S { a: Option<std::option::Option<Limit>> }"),
+            DOUBLE_OPTION
+        );
+        assert_eq!(
+            rejection("pub struct S { #[cfg(unix)] a: Limit }"),
+            COMPOSED_CFG
+        );
+        assert_eq!(
+            rejection("pub struct S { #[cfg_attr(unix, allow(dead_code))] a: Limit }"),
+            COMPOSED_CFG
+        );
+    }
+
+    #[test]
+    fn a_generic_composite_is_refused_so_no_check_needs_skipping() {
+        // A const item cannot name an outer type's parameters, so a generic
+        // composite's `Option<T>` field could not be checked. The derive
+        // refuses generics outright (A4), which is what makes the per-field
+        // assertion always writable.
+        assert_eq!(rejection("pub struct S<T> { a: Option<T> }"), GENERIC);
+    }
+
+    #[test]
+    fn a_named_struct_without_bpaf_attributes_composes() {
+        let got = expansion("pub struct ShareOpts { a: Apply, b: Yes }");
+        let want = composed_items(
+            quote!(pub),
+            "ShareOpts",
+            "share_opts",
+            &[quote!(Apply), quote!(Yes)],
+            quote! {
+                let a = <Apply as ::hicli::Arg>::parser();
+                let b = <Yes as ::hicli::Arg>::parser();
+                ::hicli::bpaf::construct!(ShareOpts { a, b })
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn composed_arg_fields() {
+        let got = expansion("struct Listing { sort: SortOpt, r#type: crate::Kind, query: Query }");
+        let want = composed_items(
+            quote!(),
+            "Listing",
+            "listing",
+            &[quote!(SortOpt), quote!(crate::Kind), quote!(Query)],
+            quote! {
+                let sort = <SortOpt as ::hicli::Arg>::parser();
+                let r#type = <crate::Kind as ::hicli::Arg>::parser();
+                let query = <Query as ::hicli::Arg>::parser();
+                ::hicli::bpaf::construct!(Listing { sort, r#type, query })
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn composed_field_doc_overrides_through_arg_help() {
+        let got = expansion(
+            "pub struct Listing {\n\
+             /// Order for\n/// this listing\n///\n/// Developer prose.\n\
+             by: SortOpt,\n\
+             ///\n///   \n\
+             query: Query }",
+        );
+        let want = composed_items(
+            quote!(pub),
+            "Listing",
+            "listing",
+            &[quote!(SortOpt), quote!(Query)],
+            quote! {
+                let by = <SortOpt as ::hicli::ArgHelp>::parser_with_help("Order for this listing");
+                let query = <Query as ::hicli::Arg>::parser();
+                ::hicli::bpaf::construct!(Listing { by, query })
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn composed_doc_is_a_group_heading() {
+        let got = expansion(
+            "/// Global options\n/// for playr\n///\n/// Rustdoc only.\n\
+             pub struct Globals { node: NodeOpt }",
+        );
+        let want = composed_items(
+            quote!(pub),
+            "Globals",
+            "globals",
+            &[quote!(NodeOpt)],
+            quote! {
+                let node = <NodeOpt as ::hicli::Arg>::parser();
+                ::hicli::bpaf::construct!(Globals { node }).group_help("Global options for playr")
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn composed_rejections() {
+        assert_eq!(rejection("pub struct S {}"), COMPOSED_EMPTY);
+        assert_eq!(
+            rejection("#[arg(metavar = \"M\")]\npub struct S { a: A }"),
+            METAVAR_ALONE
+        );
+        assert_eq!(
+            rejection("#[arg(complete = f)]\npub struct Ref { dir: Dir, name: Name }"),
+            COMPOSED_COMPLETE
+        );
+        assert_eq!(
+            rejection("#[arg(complete = f)]\npub struct Ref { dir: Dir }"),
+            COMPOSED_COMPLETE
+        );
+    }
+
+    #[test]
+    fn arg_on_a_field_is_refused_in_every_mode() {
+        for src in [
+            "pub struct S { #[arg(long)] a: A }",
+            "pub struct S { #[arg] a: A }",
+            "/// x\n#[arg(positional)]\npub struct S(#[arg(positional)] String);",
+            "pub struct S { #[bpaf(long)] #[arg(long)] a: bool }",
+            "pub enum E { A(#[arg(long)] String) }",
+            "/// x\n#[arg(positional)]\npub enum E { #[arg(long)] A, B }",
+            "pub enum E { #[arg] A }",
+        ] {
+            assert_eq!(rejection(src), FIELD_ARG, "{src}");
+        }
     }
 
     #[test]
@@ -978,8 +1491,38 @@ mod tests {
 
     // --- spelled mode: golden expansions ---------------------------------------
 
-    /// The three items, with `chain` as `parser_with_help`'s body.
+    /// The three items of a required type, with `chain` as
+    /// `parser_with_help`'s body.
     fn three(vis: TokenStream, ty: &str, ctor: &str, help: &str, chain: TokenStream) -> String {
+        items(vis, ty, ctor, help, false, chain)
+    }
+
+    /// The three items of a type that succeeds without its argument: its
+    /// `Arg` impl says `OPTIONAL`.
+    fn three_optional(
+        vis: TokenStream,
+        ty: &str,
+        ctor: &str,
+        help: &str,
+        chain: TokenStream,
+    ) -> String {
+        items(vis, ty, ctor, help, true, chain)
+    }
+
+    /// The three items.
+    fn items(
+        vis: TokenStream,
+        ty: &str,
+        ctor: &str,
+        help: &str,
+        optional: bool,
+        chain: TokenStream,
+    ) -> String {
+        let optional = optional.then(|| {
+            quote!(
+                const OPTIONAL: bool = true;
+            )
+        });
         let ty: Ident = syn::parse_str(ty).expect("an ident");
         let ctor: Ident = syn::parse_str(ctor).expect("an ident");
         let doc = format!("The parser `#[derive(Arg)]` wrote for [`{ty}`].");
@@ -991,6 +1534,7 @@ mod tests {
             }
             #[automatically_derived]
             impl ::hicli::Arg for #ty {
+                #optional
                 fn parser() -> impl ::hicli::bpaf::Parser<Self> {
                     #ctor()
                 }
@@ -1081,7 +1625,7 @@ mod tests {
              pub struct SortOpt(pub Option<SortField>);",
         );
         let p = probe(quote!(SortField), true);
-        let want = three(
+        let want = three_optional(
             quote!(pub),
             "SortOpt",
             "sort_opt",
@@ -1175,7 +1719,7 @@ mod tests {
         let got = expansion(
             "/// Sort descending\n#[arg(long = \"descending\", short = 'd')]\nstruct Descending(bool);",
         );
-        let want = three(
+        let want = three_optional(
             quote!(),
             "Descending",
             "descending",
@@ -1193,7 +1737,7 @@ mod tests {
             "/// Tags\n#[arg(positional = \"TAG\", complete = tags)]\npub struct Tags(Vec<String>);",
         );
         let p = probe(quote!(String), false);
-        let want = three(
+        let want = three_optional(
             quote!(pub),
             "Tags",
             "tags",
@@ -1265,7 +1809,7 @@ mod tests {
             "/// Where to write\n#[arg(long = \"out\", metavar = \"DIR\")]\npub struct Out(Option<PathBuf>);",
         );
         let p = probe(quote!(PathBuf), false);
-        let want = three(
+        let want = three_optional(
             quote!(pub),
             "Out",
             "out",
@@ -1359,6 +1903,156 @@ mod tests {
         assert!(
             short.contains(":: hicli :: bpaf :: short ('v') . help (help) . switch ()"),
             "{short}"
+        );
+    }
+
+    #[test]
+    fn env_follows_the_long_name() {
+        let got = expansion(
+            "/// The node to talk to\n\
+             #[arg(long = \"node\", metavar = \"HOST\", env = \"PLAYR_NODE\")]\n\
+             pub struct Globals(pub Option<String>);",
+        );
+        let p = probe(quote!(String), true);
+        let want = three_optional(
+            quote!(pub),
+            "Globals",
+            "globals",
+            "The node to talk to",
+            quote! {
+                #p
+                ::hicli::bpaf::long("node").env("PLAYR_NODE").help(__help)
+                    .argument::<::std::string::String>("HOST")
+                    .complete(move |w: &::std::string::String| __complete(w.as_str()))
+                    .parse(|w: ::std::string::String| {
+                        let __env = ::hicli::__private::from_env(
+                            "PLAYR_NODE",
+                            ::core::convert::AsRef::<::std::ffi::OsStr>::as_ref(&w),
+                        );
+                        w.parse::<String>().map_err(|e|
+                            ::hicli::__private::named_env("--node", "PLAYR_NODE", __env, e))
+                    })
+                    .optional()
+                    .map(Globals)
+            },
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn env_follows_the_short_name() {
+        let got = expansion(
+            "/// What to sort by\n#[arg(short = 'k', metavar = \"KEY\", env = \"KEY\")]\n\
+             pub enum SortKey { Bpm, Title }",
+        );
+        let want = three(
+            quote!(pub),
+            "SortKey",
+            "sort_key",
+            "What to sort by",
+            quote! {
+                ::hicli::__private::choice_env::<Self, _>("-k", "KEY", help, |help|
+                    ::hicli::bpaf::short('k').env("KEY").help(help)
+                        .argument::<::std::string::String>("KEY")
+                )
+            },
+        );
+        assert_eq!(got, want);
+        let both = expansion(
+            "/// x\n#[arg(long = \"a\", short = 'a', metavar = \"M\", env = \"A\")]\n\
+             pub struct A(String);",
+        );
+        assert!(
+            both.contains(":: hicli :: bpaf :: long (\"a\") . short ('a') . env (\"A\") . help"),
+            "{both}"
+        );
+        // A one-value field: the env check comes before the probe's parse.
+        assert!(
+            both.contains(
+                &quote! {
+                    |w: ::std::string::String| {
+                        let __env = ::hicli::__private::from_env(
+                            "A",
+                            ::core::convert::AsRef::<::std::ffi::OsStr>::as_ref(&w),
+                        );
+                        (&::hicli::__private::FromStrOf::<A, String>(A))
+                            .parse_word(w.as_str())
+                            .map_err(|e| ::hicli::__private::named_env("--a", "A", __env, e))
+                    }
+                }
+                .to_string()
+            ),
+            "{both}"
+        );
+        // A path parsed as bpaf read it: the check comes before `parse_os` moves it.
+        let os = expansion(
+            "/// x\n#[arg(long = \"out\", metavar = \"DIR\", env = \"OUT\")]\npub struct Out(PathBuf);",
+        );
+        assert!(
+            os.contains(
+                &quote! {
+                    |w: PathBuf| {
+                        let __env = ::hicli::__private::from_env(
+                            "OUT",
+                            ::core::convert::AsRef::<::std::ffi::OsStr>::as_ref(&w),
+                        );
+                        (&::hicli::__private::FromStrOf::<Out, PathBuf>(Out))
+                            .parse_os(w)
+                            .map_err(|e| ::hicli::__private::named_env("--out", "OUT", __env, e))
+                    }
+                }
+                .to_string()
+            ),
+            "{os}"
+        );
+        // A struct parsed whole names it the same way.
+        let whole = expansion(
+            "/// x\n#[arg(long = \"r\", metavar = \"R\", env = \"R\")]\npub struct R { a: String, b: String }",
+        );
+        assert!(
+            whole.contains(
+                "w . parse :: < Self > () . map_err (| e | :: hicli :: __private :: named_env (\"--r\" , \"R\" , __env , e))"
+            ),
+            "{whole}"
+        );
+    }
+
+    #[test]
+    fn each_env_rejection_is_raised() {
+        assert_eq!(
+            rejection("/// x\n#[arg(positional, env = \"X\")]\npub struct Id(String);"),
+            ENV_ON_POSITIONAL
+        );
+        assert_eq!(
+            rejection("/// x\n#[arg(long, env = \"X\")]\npub struct On(bool);"),
+            ENV_ON_SWITCH
+        );
+        assert_eq!(
+            rejection("#[arg(env = \"X\")]\npub struct Id(String);"),
+            ENV_ALONE
+        );
+        assert_eq!(
+            rejection("#[arg(env = \"X\")]\npub struct S { a: A }"),
+            ENV_ALONE
+        );
+        for bad in ["\"\"", "\"A=B\"", "\"A B\""] {
+            assert_eq!(
+                rejection(&format!(
+                    "/// x\n#[arg(long, metavar = \"M\", env = {bad})]\npub struct Id(String);"
+                )),
+                BAD_ENV,
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            rejection("/// x\n#[arg(env)]\npub struct Id(String);"),
+            UNKNOWN_ARG
+        );
+        assert_eq!(
+            rejection(
+                "/// x\n#[arg(long, metavar = \"M\", env = \"A\", env = \"B\")]\npub struct Id(String);"
+            ),
+            "`env` is given twice"
         );
     }
 

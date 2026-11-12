@@ -1,0 +1,5 @@
+error: a positional cannot fall back to an environment variable: `env` goes with `long` or `short`
+ --> tests/ui/arg_env_on_positional.rs:7:28
+  |
+7 | #[arg(positional = "HOST", env = "PLAYR_NODE")]
+  |                            ^^^

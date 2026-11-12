@@ -52,7 +52,8 @@ Run `just ci` before considering any change done.
   stable-toolchain CLIs pin.
 - **`bpaf` is re-exported, not wrapped opaquely.** Don't hide `bpaf` types behind
   newtypes without a reason spelled out in `docs/PLAN.md`. Consumers using
-  `#[derive(Bpaf)]` (for `Globals` or a struct of several options) also add
+  `#[derive(Bpaf)]` (for what spelled and composed types do not cover — guards,
+  `some`, a fallback shown in help) also add
   `bpaf = "0.9"` directly (the derive expands to `::bpaf::…` paths that don't
   resolve through a re-export) — hicli states the required version, cargo
   unifies it; see ADR-004. A type spelled by hicli's `#[derive(Arg)]
@@ -93,7 +94,17 @@ Run `just ci` before considering any change done.
   mdma-cli's validated newtypes (ADR-018) — a spelled type parsing through its
   own `FromStr`, a multi-field struct that parses from one word, parse errors
   that name the argument, and a `Choice` listing its names in its help row;
-  #7 is answered by ADR-014 with no API.
+  #7 is answered by ADR-014 with no API. And — for globals and mdma-cli's
+  composites (ADR-019) — `#[derive(Arg)]` on a struct with named fields, no
+  spelling keys and no `#[bpaf(…)]` composes its fields, each an argument type
+  exactly as a command's parameter is (no `#[arg]` on a field); `Option<T>`, in
+  a parameter or a field, is `T`'s parser made optional and compiles only when
+  `T` is required — everything not marked optional is required, and the derive
+  marks it (`Arg::OPTIONAL`, checked by an item-level const assertion at each
+  use); a field's doc comment's first paragraph overrides its type's help
+  through `ArgHelp`, and the struct's doc is a section heading; a spelled option
+  takes `env = "VAR"`. A single global is a spelled newtype, several are a
+  composed struct, and neither needs a direct `bpaf` dependency.
   **The bar for a new mechanism** is our own analysis of real consumer code
   (mdma-cli, moniker, ctx): it removes redundancy, makes the code more
   expressive, or makes it more consistent. We own the experience; a consumer not
@@ -101,11 +112,13 @@ Run `just ci` before considering any change done.
   not by itself a reason to build it. Every mechanism still points at concrete
   consumer code it improves.
   Deferred until that analysis justifies them: nested `args`
-  groups, a default in a curried group or at the top level, a field-composing
-  `#[derive(Arg)]` for composites (a field's doc would be its override),
-  spelling keys beyond ADR-016's five, `#[arg(parser = …)]`, completion masks,
-  globals-aware completion, `inventory`-style auto-registration (rejected
-  outright, not just deferred).
+  groups, a default in a curried group or at the top level, spelling keys
+  beyond ADR-016's five and ADR-019's `env` (`fallback`/`default`, `some`, …),
+  tuple-struct composition, `Vec<T>` of an argument type, an override for a
+  composite's heading, `Option` for a curried parameter or a group's `args`,
+  `#[arg(parser = …)]`, completion masks, globals-aware completion.
+  Rejected outright, not just deferred: `inventory`-style auto-registration,
+  and `#[arg]` on a field (ADR-019).
 - **No implicit `$PATH` scanning** for external subcommand discovery — allowlist by
   absolute path only. This is a trust boundary, not a convenience default.
 

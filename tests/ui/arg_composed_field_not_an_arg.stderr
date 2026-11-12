@@ -1,0 +1,17 @@
+error[E0277]: `String` is not a hicli argument type
+ --> tests/ui/arg_composed_field_not_an_arg.rs:8:11
+  |
+8 |     name: String,
+  |           ^^^^^^ this argument's type must implement `Arg`
+  |
+  = help: the trait `Arg` is not implemented for `String`
+  = note: an argument is a type: give it a documented newtype — `/// An event id` above `#[derive(Arg)] #[arg(positional = "ID")] struct Id(String);`
+  = note: a choice enum is spelled the same way: `#[derive(Choice, Arg)] #[arg(positional = "KEY")]`; a struct of several argument types is `#[derive(Arg)]`
+  = note: hicli ships no `Arg` impls for `String`, `u64`, `PathBuf`, … on purpose: the metavar and positional-vs-option are yours to name
+  = note: an optional argument is `Option<T>` where it is used, with `T` required; a type that is optional at every use holds its `Option` inside: `struct Added(Option<DaysBack>)`
+help: the trait `Arg` is implemented for `Person`
+ --> tests/ui/arg_composed_field_not_an_arg.rs:6:10
+  |
+6 | #[derive(Arg)]
+  |          ^^^
+  = note: this error originates in the derive macro `Arg` (in Nightly builds, run with -Z macro-backtrace for more info)

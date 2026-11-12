@@ -261,6 +261,45 @@ pub fn named(name: &'static str, error: impl Display) -> String {
     format!("`{name}`: {error}")
 }
 
+/// Whether `word` is what `$var` holds: the value came from the environment.
+/// (If the typed word equals the env value and both are invalid, this says
+/// "from $VAR" too — harmless, the env value fails the same way.)
+pub fn from_env(var: &'static str, word: &OsStr) -> bool {
+    std::env::var_os(var).as_deref() == Some(word)
+}
+
+/// [`named`], saying where an environment value came from:
+/// `` `--addr` from `$PLAYR_NODE`: … ``. The value itself is never echoed —
+/// the environment is where secrets live.
+pub fn named_env(
+    name: &'static str,
+    var: &'static str,
+    from_env: bool,
+    error: impl Display,
+) -> String {
+    if from_env {
+        format!("`{name}` from `${var}`: {error}")
+    } else {
+        named(name, error)
+    }
+}
+
+/// [`choice`] for an option with an environment fallback: its error says
+/// so, through [`named_env`].
+pub fn choice_env<C: Choice, P: Parser<String>>(
+    name: &'static str,
+    var: &'static str,
+    help: &str,
+    head: impl FnOnce(Doc) -> P,
+) -> impl Parser<C> {
+    head(choice_help::<C>(help))
+        .complete(|w: &String| complete_choice::<C>(w))
+        .parse(move |w: String| {
+            let env = from_env(var, OsStr::new(&w));
+            w.parse::<C>().map_err(|e| named_env(name, var, env, e))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,6 +464,20 @@ mod tests {
     #[test]
     fn a_choice_without_variants_gets_no_suffix() {
         assert_eq!(choice_help::<Nothing>("x").monochrome(true), "x");
+    }
+
+    #[test]
+    fn named_env_says_where_the_value_came_from_and_never_echoes_it() {
+        assert_eq!(
+            named_env("--addr", "ADDR", true, "invalid"),
+            "`--addr` from `$ADDR`: invalid"
+        );
+        assert_eq!(
+            named_env("--addr", "ADDR", false, "invalid"),
+            "`--addr`: invalid"
+        );
+        // A variable no test sets is never the source.
+        assert!(!from_env("HICLI_PRIVATE_TEST_NEVER_SET", OsStr::new("x")));
     }
 
     #[test]

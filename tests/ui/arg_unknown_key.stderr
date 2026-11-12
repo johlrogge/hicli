@@ -1,4 +1,4 @@
-error: #[arg(...)] takes `positional`, `long`, `short`, `metavar` and `complete`: `positional` or `positional = "KEY"`, `long` or `long = "name"`, `short = 'c'`, `metavar = "M"`, and `complete = <fn>`, `complete = files` or `complete = dirs`
+error: #[arg(...)] takes `positional`, `long`, `short`, `metavar`, `env` and `complete`: `positional` or `positional = "KEY"`, `long` or `long = "name"`, `short = 'c'`, `metavar = "M"`, `env = "VAR"`, and `complete = <fn>`, `complete = files` or `complete = dirs`
  --> tests/ui/arg_unknown_key.rs:8:7
   |
 8 | #[arg(name = "ID")]

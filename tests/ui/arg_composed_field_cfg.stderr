@@ -1,0 +1,5 @@
+error: #[cfg] and #[cfg_attr] cannot go on a field of a struct #[derive(Arg)] composes: the composition names every field. Put the #[cfg] on the whole struct, or give each configuration its own struct
+  --> tests/ui/arg_composed_field_cfg.rs:12:5
+   |
+12 |     #[cfg(unix)]
+   |     ^^^^^^^^^^^^

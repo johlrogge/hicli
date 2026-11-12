@@ -40,8 +40,10 @@ use hicli::{app, command, group, App, Arg, Failure};
 // Globals and context
 // ---------------------------------------------------------------------------
 
-// Not an `Arg`, deliberately: globals are composed at the top level by
-// `App::new(globals())`, never as a command's parameter.
+// `#[derive(Bpaf)]`, like the rest of this example, which mirrors
+// `examples/demo.rs` (the bpaf-mode example) with its groups in files.
+// `App::new(globals())` takes the parser directly. The fallback is not shown in
+// help; spelled types would write it as an `Option` defaulted in `mk_ctx`.
 /// Global options, accepted before or after the subcommand.
 #[derive(Debug, Clone, Bpaf)]
 pub struct Globals {

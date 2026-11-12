@@ -3,25 +3,19 @@
 //!
 //! Try: `cargo run --example playr_minimal -- --help`
 
-// `Globals` is spelled by `#[derive(Bpaf)]`, which turns a doc comment on a
-// struct into a help heading, so its field is documented; the program's other
-// public items are example code.
+// The program's public items are example code.
 #![allow(missing_docs)]
 
 use std::fmt;
 use std::process::ExitCode;
 use std::str::FromStr;
 
-use bpaf::Bpaf;
 use hicli::{app, command, group, App, Arg};
 
-/// Global options
-#[derive(Debug, Clone, Bpaf)]
-pub struct Globals {
-    /// The node to talk to
-    #[bpaf(long, env("PLAYR_NODE"), argument("HOST"), fallback(Node::localhost()))]
-    pub node: Node,
-}
+/// The node to talk to
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "node", metavar = "HOST", env = "PLAYR_NODE")]
+pub struct Globals(pub Option<Node>);
 
 /// Built once, after parsing, and handed to every command.
 pub struct Ctx {
@@ -71,7 +65,11 @@ fn app() -> App<Globals, Ctx> {
 }
 
 fn main() -> ExitCode {
-    app().run(|g| Ok(Ctx { node: g.node }))
+    app().run(|g| {
+        Ok(Ctx {
+            node: g.0.unwrap_or_else(Node::localhost),
+        })
+    })
 }
 
 // ---- the program's own types ---------------------------------------------
@@ -153,11 +151,9 @@ mod tests {
     const TOP_HELP: &str = "\
 Usage: playr [--node=HOST] COMMAND ...
 
-Global options
+Available options:
         --node=HOST  The node to talk to
                      [env:PLAYR_NODE: N/A]
-
-Available options:
     -h, --help       Prints help information
 
 Available commands:

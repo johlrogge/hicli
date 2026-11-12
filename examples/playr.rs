@@ -9,9 +9,10 @@
 //! cargo test --example playr
 //! ```
 
-// `Globals` and `Filters` are spelled by `#[derive(Bpaf)]`, which turns a doc
-// comment on a struct into a help heading, so their fields are documented and
-// `Filters` is not (see the README); the program's other public items are
+// No struct here is spelled by `#[derive(Bpaf)]`, and playr has no `bpaf`
+// dependency. `Filters` is a struct of arguments: a doc comment on it would be
+// a help heading, and a doc comment on a field would replace that field's help,
+// so it has neither (see the README). The program's other public items are
 // example code.
 #![allow(missing_docs)]
 
@@ -22,18 +23,14 @@ use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use bpaf::Bpaf;
 use hicli::{app, command, group, App, Arg, Candidate, Choice, Failure, Outcome};
 
 // ---- globals and context -------------------------------------------------
 
-/// Global options
-#[derive(Debug, Clone, Bpaf)]
-pub struct Globals {
-    /// The node to talk to
-    #[bpaf(long, env("PLAYR_NODE"), argument("HOST"), fallback(Node::localhost()))]
-    pub node: Node,
-}
+/// The node to talk to
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "node", metavar = "HOST", env = "PLAYR_NODE")]
+pub struct Globals(pub Option<Node>);
 
 /// Built once, after parsing, and handed to every command.
 pub struct Ctx {
@@ -55,7 +52,7 @@ impl Ctx {
 
 fn mk_ctx(g: Globals) -> Result<Ctx, Failure> {
     Ok(Ctx {
-        node: g.node,
+        node: g.0.unwrap_or_else(Node::localhost),
         session: OnceLock::new(),
     })
 }
@@ -173,8 +170,8 @@ impl FromStr for DaysBack {
 // ---- arguments ------------------------------------------------------------
 //
 // Spelled by `#[arg(…)]` itself, with no `#[derive(Bpaf)]`: the doc comment's
-// first paragraph is the help row. `Filters`, which has several fields, is
-// spelled by `#[derive(Bpaf)]` instead.
+// first paragraph is the help row. `Filters`, which has several fields, is a
+// struct of such types, composed by `#[derive(Arg)]`.
 
 /// An audio output device
 #[derive(Debug, Clone, Arg)]
@@ -186,17 +183,26 @@ pub struct Output(pub Name);
 #[arg(positional = "QUERY")]
 pub struct Query(pub Option<String>);
 
-#[derive(Debug, Clone, Bpaf, Arg)]
+/// Only tracks by this artist
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "artist", metavar = "NAME")]
+pub struct Artist(pub Option<String>);
+
+/// Only tracks at this tempo
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "bpm", metavar = "BPM")]
+pub struct BpmFilter(pub Option<Bpm>);
+
+/// Only tracks that were never played
+#[derive(Debug, Clone, Arg)]
+#[arg(long = "unplayed")]
+pub struct Unplayed(pub bool);
+
+#[derive(Debug, Clone, Arg)]
 pub struct Filters {
-    /// Only tracks by this artist
-    #[bpaf(long, argument("NAME"))]
-    pub artist: Option<String>,
-    /// Only tracks at this tempo
-    #[bpaf(long, argument("BPM"))]
-    pub bpm: Option<Bpm>,
-    /// Only tracks that were never played
-    #[bpaf(long)]
-    pub unplayed: bool,
+    pub artist: Artist,
+    pub bpm: BpmFilter,
+    pub unplayed: Unplayed,
 }
 
 /// A fact type, such as `genre` or `label`
@@ -312,7 +318,7 @@ mod search {
     pub fn tracks(added: Added, f: Filters, q: Query, ctx: &Ctx) {
         println!(
             "{}: search {:?} artist={:?} bpm={:?} unplayed={} added={:?}",
-            ctx.node, q.0, f.artist, f.bpm, f.unplayed, added.0
+            ctx.node, q.0, f.artist.0, f.bpm.0, f.unplayed.0, added.0
         );
     }
 }
@@ -433,7 +439,7 @@ mod tests {
         },
         node_after_the_command: { playback stop --node "pi.local" } => |r| {
             let (globals, _) = r.expect("parses");
-            assert_eq!(globals.node.host, "pi.local");
+            assert_eq!(globals.0.map(|n| n.host).as_deref(), Some("pi.local"));
         },
         set_output_needs_a_name: { playback set-output } => |r| {
             let e = r.err().expect("a usage error");
@@ -463,11 +469,11 @@ mod tests {
                 "couldn't parse `-x`: `--added`: not a number of days back, such as -7"
             );
         },
-        a_bpaf_spelled_value_is_not_named: { --node "pi.local:http" ping } => |r| {
+        node_names_itself_in_errors: { --node "pi.local:http" ping } => |r| {
             let e = r.err().expect("a usage error");
             assert_eq!(
                 e.unwrap_stderr(),
-                "couldn't parse `pi.local:http`: `http` is not a port number"
+                "couldn't parse `pi.local:http`: `--node`: `http` is not a port number"
             );
         },
     }
@@ -512,6 +518,42 @@ mod tests {
     }
 
     // The README pastes these pages; these keep them true.
+
+    #[test]
+    fn top_help_matches_the_readme() {
+        // The README shows `PLAYR_NODE` unset. A developer may have it
+        // exported, and then help prints its value instead; this binary has
+        // many tests, so read the variable rather than change it.
+        let env = match std::env::var_os("PLAYR_NODE") {
+            None => ": N/A".to_string(),
+            Some(v) => format!(" = {:?}", v.to_string_lossy()),
+        };
+        assert_eq!(
+            page(&["--help"]),
+            format!(
+                "\
+playr: control the music player
+
+Usage: playr [--node=HOST] COMMAND ...
+
+Available options:
+        --node=HOST  The node to talk to
+                     [env:PLAYR_NODE{env}]
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+Available commands:
+    ping             Check that the node answers
+    playback         Playback control
+    search           Search the library
+    library          Library maintenance
+    source           Music sources
+    upload           Upload an audio file to the library
+    sort             Sort track ids read from stdin
+"
+            )
+        );
+    }
 
     #[test]
     fn search_help_matches_the_readme() {
