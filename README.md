@@ -1,5 +1,8 @@
 # hicli
 
+> New to hicli, or an agent? Read [QUICKREF.md](QUICKREF.md) first, about 460 lines.
+> It is also on [docs.rs](https://docs.rs/hicli/latest/hicli/quick_reference/index.html).
+
 **Write a subcommand as a documented function. hicli adds the command line.**
 
 hicli is a subcommand framework for Rust, built on [`bpaf`](https://docs.rs/bpaf).

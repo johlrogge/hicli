@@ -26,6 +26,10 @@
     description = "hicli project context for the architect — the function-first Command/Invocation model, crate layout, design contracts, and delegation workflow.";
   };
 
+  claude.code.skills.documenter = metadevLib.skillFromDir ./claude/skills/documenter {
+    description = "hicli's documentation targets for the documenter — README, QUICKREF, CHANGELOG, PLAN and the promo site — and what each release must update.";
+  };
+
   # Stable toolchain only — hicli targets crates.io and stable-Rust
   # consumers (moniker, mdma-cli, ctx). No nightly features.
   languages.rust = {

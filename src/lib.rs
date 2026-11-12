@@ -1,6 +1,9 @@
 //! `hicli` — CLI-enable your code. A modular, publishable subcommand framework
 //! built on [`bpaf`].
 //!
+//! **New to hicli, or an agent? Start with the [quick reference](quick_reference):**
+//! one page, one pattern per section, every snippet compiled.
+//!
 //! One subcommand = one documented **function**, and one group of subcommands =
 //! one documented **module**. [`#[command]`](macro@command) emits the annotated
 //! function exactly as written — same name, same signature, same visibility —
@@ -1028,6 +1031,12 @@ mod macros;
 pub mod arg;
 pub mod outcome;
 pub mod testing;
+
+/// A one-page quick reference: every pattern, with a snippet that compiles.
+///
+/// This is `QUICKREF.md` from the repository.
+#[doc = include_str!("../QUICKREF.md")]
+pub mod quick_reference {}
 
 #[doc(hidden)]
 pub mod __private {
